@@ -1,3 +1,57 @@
+# ── API keys and secrets ──────────────────────────────────────────────────────
+# Never commit config.py if it contains real keys.
+# Rename it to config.example.py with placeholder values for the repo,
+# and keep your real one local only.
 config.py
-.claude
-.vscode
+
+# ── Pipeline outputs ──────────────────────────────────────────────────────────
+output/
+
+# ── Raw data ──────────────────────────────────────────────────────────────────
+# Comment CSVs may contain PII (display names) and client-adjacent data.
+*.csv
+*.json
+!pipeline/__init__.py
+
+# ── HuggingFace model cache ───────────────────────────────────────────────────
+# The emotion models download here on first run (~500 MB each).
+.cache/
+~/.cache/huggingface/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Jupyter (if you ever prototype in notebooks) ──────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
