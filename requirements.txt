@@ -2,9 +2,14 @@ google-api-python-client>=2.100
 google-genai>=0.3
 youtube-transcript-api>=0.6
 langdetect>=1.0.9
+pandas>=2.0
+markdown>=3.5
+
+# Emotion stage. Runs locally, no tokens. Downloads ~500 MB on first use.
 transformers>=4.40
 torch>=2.0
-pandas>=2.0
-matplotlib>=3.7
-markdown>=3.5
-playwright>=1.40   # then run: playwright install chromium
+
+# PDF output. One of these is REQUIRED; the run refuses to start without
+# one. Playwright gives the best result and works the same on every OS.
+pip install playwright && playwright install chromium
+# Alternatives if you already have them: weasyprint, pdfkit.
