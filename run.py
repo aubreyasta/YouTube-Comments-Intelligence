@@ -12,30 +12,30 @@ import json
 import os
 import pandas as pd
 
-import config as config
+import config
 from pipeline import (fetch, clean, video_brief, campaign_brief,
-                      codebook, emotion, synthesize)
+                      codebook, emotion, chart, synthesize)
 
 
 def main():
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     out = lambda name: os.path.join(config.OUTPUT_DIR, name)
 
-    print("[1/7] Fetching comments and transcripts")
+    print("[1/8] Fetching comments and transcripts")
     comments, meta = fetch.run()
     comments.to_csv(out("01_comments_raw.csv"), index=False,
                     encoding="utf-8-sig")
     meta.drop(columns=["transcript"]).to_csv(out("01_video_meta.csv"),
                                              index=False, encoding="utf-8-sig")
 
-    print("[2/7] Cleaning and filtering")
+    print("[2/8] Cleaning and filtering")
     comments = clean.run(comments)
     comments.to_csv(out("02_comments_labelled.csv"), index=False,
                     encoding="utf-8-sig")
     base = comments[comments["in_base"]].reset_index(drop=True)
     print(f"    analysis base: {len(base)} comments")
 
-    print("[3/7] Reading what each video pushed")
+    print("[3/8] Reading what each video pushed")
     brief_md, points = video_brief.run(meta)
     with open(out("03_video_brief.md"), "w", encoding="utf-8") as handle:
         handle.write("# What the videos put forward\n\n" + brief_md)
@@ -44,7 +44,7 @@ def main():
 
     background_md = ""
     if config.CAMPAIGN_BACKGROUND:
-        print("[3b/7] Building campaign background briefs")
+        print("[3b/8] Building campaign background briefs")
         background_md = campaign_brief.run(meta, config.CAMPAIGN_CONTEXT)
         with open(out("03b_campaign_background.md"), "w",
                   encoding="utf-8") as handle:
@@ -53,7 +53,7 @@ def main():
                          "data. Verify before client use.\n\n"
                          + background_md)
 
-    print("[4/7] Writing and applying the codebook")
+    print("[4/8] Writing and applying the codebook")
     summary = "; ".join(meta["title"].fillna("").astype(str).head(6))
     themes = codebook.build(base, summary)
     with open(out("04_codebook.json"), "w", encoding="utf-8") as handle:
@@ -79,7 +79,7 @@ def main():
     base, point_columns = codebook.apply_points(base, points)
     theme_table, transfer_table = codebook.summarise(base, point_columns)
 
-    print("[5/7] Emotion labels")
+    print("[5/8] Emotion labels")
     base, emotion_result = emotion.run(base)
     if emotion_result:
         emotion_result["table"].to_csv(out("05_emotion_mix.csv"))
@@ -93,13 +93,17 @@ def main():
     if not transfer_table.empty:
         print(transfer_table.to_string(index=False) + "\n")
 
-    print("[6/7] Writing the report")
+    print("[6/8] Drawing charts")
+    charts = chart.run(theme_table, transfer_table, config.OUTPUT_DIR)
+
+    print("[7/8] Writing the report")
     report = synthesize.run(brief_md, background_md, theme_table,
-                            transfer_table, emotion_result, base)
+                            transfer_table, emotion_result, base,
+                            meta, charts)
     with open(out("06_report.md"), "w", encoding="utf-8") as handle:
         handle.write(report)
 
-    print("[7/7] Done. See output/06_report.md")
+    print("[8/8] Done. See output/06_report.md")
     print("      Check output/04_codebook.json to see the rules the model "
           "wrote, and 04_comments_coded.csv to check them against comments.")
 

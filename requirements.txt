@@ -5,4 +5,4 @@ langdetect>=1.0.9
 transformers>=4.40
 torch>=2.0
 pandas>=2.0
- 
+matplotlib>=3.7
