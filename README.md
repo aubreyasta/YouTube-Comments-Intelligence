@@ -103,7 +103,9 @@ it for you.
 | 3b | `pipeline/campaign_brief.py` | Campaign background, with search grounding | 1 call per group |
 | 4 | `pipeline/codebook.py` | Model writes themes, code applies them to everything | 1 call, 2 if the first misses too much |
 | 4b | `pipeline/emotion.py` | Emotion or sentiment labels, run locally | no |
-| 5 | `pipeline/synthesize.py` | Final report | 1 call total |
+| 6 | `pipeline/chart.py` | Signal transfer and theme mix PNGs | no |
+| 7 | `pipeline/synthesize.py` | Structured report as markdown | 1 call total |
+| 8 | `pipeline/render.py` | Styled HTML, then PDF if an engine is present | no |
 
 For six videos across three campaigns that is eleven or twelve API calls for
 the whole run, which sits inside any free tier. The emotion stage adds none,
@@ -187,11 +189,47 @@ output/
   04_theme_mix.csv           theme percentages per group
   04_signal_transfer.csv     did each idea from the video reach the comments
   05_emotion_mix.csv         emotion split per group, if enabled
-  06_report.md               the report
+  05_signal_transfer.png     chart embedded in the report
+  05_theme_mix.png           chart
+  06_report.md               the report as markdown
+  06_report.html             styled, self-contained, charts embedded
+  06_report.pdf              if a PDF engine is installed
 ```
 
 **Read `04_codebook.json` before you trust `06_report.md`.** It takes a
 minute and it is where mistakes are visible.
+
+---
+
+## The report
+
+`06_report.md` follows a fixed template, not free-form prose: a verdict table
+per group with a closed vocabulary (`Yes`, `Partly`, `Barely`, `No`,
+`Backfired`, `Not used`, `Loud`), verbatim quotes with English glosses
+underneath, a "for the creative team" block written as instructions, a
+cross-campaign comparison table, and a videos-analysed table.
+
+Set `REPORT_LANGUAGE` in `config.py` to change the prose language. Comments
+stay in their original language regardless.
+
+### Getting a PDF
+
+`render.py` always writes a styled, self-contained HTML file with the charts
+embedded as base64. It then tries three PDF engines in order and uses the
+first one it finds:
+
+```
+pip install playwright && playwright install chromium   # best output
+pip install weasyprint                                  # GTK needed on Windows
+pip install pdfkit                                      # needs a wkhtmltopdf binary
+```
+
+If none is installed you still get the HTML. Open it in a browser and print
+to PDF: the result is identical, and it costs no setup. The pipeline never
+fails because of this stage.
+
+See `PIPELINE_DOCUMENTATION.pdf` for the full architecture, diagrams and
+stage-by-stage detail.
 
 ---
 
