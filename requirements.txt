@@ -11,5 +11,6 @@ torch>=2.0
 
 # PDF output. One of these is REQUIRED; the run refuses to start without
 # one. Playwright gives the best result and works the same on every OS.
-pip install playwright && playwright install chromium
+pip install playwright 
+# && playwright install chromium
 # Alternatives if you already have them: weasyprint, pdfkit.
