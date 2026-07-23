@@ -176,38 +176,73 @@ before any AI is involved.
 
 ## Outputs
 
+Each run gets its own folder, named after what was analysed.
+
 ```
 output/
-  01_comments_raw.csv        everything collected
-  01_video_meta.csv          titles, channels, view counts
-  02_comments_labelled.csv   cleaned, with language and cheap flags
-  03_video_brief.md          what each video put forward (grounded)
-  03_points.json             those ideas as measurable keyword rules
-  03b_campaign_background.md model-generated context  <- verify this
-  04_codebook.json           the themes the model wrote  <- check this
-  04_comments_coded.csv      every comment with its theme and signal flags
-  04_theme_mix.csv           theme percentages per group
-  04_signal_transfer.csv     did each idea from the video reach the comments
-  05_emotion_mix.csv         emotion split per group, if enabled
-  05_signal_transfer.png     chart embedded in the report
-  05_theme_mix.png           chart
-  06_report.md               the report as markdown
-  06_report.html             styled, self-contained, charts embedded
-  06_report.pdf              if a PDF engine is installed
+  kia-sonet-carens-rivals/          <- session A
+      report.pdf
+      comments.csv
+      summary.csv
+  converse-campaign/                <- session B, unrelated
+      report.pdf
+      comments.csv
+      summary.csv
 ```
 
-**Read `04_codebook.json` before you trust `06_report.md`.** It takes a
-minute and it is where mistakes are visible.
+Set `SESSION_NAME` in `config.py` to name it yourself. Leave it blank and the
+name is built from the group names, so a run covering Hyundai, Mitsubishi and
+Suzuki lands in `hyundai-creta-mitsubishi-xpander-suzuki-xl7/`.
 
----
+The folder is named for the subject rather than for the report's conclusion,
+because a conclusion does not tell you which project it belonged to. Re-running
+the same session gives `-2`, `-3` and so on rather than overwriting.
+
+**`comments.csv`** is one row per comment with its theme, emotion, which of
+the video's ideas it echoed, likes, language, and the cheap flags. Sorted by
+group then likes, so the comments people rallied around are at the top of
+each block. This is the file for handpicking quotes.
+
+**`summary.csv`** is tidy long format, one row per number:
+
+```
+group,metric,label,value,unit,n
+Honda BR-V N7X,base,comments analysed,110,count,110
+Honda BR-V N7X,theme,Price pushback,7.3,percent,8
+Honda BR-V N7X,signal_transfer,Hero colour,10.4,percent,11
+Honda BR-V N7X,emotion,happy,62.1,percent,68
+```
+
+Long rather than wide because it pivots without reshaping. Filter on
+`metric` to get the data behind one chart, drop it into Sheets, and build
+whatever figure the deck needs.
+
+### The debug folder
+
+Set `KEEP_INTERMEDIATE = True` in `config.py` to also get `output/debug/`
+with the raw fetch, video briefs, campaign background, codebook and charts.
+
+**No stage reads any of these.** Data passes between stages in memory, so
+they exist purely for auditing. The one worth turning on when a number looks
+wrong is `04_codebook.json`, which holds the exact keyword rules behind every
+percentage. An early version of this pipeline reported a campaign's heritage
+hook at 7.5% transfer; the codebook showed nine of those ten matches were the
+brand's own account posting the trim name. Real figure was under 1%. That
+error was findable only because the rule was inspectable.
 
 ## The report
 
-`06_report.md` follows a fixed template, not free-form prose: a verdict table
-per group with a closed vocabulary (`Yes`, `Partly`, `Barely`, `No`,
-`Backfired`, `Not used`, `Loud`), verbatim quotes with English glosses
-underneath, a "for the creative team" block written as instructions, a
-cross-campaign comparison table, and a videos-analysed table.
+`report.pdf` is an internal debrief, not a client deliverable: dense type,
+no cover page, no methodology section. Per group it gives the background in
+two or three sentences, a verdict table using a closed vocabulary (`Yes`,
+`Partly`, `Barely`, `No`, `Backfired`, `Not used`, `Loud`), what filled the
+conversation instead, two or three verbatim quotes with English glosses, and
+exactly two actions. Then a cross-group section and a short limitations
+block.
+
+The emotion split is folded into each group's header line rather than given
+a section. It is the weakest evidence in the pipeline and a section of its
+own would give it more weight than it earns.
 
 Set `REPORT_LANGUAGE` in `config.py` to change the prose language. Comments
 stay in their original language regardless.
