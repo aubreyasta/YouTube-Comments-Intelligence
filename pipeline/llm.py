@@ -10,7 +10,7 @@ import json
 import re
 import time
 
-import config as config
+import config
 
 _client = None
 
@@ -89,18 +89,65 @@ def ask_grounded(prompt, model=None, retries=3):
     raise RuntimeError("Gave up after repeated rate limits")
 
 
-def ask_json(prompt, model=None):
-    """Same, but insists on JSON back and parses it."""
-    text = ask(prompt + "\n\nReturn ONLY valid JSON. No markdown fences, "
-                        "no commentary before or after.", model)
-    # Models sometimes wrap JSON in ```json fences anyway.
-    text = re.sub(r"^```(?:json)?|```$", "", text.strip(),
-                  flags=re.MULTILINE).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Last resort: grab the outermost {...} or [...] block.
+def _clean_json_text(text):
+    """
+    Best-effort cleanup of common ways models break JSON.
+    Applied before every parse attempt.
+    """
+    # Strip markdown fences
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
+    text = re.sub(r"\s*```$", "", text.strip(), flags=re.MULTILINE)
+    text = text.strip()
+
+    # Trailing commas before ] or } (technically illegal JSON)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # Unescaped newlines inside string values — the most common cause of
+    # "Expecting ',' delimiter" errors. Replace literal \n inside quotes.
+    def fix_newlines(m):
+        return m.group(0).replace("\n", "\\n").replace("\r", "")
+    text = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', fix_newlines, text,
+                  flags=re.DOTALL)
+
+    return text
+
+
+def ask_json(prompt, model=None, retries=3):
+    """
+    Send a prompt and parse the response as JSON.
+    Retries up to `retries` times; on each failure after the first it
+    sends the broken output back to the model and asks it to fix it.
+    """
+    suffix = ("\n\nReturn ONLY valid JSON. No markdown fences, "
+              "no commentary before or after. All string values must be "
+              "on a single line — no literal newlines inside strings.")
+
+    raw = ask(prompt + suffix, model)
+
+    for attempt in range(retries):
+        text = _clean_json_text(raw)
+        # Try the whole response first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        # Try extracting the outermost {...} or [...] block
         match = re.search(r"[\{\[].*[\}\]]", text, re.DOTALL)
         if match:
-            return json.loads(match.group(0))
-        raise
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+        if attempt < retries - 1:
+            print(f"      JSON parse failed (attempt {attempt + 1}), "
+                  f"asking model to fix it")
+            fix_prompt = (
+                "The following text was supposed to be valid JSON but is "
+                "not. Fix it so it parses correctly. Return ONLY the "
+                "corrected JSON, nothing else.\n\n" + raw[:6000])
+            raw = ask(fix_prompt, model)
+        else:
+            raise ValueError(
+                f"Could not parse JSON after {retries} attempts.\n"
+                f"Last response (first 500 chars):\n{raw[:500]}")
