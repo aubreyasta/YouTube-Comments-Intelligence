@@ -5,9 +5,19 @@ langdetect>=1.0.9
 pandas>=2.0
 markdown>=3.5
 
-# Emotion stage only. Drop both if EMOTION_MODE is None in config.py.
+# Emotion stage. Runs locally, no tokens. Downloads ~500 MB on first use.
 transformers>=4.40
 torch>=2.0
 
-# PDF output
-playwright>=1.40   # then: playwright install chromium
+# PDF Output
+playwright>=1.49
+#   playwright install chromium
+
+# Alternatives, tried in this order if playwright is absent:
+#   weasyprint>=68        needs GTK on Windows, which is the painful part.
+#                         68 is the floor: CVE-2025-68616 was fixed there.
+#                         Recent versions also require a newer Python.
+#   pdfkit>=1.0.0         thin wrapper; you must install the wkhtmltopdf
+#                         binary separately. Last release was 2021 and
+#                         wkhtmltopdf itself is archived, so treat this as
+#                         a last resort on a machine that already has it.

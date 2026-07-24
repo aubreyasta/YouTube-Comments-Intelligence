@@ -8,9 +8,16 @@ Two API-efficiency notes, since this is where the wall-clock time goes:
   - Comments and transcripts are fetched concurrently. Both are I/O
     bound, so a small thread pool cuts a six-video run from minutes to
     seconds. The pool is deliberately small: YouTube throttles bursts.
+
+IMPORTANT: googleapiclient sits on httplib2, which is NOT thread-safe. A
+service object shared across threads has them reading from one socket,
+which surfaces as SSL record-layer failures or "NoneType has no attribute
+read" from deep inside http.client. Each thread therefore builds its own
+service through _service(), and none is ever passed between threads.
 """
 
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,6 +30,25 @@ import config
 
 DetectorFactory.seed = 0        # makes language detection repeatable
 WORKERS = 4
+NETWORK_RETRIES = 3
+
+_local = threading.local()
+
+
+def _service():
+    """
+    A YouTube client belonging to the calling thread.
+
+    Never share one of these. See the module docstring: httplib2 is not
+    thread-safe, and sharing produces corrupted reads rather than a clean
+    error. cache_discovery=False avoids a second shared-state problem,
+    the on-disk discovery cache.
+    """
+    if not hasattr(_local, "youtube"):
+        _local.youtube = build("youtube", "v3",
+                               developerKey=config.YOUTUBE_API_KEY,
+                               cache_discovery=False)
+    return _local.youtube
 
 # Generic spam. Patterns, not topic words, so they hold whatever the
 # video is about.
@@ -57,16 +83,47 @@ def video_id(url):
 
 # ------------------------------------------------------------------ fetch
 
-def _comments(youtube, vid, group, kind):
-    rows, token = [], None
-    while len(rows) < config.MAX_COMMENTS_PER_VIDEO:
+def _page(vid, token):
+    """
+    One page of comments, retried on transient network trouble.
+
+    HttpError is not retried here: a 403 means comments are disabled and a
+    404 means the video is gone, and neither improves on a second attempt.
+    Socket and SSL errors do improve, so those get a backoff.
+    """
+    for attempt in range(NETWORK_RETRIES):
         try:
-            response = youtube.commentThreads().list(
+            return _service().commentThreads().list(
                 part="snippet,replies", videoId=vid, maxResults=100,
                 pageToken=token, textFormat="plainText",
                 order="relevance").execute()
+        except HttpError:
+            raise
+        except Exception as error:
+            if attempt == NETWORK_RETRIES - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"    . {vid}: {type(error).__name__}, retrying in {wait}s")
+            # A broken connection stays broken, so drop this thread's
+            # client and let the retry build a fresh one.
+            if hasattr(_local, "youtube"):
+                del _local.youtube
+            time.sleep(wait)
+
+
+def _comments(vid, group, kind):
+    rows, token = [], None
+    while len(rows) < config.MAX_COMMENTS_PER_VIDEO:
+        try:
+            response = _page(vid, token)
         except HttpError as error:
             print(f"    ! {vid}: comments unavailable ({error.resp.status})")
+            break
+        except Exception as error:
+            # One video failing should not lose the other five.
+            print(f"    ! {vid}: gave up after {NETWORK_RETRIES} attempts "
+                  f"({type(error).__name__}). Continuing with "
+                  f"{len(rows)} comments.")
             break
 
         for item in response["items"]:
@@ -101,29 +158,34 @@ def _transcript(vid):
 
 def fetch():
     """Return (comments_df, meta_df)."""
-    youtube = build("youtube", "v3", developerKey=config.YOUTUBE_API_KEY)
     entries = [(video_id(v["url"]), v.get("group", "Ungrouped"),
                 v.get("kind", "auto")) for v in config.VIDEOS]
 
-    # One batched metadata call rather than one per video.
+    # One batched metadata call rather than one per video. Runs on the
+    # main thread, so it gets that thread's own client.
     ids = [e[0] for e in entries]
     details = {}
     for i in range(0, len(ids), 50):
-        response = youtube.videos().list(
+        response = _service().videos().list(
             part="snippet,statistics", id=",".join(ids[i:i + 50])).execute()
         for item in response["items"]:
             details[item["id"]] = item
 
-    # Comments and transcripts in parallel: both are I/O bound.
+    # Comments and transcripts in parallel: both are I/O bound. Each
+    # worker builds its own client on first use.
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        comment_jobs = {vid: pool.submit(_comments, youtube, vid, g, k)
+        comment_jobs = {vid: pool.submit(_comments, vid, g, k)
                         for vid, g, k in entries}
         transcript_jobs = {vid: pool.submit(_transcript, vid)
                            for vid, _, _ in entries}
 
     rows, meta = [], []
     for vid, group, kind in entries:
-        got = comment_jobs[vid].result()
+        try:
+            got = comment_jobs[vid].result()
+        except Exception as error:
+            print(f"    ! {vid}: {type(error).__name__}, skipped")
+            got = []
         transcript = transcript_jobs[vid].result()
         rows.extend(got)
 
@@ -139,6 +201,11 @@ def fetch():
             "has_transcript": bool(transcript)})
         print(f"    {group} / {vid}: {len(got)} comments, "
               f"transcript {'yes' if transcript else 'no'}")
+
+    if not rows:
+        raise RuntimeError(
+            "No comments collected from any video. Check the URLs, and "
+            "check that comments are enabled on them.")
 
     return pd.DataFrame(rows), pd.DataFrame(meta)
 

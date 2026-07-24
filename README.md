@@ -5,6 +5,7 @@ reviews, and explainer or viral content.
 
 ```bash
 pip install -r requirements.txt
+pip install playwright && playwright install chromium
 # edit config.py: paste your links and two API keys
 python run.py
 ```
@@ -24,6 +25,10 @@ Then: which of the video's ideas appear in the comments, and what filled the
 space instead. Keeping the two apart is the point. If the model saw the
 comments while describing the video, "did the message land" becomes circular
 and always answers yes.
+
+A low score means an idea **did not arrive**, which is a different diagnosis
+from being rejected. The fix for the first is execution and distribution. The
+fix for the second is the idea.
 
 ---
 
@@ -52,6 +57,13 @@ much easier bar. Size is `max(150, 8% of corpus)` capped at 500, drawn per
 group from the most-liked, the longest, and a random remainder. If more than
 30% of comments match nothing, one extra call extends the codebook.
 
+**Why this matters, concretely.** An early version measured a campaign's
+concept-car heritage hook at 7.5% transfer. The codebook showed nine of those
+ten matches were the brand's own dealer account posting the trim name, which
+was in the keyword list. The real figure was under 1%. The briefing prompt
+now forbids brand and product names in keywords and says why, but the error
+was findable only because the rule was written somewhere a human could read.
+
 ---
 
 ## Files
@@ -59,12 +71,14 @@ group from the most-liked, the longest, and a random remainder. If more than
 | File | Does |
 |---|---|
 | `config.py` | Links, keys, settings. The only file you normally edit |
-| `run.py` | Orchestration and the session folder |
+| `run.py` | Preflight, session folder, orchestration |
 | `pipeline/llm.py` | All model access. Swap provider here and nowhere else |
 | `pipeline/collect.py` | Fetch comments and transcripts, clean, language filter |
 | `pipeline/brief.py` | What each campaign put forward, grounded and background |
 | `pipeline/analyze.py` | Codebook, signal transfer, emotion |
 | `pipeline/report.py` | Write, render, export |
+
+About 1,300 lines total.
 
 ---
 
@@ -78,8 +92,7 @@ Four to five model calls per run, whatever the corpus size.
 | Codebook | 1, or 2 if the first misses too much |
 | Report | 1 |
 
-Comments, transcripts and emotion cost nothing: the first two are the free
-YouTube quota, and emotion runs locally.
+Comments and transcripts use the free YouTube quota. Emotion runs locally.
 
 ---
 
@@ -126,19 +139,17 @@ Honda BR-V N7X,emotion,happy,62.1,percent,68
 ```
 
 Long rather than wide because it pivots without reshaping. Filter on `metric`
-to get the data behind one chart and drop it into Sheets.
+to get the data behind one chart and drop it into Sheets. The pipeline draws
+no charts itself: this file exists so the design team builds their own.
 
 ### debug/
 
 `KEEP_INTERMEDIATE = True` adds `output/<session>/debug/` with the raw fetch,
-briefs, background and codebook.
+briefs, background, codebook, and the report markdown and HTML.
 
 **No stage reads these.** Data passes between stages in memory, so they exist
 purely for auditing. The one worth turning on when a number looks wrong is
-`codebook.json`. An early version reported a campaign's heritage hook at 7.5%
-transfer; the codebook showed nine of those ten matches were the brand's own
-account posting the trim name. Real figure was under 1%. That error was
-findable only because the rule was inspectable.
+`codebook.json`.
 
 ---
 
@@ -186,23 +197,22 @@ First run downloads about 500 MB.
 
 Labels are assigned per comment with no surrounding context, so sarcasm and
 measured criticism both read as anger. The pipeline reports the share of
-low-confidence labels and warns when it is high. The theme mix is the better
-answer to "how was this received". Emotion is the answer to "the client asked
-for sentiment".
+low-confidence labels and warns when it is high, and that caveat travels into
+the report prompt so the numbers cannot be presented without it. The theme
+mix is the better answer to "how was this received". Emotion is the answer to
+"the client asked for sentiment".
 
 ---
 
 ## The PDF is required
 
-The run refuses to start without a PDF engine, checked in preflight before
-any API call so you find out in a second rather than after five model calls.
+The run refuses to start without a PDF engine. Engines are tried in order:
 
-```
-pip install playwright && playwright install chromium   # recommended
-```
-
-Playwright gives the best result and behaves the same on every OS.
-`weasyprint` and `pdfkit` are used if already present.
+| Engine | Notes |
+|---|---|
+| `playwright>=1.49` | Recommended. Best output, same on every OS. Two steps: `pip install playwright` then `playwright install chromium` |
+| `weasyprint>=68` | Needs GTK on Windows, which is the painful part. 68 is the floor because CVE-2025-68616 was fixed there |
+| `pdfkit>=1.0.0` | Thin wrapper; the wkhtmltopdf binary installs separately. Last release 2021 and wkhtmltopdf is archived upstream. Last resort only |
 
 HTML is a build artifact, not an output: it goes to a temp file and is
 deleted. Turn on `KEEP_INTERMEDIATE` to keep it, along with the raw markdown
@@ -212,8 +222,44 @@ the model returned, in `debug/`.
 
 Before anything runs, `run.py` checks both API keys are set, `VIDEOS` is not
 empty, `EMOTION_MODE` is valid, `transformers` is importable, and a PDF
-engine exists. Anything missing is reported as one list rather than one
-failure at a time.
+engine exists. Everything missing is reported as one list rather than one
+failure at a time, so a bad setup costs a second instead of five model calls
+and a 500 MB download.
+
+Preflight can only see the Python package, not the browser that `playwright
+install chromium` downloads. If preflight passes and rendering then fails,
+the missing browser is why.
+
+---
+
+## Fetching notes
+
+**One API client per thread.** `googleapiclient` sits on `httplib2`, which is
+not thread-safe. Sharing a service object across threads has them reading
+from one socket, which surfaces as SSL record-layer failures or `NoneType has
+no attribute read` from deep inside `http.client`. `collect._service()` gives
+each thread its own, and none is passed between threads. If you extend that
+file, keep the rule.
+
+**Transient errors retry, permanent ones do not.** Socket and SSL failures
+get three attempts with backoff, discarding the thread's client each time
+because a broken connection stays broken. `HttpError` is never retried: a 403
+means comments are disabled and a 404 means the video is gone.
+
+**One bad video does not kill the run.** It reports what happened, keeps what
+it collected, and continues. The run only fails if no video yields anything.
+
+---
+
+## Common errors
+
+| Symptom | Cause |
+|---|---|
+| `ModuleNotFoundError: googleapiclient` | Ran with `py` instead of `python` on Windows. `py` uses the system Python and ignores the active conda environment |
+| `httpx.InvalidURL: Invalid non-printable ASCII character` | A tab or newline inside a pasted API key. Check with `python -c "import config; print(repr(config.GEMINI_API_KEY))"` |
+| 404 from Gemini | Stale model ID. Update `MODEL_CHEAP` / `MODEL_SMART` |
+| `JSONDecodeError` during briefing | The model returned malformed JSON. `llm.ask_json` retries by sending it back to be fixed; a hard failure here usually means a truncated response |
+| SSL record layer failure | Was a thread-safety bug, since fixed. If it returns, check nothing is sharing a service object across threads |
 
 ---
 

@@ -3,6 +3,7 @@
 # Rename it to config.example.py with placeholder values for the repo,
 # and keep your real one local only.
 config.py
+.vscode
 
 # ── Pipeline outputs ──────────────────────────────────────────────────────────
 output/
