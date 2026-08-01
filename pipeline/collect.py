@@ -26,7 +26,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from langdetect import detect, DetectorFactory
 
-import config
+from pipeline.config_types import PipelineConfig
 
 DetectorFactory.seed = 0        # makes language detection repeatable
 WORKERS = 4
@@ -35,7 +35,7 @@ NETWORK_RETRIES = 3
 _local = threading.local()
 
 
-def _service():
+def _service(api_key: str):
     """
     A YouTube client belonging to the calling thread.
 
@@ -46,7 +46,7 @@ def _service():
     """
     if not hasattr(_local, "youtube"):
         _local.youtube = build("youtube", "v3",
-                               developerKey=config.YOUTUBE_API_KEY,
+                               developerKey=api_key,
                                cache_discovery=False)
     return _local.youtube
 
@@ -83,7 +83,7 @@ def video_id(url):
 
 # ------------------------------------------------------------------ fetch
 
-def _page(vid, token):
+def _page(vid, token, api_key: str):
     """
     One page of comments, retried on transient network trouble.
 
@@ -93,7 +93,7 @@ def _page(vid, token):
     """
     for attempt in range(NETWORK_RETRIES):
         try:
-            return _service().commentThreads().list(
+            return _service(api_key).commentThreads().list(
                 part="snippet,replies", videoId=vid, maxResults=100,
                 pageToken=token, textFormat="plainText",
                 order="relevance").execute()
@@ -111,11 +111,11 @@ def _page(vid, token):
             time.sleep(wait)
 
 
-def _comments(vid, group, kind):
+def _comments(vid, group, kind, max_comments: int, api_key: str):
     rows, token = [], None
-    while len(rows) < config.MAX_COMMENTS_PER_VIDEO:
+    while len(rows) < max_comments:
         try:
-            response = _page(vid, token)
+            response = _page(vid, token, api_key)
         except HttpError as error:
             print(f"    ! {vid}: comments unavailable ({error.resp.status})")
             break
@@ -127,6 +127,7 @@ def _comments(vid, group, kind):
             break
 
         for item in response["items"]:
+            top_reply_count = item["snippet"].get("totalReplyCount", 0)
             threads = [item["snippet"]["topLevelComment"]]
             threads += item.get("replies", {}).get("comments", [])
             for i, entry in enumerate(threads):
@@ -136,7 +137,8 @@ def _comments(vid, group, kind):
                     "comment": snippet["textDisplay"],
                     "likes": snippet["likeCount"],
                     "published_at": snippet["publishedAt"],
-                    "is_reply": i > 0})
+                    "is_reply": i > 0,
+                    "reply_count": 0 if i > 0 else top_reply_count})
 
         token = response.get("nextPageToken")
         if not token:
@@ -156,17 +158,17 @@ def _transcript(vid):
         return ""
 
 
-def fetch():
+def fetch(cfg: "PipelineConfig"):
     """Return (comments_df, meta_df)."""
     entries = [(video_id(v["url"]), v.get("group", "Ungrouped"),
-                v.get("kind", "auto")) for v in config.VIDEOS]
+                v.get("kind", "auto")) for v in cfg.VIDEOS]
 
     # One batched metadata call rather than one per video. Runs on the
     # main thread, so it gets that thread's own client.
     ids = [e[0] for e in entries]
     details = {}
     for i in range(0, len(ids), 50):
-        response = _service().videos().list(
+        response = _service(cfg.YOUTUBE_API_KEY).videos().list(
             part="snippet,statistics", id=",".join(ids[i:i + 50])).execute()
         for item in response["items"]:
             details[item["id"]] = item
@@ -174,7 +176,9 @@ def fetch():
     # Comments and transcripts in parallel: both are I/O bound. Each
     # worker builds its own client on first use.
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        comment_jobs = {vid: pool.submit(_comments, vid, g, k)
+        comment_jobs = {vid: pool.submit(
+                            _comments, vid, g, k,
+                            cfg.MAX_COMMENTS_PER_VIDEO, cfg.YOUTUBE_API_KEY)
                         for vid, g, k in entries}
         transcript_jobs = {vid: pool.submit(_transcript, vid)
                            for vid, _, _ in entries}
@@ -212,9 +216,9 @@ def fetch():
 
 # ------------------------------------------------------------------ clean
 
-def _language(text):
+def _language(text, min_letters: int):
     stripped = re.sub(r"[^\w\s]", "", text).strip()
-    if len(stripped) < config.MIN_COMMENT_LETTERS:
+    if len(stripped) < min_letters:
         return "too_short"
     try:
         return detect(stripped)
@@ -222,7 +226,7 @@ def _language(text):
         return "unknown"
 
 
-def clean(df):
+def clean(df, cfg: "PipelineConfig"):
     """
     Drop junk, then attach the cheap deterministic labels.
 
@@ -236,7 +240,7 @@ def clean(df):
 
     df = df[~df["comment"].str.contains(SPAM, na=False)]
     letters = df["comment"].str.replace(r"[^\w\s]", "", regex=True).str.strip()
-    df = df[letters.str.len() >= config.MIN_COMMENT_LETTERS]
+    df = df[letters.str.len() >= cfg.MIN_COMMENT_LETTERS]
     df = df.drop_duplicates(subset=["comment"]).reset_index(drop=True)
     print(f"    cleaning: {len(df)} of {before} kept")
 
@@ -249,9 +253,10 @@ def clean(df):
     df["mentions_competitor"] = df["comment"].str.contains(COMPETITOR,
                                                            na=False)
 
-    df["lang"] = df["comment"].map(_language)
-    df["in_base"] = (df["lang"].isin(config.KEEP_LANGUAGES)
-                     if config.KEEP_LANGUAGES else True)
+    df["lang"] = df["comment"].map(
+        lambda t: _language(t, cfg.MIN_COMMENT_LETTERS))
+    df["in_base"] = (df["lang"].isin(cfg.KEEP_LANGUAGES)
+                     if cfg.KEEP_LANGUAGES else True)
 
     for group, sub in df.groupby("group"):
         print(f"    {group}: {int(sub['in_base'].sum())} of {len(sub)} "

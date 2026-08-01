@@ -38,10 +38,10 @@ GEMINI_API_KEY = "ENTER GEMINI API KEY"
 
 # ---------------------------------------------------------------- models
 # Model IDs change every few months. If you get a 404, open
-# https://ai.google.dev/gemini-api/docs/models and copy the current
-# free-tier Flash ID here. Do not assume the name below still exists.
-MODEL_CHEAP = "gemini-3.5-flash-lite"   # bulk work: codebook, brief
-MODEL_SMART = "gemini-3.6-flash"        # final synthesis only
+# https://ai.google.dev/gemini-api/docs/models and copy the current Pro-class
+# model ID here (a model name, not a billing tier - this project runs on the
+# free API tier; see README.md#cost). Do not assume the name below still exists.
+MODEL = "gemini-3-pro"
 
 # ---------------------------------------------------------------- filters
 # Languages to keep. Add codes as needed: id=Indonesian, ms=Malay,
@@ -52,37 +52,38 @@ KEEP_LANGUAGES = {"id", "ms", "en", "tl"}
 MIN_COMMENT_LETTERS = 8      # below this, there is nothing to analyse
 MAX_COMMENTS_PER_VIDEO = 2000
 
-# Codebook sampling. The sample is used only to DISCOVER themes; all
-# percentages are counted over the full corpus, so the sample does not
-# need to be proportionally accurate, only broad enough to contain an
-# example of everything worth naming.
+# Theme discovery sampling. The sample is used only to build the THEME
+# SCHEMA (themes + definitions) that the LLM applies per comment as an
+# enum. Percentages are computed over the full corpus, so the sample
+# does not need to be proportionally accurate, only broad enough to
+# contain an example of every real theme.
 #
 # Actual size used = max(CODEBOOK_SAMPLE_SIZE, 8% of corpus), capped at
-# CODEBOOK_SAMPLE_MAX. So 400 comments -> 150, 5,000 comments -> 400.
+# CODEBOOK_SAMPLE_MAX. Target 500-800 on the Pro tier.
+# So 400 comments -> 150, 5,000 comments -> 500.
 CODEBOOK_SAMPLE_SIZE = 150
 CODEBOOK_SAMPLE_MAX = 500
 
-# If more than this share of comments match no theme, run one extra
-# pass over the leftovers to extend the codebook. Set to 100 to disable.
+# Classification batch size. Each batch is one LLM call; smaller batches
+# are more accurate per item but produce more calls. Research shows large
+# batches degrade per-item accuracy (position sensitivity). 25 is a
+# reasonable default; raise to cut call count at the cost of some accuracy.
+CLASSIFY_BATCH_SIZE = 25
+
+# If the "Other" share after classification exceeds this percentage, run
+# one extra discovery pass over the Other subset to extend the theme
+# schema, then reclassify only that subset. Set to 100 to disable.
 UNCLASSIFIED_LIMIT = 30
 
 # ---------------------------------------------------------------- emotion
-# Always runs. Locally via HuggingFace, so it costs nothing in tokens,
-# but it downloads ~500 MB the first time and is slow without a GPU.
-#   "emotion"   -> happy / anger / sadness / fear / love
-#   "sentiment" -> positive / neutral / negative
-EMOTION_MODE = "emotion"
-
+# Both models always run, locally via HuggingFace, so they cost nothing in
+# tokens, but they download ~500 MB the first time and are slow without a GPU.
+#   emotion   -> happy / anger / sadness / fear / love
+#   sentiment -> positive / neutral / negative
 EMOTION_MODEL = "StevenLimcorn/indonesian-roberta-base-emotion-classifier"
 SENTIMENT_MODEL = "w11wo/indonesian-roberta-base-sentiment-classifier"
 
-# ---------------------------------------------------------------- background
-# Ask the model what it knows about each campaign, with search grounding
-# where available. Useful context, but NOT grounded in your comment data,
-# so it is written to a separate file and labelled as needing verification.
-CAMPAIGN_BACKGROUND = True
-
-# Optional hints to steer the background brief. Keys must match "group".
+# Optional hints to steer the grounded brief. Keys must match "group".
 CAMPAIGN_CONTEXT = {
     # "Campaign A": "Indonesian launch, mid-size SUV, black special edition",
 }
@@ -93,12 +94,16 @@ REPORT_LANGUAGE = "English"
 
 OUTPUT_DIR = "output"
 
-# By default the run produces three files: report.pdf, comments.csv and
-# summary.csv. Turn this on to also write the working files (raw fetch,
-# video briefs, codebook, charts) into output/debug/ for auditing.
-#
-# No stage reads these: data passes between stages in memory. They exist
-# only so a human can check the reasoning. The one worth turning on when
-# a number looks wrong is the codebook, which contains the exact keyword
-# rules behind every percentage.
+# Optional local image path per campaign group, embedded in the report.
+# Keys must match the "group" value in VIDEOS exactly.
+# Missing files are silently skipped.
+KEY_VISUALS = {
+    # "Nike - Rip the Script": "assets/nike.jpg",
+}
+
+# By default the run produces five files: report.pdf, comments.csv,
+# summary.csv, chart_transfer.csv, and chart_themes.csv. Turn this on
+# to also write working files into output/debug/ for auditing - see
+# docs/setup.md#running for what's in it and which file is worth
+# checking first when a number looks wrong.
 KEEP_INTERMEDIATE = False

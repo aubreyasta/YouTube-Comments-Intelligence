@@ -1,22 +1,26 @@
 """
 Produce the three deliverables.
 
-    report.pdf     the debrief
-    comments.csv   every comment, labelled, for digging through by hand
-    summary.csv    every number in tidy long format, for building charts
+    report.pdf          the debrief
+    comments.csv        every comment, labelled, for digging through by hand
+    summary.csv         every number in tidy long format, for building charts
+    chart_transfer.csv  signal-transfer bars, for Google Slides
+    chart_themes.csv    theme-frequency bars, for Google Slides
 
-The model that writes the report is given the STATISTICS, not the corpus,
-and a shortlist of quotes it must copy verbatim. That is what stops it
-producing confident percentages that are not in the data.
+The model that writes the report reads real labeled comments alongside the
+deterministic tables. Numbers in the report still come only from those tables;
+the model is explicitly told not to invent chart figures - the [[CHART:...]]
+tokens are replaced by code-generated CSS bars after the LLM returns.
 """
 
+import base64
 import os
 import re
 
 import pandas as pd
 
 from pipeline import llm
-import config
+from pipeline.config_types import PipelineConfig
 
 # ==================================================================
 # 1. WRITE
@@ -45,12 +49,6 @@ GROUNDED - read from the videos. Rely on this.
 {brief}
 
 =====================================================================
-BACKGROUND - model-generated, NOT grounded in the data. Framing only.
-Never present as a finding. Trust the grounded section on any conflict.
-=====================================================================
-{background}
-
-=====================================================================
 NUMBERS
 =====================================================================
 Theme mix per group (% of that group's comments):
@@ -59,14 +57,21 @@ Theme mix per group (% of that group's comments):
 Signal transfer, did each idea the video pushed appear in the comments:
 {transfer}
 
-Emotion:
+Emotion distribution:
 {emotion}
+
+Sentiment distribution:
+{sentiment}
 
 Sample sizes:
 {sizes}
 
 =====================================================================
 CANDIDATE QUOTES - verbatim. Quote ONLY from this list.
+Each line: [group | theme | emotion | echoed: ideas | N likes] "text"
+Use the labels to pick quotes that illustrate specific verdicts and themes.
+Verdicts in the signal-transfer table and glosses under quotes must derive
+from what these labeled comments show, not from assumptions.
 =====================================================================
 {quotes}
 
@@ -77,6 +82,8 @@ STRUCTURE - follow exactly, in markdown
 # [Title stating the finding, not the topic. Under 8 words.]
 
 *[One line: what this covers and the base. Under 25 words.]*
+
+[[CHART:transfer]]
 
 Then for EACH group:
 
@@ -94,16 +101,20 @@ Write "unverified" beside anything from the BACKGROUND section.]
 
 [One row per idea in the signal transfer table for this group, plus one
 final row for anything the audience raised loudly that the brand did not.
-Verdict must be exactly one of: {verdicts}. Third column under 15 words.]
+Verdict must be exactly one of: {verdicts}. Third column: under 15 words,
+derived from what the labeled comments above actually show.]
 
 **Talked about instead**
+
+[[CHART:themes]]
 
 [1 to 2 sentences from the theme mix. Name the largest themes and what
 they mean.]
 
 **Comments**
 
-[2 to 3 quotes only, each as:]
+[2 to 3 quotes only, chosen from the candidate list to illustrate the
+verdicts above, each as:]
 
 > "[copied EXACTLY from the candidate list]"
 >
@@ -134,14 +145,16 @@ group. Be specific about what kind of idea travelled and what kind did not.]
 
 [4 to 6 short lines, one per limitation, no elaboration. Cover: any group
 under 100 comments is unreliable; low transfer means the idea did not
-arrive rather than being rejected; keyword matching undercounts paraphrase;
-emotion labels have no context so sarcasm reads as anger; commenters are
-not buyers.]
+arrive rather than being rejected; emotion labels have no context so
+sarcasm reads as anger; commenters are not buyers.]
 
 =====================================================================
 RULES
 =====================================================================
 - Use ONLY the numbers supplied. Never invent or estimate a figure.
+- The [[CHART:transfer]] and [[CHART:themes]] tokens are replaced by
+  code-generated charts. Do NOT invent numbers for them. Keep the tokens
+  exactly as written.
 - Quote ONLY from the candidate list, verbatim. Translation goes in the
   gloss line underneath, never inside the quote.
 - Verdicts come from the closed vocabulary above. No other words.
@@ -151,33 +164,57 @@ RULES
 - Write in {language}."""
 
 
-def _quotes(df, per_theme=3, cap=60):
-    """Most-liked per theme per group, plus the longest, where reasoning lives."""
+def _quotes(df, cap=120):
+    """
+    Build a labeled comment pool for the model.
+
+    Per (group, theme): top-3 by likes + top-2 longest, deduped.
+    Each line tagged: [group | theme | emotion | echoed: A, B | N likes] "text"
+    Cap at ~120 lines total.
+    """
+    pt_cols = [c for c in df.columns if c.startswith("pt__")]
+
     picks = []
     for (group, theme), sub in df.groupby(["group", "theme"]):
-        top = sub.nlargest(per_theme, "likes")
-        longest = (sub.assign(_len=sub["comment"].str.len())
+        top_liked = sub.nlargest(3, "likes")
+        top_long = (sub.assign(_len=sub["comment"].str.len())
                       .nlargest(2, "_len").drop(columns="_len"))
-        for _, row in (pd.concat([top, longest])
-                       .drop_duplicates(subset=["comment"]).iterrows()):
-            picks.append(f'[{group} | {theme} | {row["likes"]} likes] '
-                         f'"{row["comment"][:300]}"')
+        combined = (pd.concat([top_liked, top_long])
+                      .drop_duplicates(subset=["comment"]))
+        for _, row in combined.iterrows():
+            # Collect echoed point labels for this row.
+            echoed = []
+            for c in pt_cols:
+                if row.get(c):
+                    echoed.append(c[4:].replace("_", " "))
+            echoed_str = (", ".join(echoed)) if echoed else "none"
+            emotion = row.get("emotion", "")
+            likes = int(row.get("likes", 0))
+            text = str(row["comment"])[:300]
+            picks.append(
+                f'[{group} | {theme} | {emotion} | echoed: {echoed_str}'
+                f' | {likes} likes] "{text}"')
+
     return "\n".join(picks[:cap])
 
 
-def write(brief, background, themes, transfer, emotion_result, df):
+def write(brief, themes, transfer, affect_result, df, cfg: PipelineConfig):
+    emotion = affect_result["emotion"]
+    sentiment = affect_result["sentiment"]
     return llm.ask(PROMPT.format(
         brief=brief[:9000],
-        background=(background or "(not generated)")[:6000],
         themes=themes.to_string(),
         transfer=(transfer.to_string(index=False) if not transfer.empty
                   else "(none measured)"),
-        emotion=(emotion_result["table"].to_string() + "\n\nCaveat: "
-                 + emotion_result["caveat"]),
+        emotion=(emotion["table"].to_string() + "\n\nCaveat: "
+                 + emotion["caveat"]),
+        sentiment=(sentiment["table"].to_string() + "\n\nCaveat: "
+                   + sentiment["caveat"]),
         sizes=df.groupby("group").size().to_string(),
         quotes=_quotes(df),
         verdicts=VERDICTS,
-        language=config.REPORT_LANGUAGE), model=config.MODEL_SMART)
+        language=cfg.REPORT_LANGUAGE),
+        cfg)
 
 
 # ==================================================================
@@ -226,6 +263,18 @@ blockquote em, blockquote p:last-child:not(:first-child) {
           margin: 0 0 4px 0; }
 ul, ol { margin: 3px 0 8px 0; padding-left: 15px; }
 li { margin-bottom: 3px; }
+.chart { margin: 8px 0 12px 0; page-break-inside: avoid; }
+.chart-title { font-size: 7.5pt; font-weight: 600; margin-bottom: 1px; }
+.chart-sub { font-size: 6.8pt; color: #6b6660; margin-bottom: 5px; }
+.bar { display: flex; align-items: center; margin-bottom: 3px; }
+.bar-label { font-size: 7pt; color: #1c1c1c; width: 160px;
+             min-width: 160px; padding-right: 6px; line-height: 1.2; }
+.bar-track { flex: 1; background: #eceae4; height: 7px; border-radius: 2px; }
+.bar-fill { height: 7px; background: #1c1c1c; border-radius: 2px; }
+.bar-val { font-size: 6.6pt; color: #6b6660; width: 34px;
+           min-width: 34px; text-align: right; padding-left: 5px; }
+.keyvis { max-width: 180px; float: right; margin: 0 0 8px 12px;
+          border-radius: 4px; }
 """
 
 BANDS = {"yes": "v-yes", "loud": "v-yes", "partly": "v-mid",
@@ -234,6 +283,41 @@ BANDS = {"yes": "v-yes", "loud": "v-yes", "partly": "v-mid",
 
 BOXED = ("For the creative team",
          "The one thing to carry into the next brief")
+
+
+def _chart_html(rows, title, subtitle=""):
+    """
+    Horizontal CSS bar chart, ranked descending.
+
+    rows: list of (label, value) where value is a float percentage.
+    Returns an HTML string using .chart/.bar/.bar-fill/.bar-label/.bar-val.
+    """
+    if not rows:
+        return ""
+    rows_sorted = sorted(rows, key=lambda r: r[1], reverse=True)
+    max_val = rows_sorted[0][1] if rows_sorted else 1.0
+    if max_val == 0:
+        max_val = 1.0
+
+    bars = []
+    for label, value in rows_sorted:
+        pct = value / max_val * 100
+        bars.append(
+            f'<div class="bar">'
+            f'<div class="bar-label">{label}</div>'
+            f'<div class="bar-track">'
+            f'<div class="bar-fill" style="width:{pct:.1f}%"></div>'
+            f'</div>'
+            f'<div class="bar-val">{value:.1f}%</div>'
+            f'</div>')
+
+    sub_html = (f'<div class="chart-sub">{subtitle}</div>'
+                if subtitle else "")
+    return (f'<div class="chart">'
+            f'<div class="chart-title">{title}</div>'
+            f'{sub_html}'
+            + "".join(bars)
+            + '</div>')
 
 
 def _style(html):
@@ -306,14 +390,38 @@ def _render_pdf(engine, html_path, pdf_path):
             "quiet": ""})
 
 
-def render(markdown_text, out_dir, debug_dir=None):
+def _build_charts(df, transfer):
+    """
+    Pre-compute both chart HTML blocks for token replacement in render().
+
+    Returns (transfer_html, themes_html).
+    """
+    # Transfer chart: label = "group - point", value = echoed_pct, sorted desc.
+    if not transfer.empty:
+        t_rows = [(f"{r.group} - {r.point}", float(r.echoed_pct))
+                  for r in transfer.itertuples()]
+        transfer_html = _chart_html(
+            t_rows,
+            title="Which ideas arrived",
+            subtitle=("Share of each conversation that echoed the idea"
+                      " the brand led with."))
+    else:
+        transfer_html = ""
+
+    # Themes chart: overall frequency across the full corpus, sorted desc.
+    theme_counts = df["theme"].value_counts(normalize=True) * 100
+    th_rows = [(theme, float(pct)) for theme, pct in theme_counts.items()]
+    themes_html = _chart_html(th_rows, title="What the audience talked about")
+
+    return transfer_html, themes_html
+
+
+def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None, _transfer=None):
     """
     Write report.pdf.
 
-    The HTML is a build artifact, not a deliverable: it goes to a temp
-    file and is deleted, or to debug/ when that is switched on. Same for
-    the raw markdown, which is only useful for checking what the model
-    actually returned.
+    _df and _transfer are passed by run.py so chart tokens can be replaced.
+    The HTML is a build artifact: goes to a temp file, or to debug/ when on.
     """
     import tempfile
 
@@ -321,12 +429,45 @@ def render(markdown_text, out_dir, debug_dir=None):
 
     body = _style(md.markdown(markdown_text,
                               extensions=["tables", "sane_lists"]))
+
+    # Inject key visuals after each ## {group} heading.
+    key_visuals = cfg.KEY_VISUALS or {}
+    for group, img_path in key_visuals.items():
+        if not img_path or not os.path.isfile(img_path):
+            continue
+        ext = os.path.splitext(img_path)[1].lstrip(".").lower()
+        if ext == "jpg":
+            ext = "jpeg"
+        try:
+            with open(img_path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode("ascii")
+            img_tag = (f'<img class="keyvis" '
+                       f'src="data:image/{ext};base64,{b64}">')
+            # Match the rendered h2 for this group exactly.
+            escaped = re.escape(group)
+            body = re.sub(
+                r'(<h2[^>]*>' + escaped + r'</h2>)',
+                r'\1' + img_tag,
+                body)
+        except Exception:
+            pass  # missing or unreadable -> skip silently
+
+    # Replace [[CHART:transfer]] and [[CHART:themes]] tokens.
+    # markdown wraps bare paragraphs, so the token arrives as <p>[[CHART:...]]</p>.
+    if _df is not None and _transfer is not None:
+        transfer_html, themes_html = _build_charts(_df, _transfer)
+    else:
+        transfer_html = themes_html = ""
+
+    body = re.sub(r"<p>\[\[CHART:transfer\]\]</p>", transfer_html, body)
+    body = re.sub(r"<p>\[\[CHART:themes\]\]</p>", themes_html, body)
+
     document = (f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
                 f"<style>{CSS}</style></head><body>{body}</body></html>")
 
     if debug_dir:
         for name, content in (("report.md", markdown_text),
-                              ("report.html", document)):
+                               ("report.html", document)):
             with open(os.path.join(debug_dir, name), "w",
                       encoding="utf-8") as handle:
                 handle.write(content)
@@ -363,13 +504,20 @@ def render(markdown_text, out_dir, debug_dir=None):
 # ==================================================================
 
 COLUMNS = ["group", "kind", "video_id", "comment", "theme", "echoed_ideas",
-           "emotion", "emotion_confidence", "likes", "is_reply", "lang",
+           "emotion", "emotion_confidence",
+           "sentiment", "sentiment_confidence",
+           "likes", "is_reply", "lang",
            "n_words", "is_question", "mentions_price", "mentions_competitor",
            "published_at"]
 
 
-def export(df, themes, transfer, emotion_result, meta_df, out_dir):
-    """comments.csv for reading, summary.csv for charting."""
+def export(df, themes, transfer, affect_result, meta_df, out_dir):
+    """
+    comments.csv   for reading
+    summary.csv    tidy long format for charting
+    chart_transfer.csv  (idea, group, percent, n) sorted desc - Google Slides
+    chart_themes.csv    (theme, percent, n) sorted desc - Google Slides
+    """
     out = df.copy()
 
     # Collapse the sparse pt__ booleans into one readable column.
@@ -386,8 +534,7 @@ def export(df, themes, transfer, emotion_result, meta_df, out_dir):
      .to_csv(comments_path, index=False, encoding="utf-8-sig"))
     print(f"    comments.csv: {len(out)} rows")
 
-    # Tidy long format: one row per number. Pivots without reshaping,
-    # which is what a slide tool wants.
+    # Tidy long format: one row per number.
     sizes = df.groupby("group").size().to_dict()
     rows = [{"group": g, "metric": "base", "label": "comments analysed",
              "value": n, "unit": "count", "n": n} for g, n in sizes.items()]
@@ -400,7 +547,8 @@ def export(df, themes, transfer, emotion_result, meta_df, out_dir):
              for _, r in meta_df.iterrows()]
 
     for table, metric in ((themes, "theme"),
-                          (emotion_result["table"], "emotion")):
+                          (affect_result["emotion"]["table"], "emotion"),
+                          (affect_result["sentiment"]["table"], "sentiment")):
         if table.empty:
             continue
         for group in table.index:
@@ -423,3 +571,28 @@ def export(df, themes, transfer, emotion_result, meta_df, out_dir):
     frame.to_csv(summary_path, index=False, encoding="utf-8-sig")
     print(f"    summary.csv: {len(frame)} rows "
           f"{frame['metric'].value_counts().to_dict()}")
+
+    # chart_transfer.csv: one row per (group, point), sorted by percent desc.
+    if not transfer.empty:
+        ct = transfer[["point", "group", "echoed_pct", "n"]].copy()
+        ct.columns = ["idea", "group", "percent", "n"]
+        ct = ct.sort_values("percent", ascending=False)
+        ct.to_csv(os.path.join(out_dir, "chart_transfer.csv"),
+                  index=False, encoding="utf-8-sig")
+        print(f"    chart_transfer.csv: {len(ct)} rows")
+    else:
+        pd.DataFrame(columns=["idea", "group", "percent", "n"]).to_csv(
+            os.path.join(out_dir, "chart_transfer.csv"),
+            index=False, encoding="utf-8-sig")
+
+    # chart_themes.csv: one row per theme, sorted by percent desc.
+    total = len(df)
+    theme_vc = df["theme"].value_counts()
+    ct2 = pd.DataFrame({
+        "theme": theme_vc.index,
+        "percent": (theme_vc.values / total * 100).round(1),
+        "n": theme_vc.values,
+    }).sort_values("percent", ascending=False)
+    ct2.to_csv(os.path.join(out_dir, "chart_themes.csv"),
+               index=False, encoding="utf-8-sig")
+    print(f"    chart_themes.csv: {len(ct2)} rows")

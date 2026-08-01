@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Resonance demo self-check</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; color: #1A1A2E; }
+  .pass { color: #2e7d32; } .fail { color: #B3452F; font-weight: 700; }
+  li { margin: 2px 0; font-size: 13px; }
+  #summary { font-size: 16px; font-weight: 700; margin: 12px 0; }
+</style>
+</head>
+<body>
+<h1>Store self-check</h1>
+<div id="summary">Running…</div>
+<ul id="results"></ul>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const out = document.getElementById("results");
+  let pass = 0, fail = 0;
+  function check(name, cond) {
+    const li = document.createElement("li");
+    li.className = cond ? "pass" : "fail";
+    li.textContent = (cond ? "PASS " : "FAIL ") + name;
+    out.appendChild(li);
+    cond ? pass++ : fail++;
+  }
+  async function rejects(name, promise, code) {
+    try { await promise; check(name + " (rejects)", false); }
+    catch (e) { check(name + " (rejects: " + (e.code || e.message) + ")", !code || e.code === code); }
+  }
+  const api = window.demoApi;
+
+  // --- Validation before mutation ---
+  await rejects("blank session name", api.createSession({ name: "  ", campaignName: "C", videoUrls: ["https://youtu.be/abc1234"] }), "validation");
+  await rejects("no videos", api.createSession({ name: "S", campaignName: "C", videoUrls: [] }), "validation");
+  await rejects("playlist url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://www.youtube.com/watch?v=abc1234&list=PLxyz"] }), "validation");
+  await rejects("vimeo url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://vimeo.com/12345"] }), "validation");
+  await rejects("duplicate in list", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://youtu.be/abc1234", "https://www.youtube.com/watch?v=abc1234"] }), "validation");
+
+  const { session, campaign } = await api.createSession({
+    name: "Self-check", campaignName: "C1",
+    videoUrls: ["https://youtu.be/abc1234", "https://www.youtube.com/shorts/xyz9876"],
+  });
+  check("session created ready", session.status === "ready");
+  check("two videos created", campaign.videoIds.length === 2);
+
+  const camp = await api.getCampaign(campaign.id);
+  check("short kind detected", camp.videos[1].kind === "short");
+
+  await rejects("duplicate video add", api.addVideo(campaign.id, "https://youtu.be/abc1234"), "validation");
+  const v3 = await api.addVideo(campaign.id, "https://www.youtube.com/watch?v=newid99");
+  check("video added", !!v3.id);
+  await api.removeVideo(v3.id);
+  check("video removed", (await api.getCampaign(campaign.id)).videos.length === 2);
+
+  // --- Uploads ---
+  const big = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "big.pdf", { type: "application/pdf" });
+  await rejects("oversize upload", api.uploadAsset(campaign.id, big), "validation");
+  const bad = new File(["x"], "notes.exe", { type: "application/x-msdownload" });
+  await rejects("bad extension", api.uploadAsset(campaign.id, bad), "validation");
+  const doc = await api.uploadAsset(campaign.id, new File(["%PDF-1.4 demo"], "brief.pdf", { type: "application/pdf" }));
+  check("document asset", doc.kind === "document" && doc.status === "ready");
+  const img = await api.uploadAsset(campaign.id, new File(["fakepng"], "kv.png", { type: "image/png" }));
+  check("image asset", img.kind === "image");
+  await rejects("key visual on document", api.setKeyVisual(campaign.id, doc.id), "validation");
+  await api.setKeyVisual(campaign.id, img.id);
+  check("key visual set", (await api.getCampaign(campaign.id)).assets.find(a => a.id === img.id).isKeyVisual);
+
+  await rejects("ftp article", api.addArticle(campaign.id, "ftp://example.com/x"), "validation");
+  const art = await api.addArticle(campaign.id, "https://kompas.com/article");
+  check("article asset", art.kind === "article" && art.sourceUrl.startsWith("https"));
+
+  // --- Run lifecycle ---
+  const run = await api.startRun(session.id);
+  check("run starts queued/running", ["queued", "running"].includes(run.status));
+  await rejects("second concurrent run", api.startRun(session.id), "conflict");
+  await rejects("proceed before pause", api.proceedRun(run.id), "conflict");
+
+  const seen = [];
+  let lastEvent = null;
+  const unsub = api.subscribeRun(run.id, {
+    onEvent: (e) => { seen.push(e.stage); lastEvent = e; },
+    onDisconnect: () => seen.push("disconnect"),
+    onReconnect: () => seen.push("reconnect"),
+  });
+
+  function until(pred, ms, label) {
+    return new Promise((res, rej) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (pred()) { clearInterval(iv); res(); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); rej(new Error("timeout: " + label)); }
+      }, 50);
+    });
+  }
+
+  await until(() => seen.includes("brief_pause"), 15000, "brief_pause");
+  check("reached brief_pause", true);
+  check("event shape is SSE-shaped",
+    !!lastEvent && typeof lastEvent.run_id === "string" && "stage" in lastEvent
+    && "message" in lastEvent && "pct" in lastEvent && typeof lastEvent.detail === "object");
+  const runAtPause = await api.getRun(run.id);
+  check("paused at 30%", runAtPause.pct === 30 && runAtPause.stage === "brief_pause");
+
+  check("brief points seeded", runAtPause.briefPointIds.length >= 4);
+
+  // zero-included rejection
+  const zeroIncluded = runAtPause.briefPointIds.map((id, i) => ({
+    id, label: "P" + i, description: "", included: false, order: i + 1,
+  }));
+  await rejects("all-excluded rejected", api.updateBriefPoints(run.id, zeroIncluded), "validation");
+
+  // edit: keep two, reorder
+  const edit = runAtPause.briefPointIds.slice(0, 2).map((id, i) => ({
+    id, label: i === 0 ? "Edited idea B" : "Edited idea A", description: "d", included: true, order: i + 1,
+  }));
+  const saved = await api.updateBriefPoints(run.id, edit);
+  check("points saved", saved.length === 2 && saved[0].label === "Edited idea B");
+
+  // disconnect during pause: no progress loss, auto reconnect
+  await api.simulateDisconnect(run.id);
+  await until(() => seen.includes("reconnect"), 12000, "reconnect");
+  check("reconnected after disconnect", true);
+  const afterDc = await api.getRun(run.id);
+  check("stage retained through disconnect", afterDc.stage === "brief_pause");
+
+  await api.proceedRun(run.id);
+  await until(() => seen.includes("complete"), 25000, "complete");
+  check("run completed", true);
+  const seq = ["connecting", "collect", "brief", "brief_pause", "classify", "emotion", "report", "complete"];
+  let last = -1, ordered = true;
+  for (const s of seen) {
+    const i = seq.indexOf(s);
+    if (i >= 0) { if (i < last) ordered = false; last = Math.max(last, i); }
+  }
+  check("stage order monotonic", ordered);
+
+  const sessAfter = await api.getSession(session.id);
+  check("session complete with comments", sessAfter.status === "complete" && sessAfter.commentCount > 0);
+
+  const report = await api.getReport(run.id);
+  check("report exists", report.runId === run.id && report.transfers.length === 2);
+  check("transfer labels follow edits", report.transfers[0].label === "Edited idea B");
+  check("evidence attached", report.evidence.length > 0);
+  check("evidence shape", report.evidence.every((e) => ["Joy", "Skeptical", "Neutral"].includes(e.emotion)));
+
+  const files = await api.listFiles();
+  const artifactNames = files.filter((f) => f._file === "artifact").map((f) => f.name).sort();
+  check("four artifacts", JSON.stringify(artifactNames) === JSON.stringify(["chart_themes.csv", "chart_transfer.csv", "comments.csv", "report.pdf"].sort()));
+  const pdfArt = files.find((f) => f.name === "report.pdf");
+  check("pdf magic bytes", pdfArt.content.startsWith("%PDF-1.4"));
+  const csvArt = files.find((f) => f.name === "chart_transfer.csv");
+  check("csv header", csvArt.content.startsWith("idea,share_pct"));
+
+  unsub();
+  const seenLen = seen.length;
+  await new Promise((r) => setTimeout(r, 300));
+  check("unsubscribe stops events", seen.length === seenLen);
+
+  // Fresh run gets a fresh ID
+  const run2 = await api.startRun(session.id);
+  check("fresh run id", run2.id !== run.id);
+  await api.simulateFailure(run2.id);
+  await until(() => api.getRun(run2.id).then((r) => r.status === "failed"), 5000, "fail");
+  const failedRun = await api.getRun(run2.id);
+  check("failure terminal with error", failedRun.status === "failed" && !!failedRun.error);
+
+  const summary = document.getElementById("summary");
+  summary.textContent = pass + " passed, " + fail + " failed";
+  summary.className = fail ? "fail" : "pass";
+})().catch((e) => {
+  const summary = document.getElementById("summary");
+  summary.textContent = "SELF-CHECK ERROR: " + e.message;
+  summary.className = "fail";
+});
+</script>
+</body>
+</html>

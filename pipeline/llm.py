@@ -5,33 +5,42 @@ Swapping provider means editing this file and nothing else. Anything with
 an OpenAI-compatible endpoint drops in here.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import time
+from typing import TYPE_CHECKING
 
-import config
+if TYPE_CHECKING:
+    from pipeline.config_types import PipelineConfig
 
-_client = None
-
-
-def _get_client():
-    global _client
-    if _client is None:
-        from google import genai
-        _client = genai.Client(api_key=config.GEMINI_API_KEY)
-    return _client
+# ponytail: per-call client construction is fine for most workloads; this
+# dict cache avoids rebuilding the client on every call. Remove if profiling
+# shows no overhead, or replace with an LRU if multiple keys rotate.
+_clients: dict[str, object] = {}
 
 
-def ask(prompt, model=None, grounded=False, retries=4):
+def _get_client(cfg: PipelineConfig):
+    from google import genai
+    key = cfg.GEMINI_API_KEY
+    if key not in _clients:
+        _clients[key] = genai.Client(api_key=key)
+    return _clients[key]
+
+
+def ask(prompt, cfg: PipelineConfig, grounded=False, retries=4, images=None):
     """
     Send a prompt, return the text.
 
     grounded=True switches on Google Search so the model can look things
     up and return sources. Grounding is metered separately and is not on
     every tier, so it degrades to a plain call rather than failing.
+
+    images, if provided, is a list[tuple[bytes, str]] of (data, mime_type).
     """
-    model = model or config.MODEL_CHEAP
-    client = _get_client()
+    model = cfg.MODEL
+    client = _get_client(cfg)
     settings = None
 
     if grounded:
@@ -42,10 +51,18 @@ def ask(prompt, model=None, grounded=False, retries=4):
         except Exception:
             grounded = False
 
+    if images:
+        from google.genai import types
+        contents = [prompt] + [
+            types.Part.from_bytes(data=b, mime_type=m) for b, m in images
+        ]
+    else:
+        contents = prompt
+
     for attempt in range(retries):
         try:
             response = client.models.generate_content(
-                model=model, contents=prompt, config=settings)
+                model=model, contents=contents, config=settings)
             return response.text + _sources(response)
         except Exception as error:
             message = str(error)
@@ -54,7 +71,7 @@ def ask(prompt, model=None, grounded=False, retries=4):
                 print("      grounding unavailable, retrying without it")
                 grounded, settings = False, None
                 continue
-            # 429: free tiers are tight. Back off rather than crashing.
+            # 429: rate limit. Back off rather than crashing.
             if "429" in message or "RESOURCE_EXHAUSTED" in message:
                 wait = 2 ** attempt * 5
                 print(f"      rate limited, waiting {wait}s")
@@ -90,15 +107,19 @@ def _repair(text):
     return text
 
 
-def ask_json(prompt, model=None, retries=3):
+def ask_json(prompt, cfg: PipelineConfig, retries=3, grounded=False,
+             images=None):
     """
     Ask for JSON and parse it. On a parse failure the broken output goes
     back to the model to be fixed, which succeeds far more often than
     re-asking from scratch.
+
+    grounded=True is forwarded to ask() to enable Google Search on the call.
+    Degrades gracefully to a plain call if the tier does not support it.
     """
     raw = ask(prompt + "\n\nReturn ONLY valid JSON. No markdown fences, no "
                        "commentary. Keep every string on a single line.",
-              model)
+              cfg, grounded=grounded, images=images)
 
     for attempt in range(retries):
         text = _repair(raw)
@@ -112,9 +133,71 @@ def ask_json(prompt, model=None, retries=3):
             raise ValueError(f"Could not parse JSON.\nGot: {raw[:400]}")
         print(f"      JSON parse failed, asking model to fix it")
         raw = ask("This should be valid JSON but is not. Return only the "
-                  "corrected JSON.\n\n" + raw[:6000], model)
+                  "corrected JSON.\n\n" + raw[:6000], cfg)
 
 
 def _outermost(text):
     match = re.search(r"[\{\[].*[\}\]]", text, re.DOTALL)
     return match.group(0) if match else None
+
+
+def classify_batch(prompt, theme_names, point_labels, cfg: PipelineConfig):
+    """
+    Classify a batch of comments against a fixed theme enum and a set of
+    brief points (signal transfer).
+
+    Returns a list of dicts:
+        [{"index": int, "theme": str, "echoed": [str, ...]}, ...]
+
+    "theme" is one of theme_names or "Other".
+    "echoed" is a subset of point_labels (may be empty).
+
+    Tries enum-constrained structured output first. On any exception
+    mentioning schema/response_schema/tool, degrades to ask_json so the
+    prompt text itself constrains the labels.
+    """
+    model = cfg.MODEL
+    client = _get_client(cfg)
+    all_themes = list(theme_names) + ["Other"]
+
+    # Build the response schema: array of {index, theme, echoed}.
+    schema = {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "index": {"type": "INTEGER"},
+                "theme": {"type": "STRING", "enum": all_themes},
+                "echoed": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING", "enum": list(point_labels)}
+                    if point_labels else {"type": "STRING"},
+                },
+            },
+            "required": ["index", "theme", "echoed"],
+        },
+    }
+
+    for attempt in range(4):
+        try:
+            from google.genai import types
+            gcfg = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema)
+            response = client.models.generate_content(
+                model=model, contents=prompt, config=gcfg)
+            return json.loads(response.text)
+        except Exception as error:
+            message = str(error).lower()
+            if "429" in message or "resource_exhausted" in message:
+                wait = 2 ** attempt * 5
+                print(f"      rate limited, waiting {wait}s")
+                time.sleep(wait)
+                continue
+            # Schema not supported on this endpoint/tier - degrade gracefully.
+            if any(k in message for k in ("schema", "response_schema", "tool")):
+                print("      structured output unavailable, falling back to ask_json")
+                return ask_json(prompt, cfg)
+            raise
+
+    raise RuntimeError("Gave up after repeated rate limits")

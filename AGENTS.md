@@ -1,62 +1,147 @@
 # AGENTS.md
 
-YouTube Comment Intelligence: put video links in, get a reception report out. Splits "what the video said" (from transcript/title/desc) from "what the audience said" (from comments), then measures which video ideas showed up in the comments.
+Repository conventions for agents and contributors. Everything here is about how to change the code without breaking it. Nothing here duplicates end-user documentation.
 
-## Tech stack
+If you need:
 
-- Python 3 (conda env expected on Windows, see gotcha below)
-- `google-genai>=0.3` (Gemini LLM), `google-api-python-client>=2.100` (YouTube Data API v3)
-- `youtube-transcript-api`, `langdetect`, `pandas>=2.0`, `markdown>=3.5`
-- `transformers>=4.40` + `torch>=2.0` for local emotion classification (~500 MB download on first run)
-- PDF: `playwright>=1.49` (+ `playwright install chromium`), fallbacks `weasyprint>=68`, `pdfkit`
-- No test suite, no linter config, no CI. ~1,300 lines total.
+- Product overview, quick install, what the outputs look like -> [README.md](README.md).
+- Full install, config, keys, PDF engine, troubleshooting -> [docs/setup.md](docs/setup.md).
+- How the pipeline, backend, and frontend fit together -> [docs/architecture.md](docs/architecture.md).
+- HTTP contract, error codes, request/response shapes -> [docs/api-reference.md](docs/api-reference.md).
 
-## Run
+Read the doc that matches the change you are making. Only what is not in those docs belongs here.
 
-```bash
-pip install -r requirements.txt
-pip install playwright && playwright install chromium
-# copy config-template.py -> config.py, paste links + 2 API keys
-python run.py
+---
+
+## Environment and commands
+
+- Windows Python interpreter: see [docs/setup.md](docs/setup.md#prerequisites) (`python`, never `py`).
+- Never edit files through the shell (`sed`, `awk`, redirection, PowerShell `Set-Content`). Use the editor tools. Shell is for `git`, `pip`, `python`, `node`, and similar tooling only.
+- Serving `app/` standalone: bind `127.0.0.1` on a fresh port. Stale ports cause `ERR_EMPTY_RESPONSE`.
+
+---
+
+## Coding conventions
+
+### Language and style
+
+- Python target: 3.10+. Use standard-library features first (`pathlib`, `sqlite3`, `threading`, `queue`, `dataclasses`). Add a dependency only when a few lines will not do.
+- JavaScript: vanilla, no framework, no build step. One IIFE per file in `app/`. Match the existing style.
+- CSS: design tokens live in `app/style.css`. Do not introduce new tokens without a reason. The visual language is documented in [docs/architecture.md](docs/architecture.md).
+
+### Minimalism
+
+Inherited from the workspace convention: the best code is the code never written. Before writing anything, stop at the first rung that holds:
+
+1. Does this need to exist at all?
+2. Does stdlib cover it?
+3. Does a native platform feature cover it? (CSS over JS, DB constraint over app code.)
+4. Does an already-installed dependency solve it?
+5. Can it be one line?
+6. Only then: the minimum code that works.
+
+No unrequested abstractions. No interface with one implementation. No config for a value that never changes. No scaffolding "for later". Deletion beats addition.
+
+Mark deliberate simplifications with a `# ponytail:` comment that names the ceiling and the upgrade path. Existing examples are in `server.py` (search for `ponytail:`).
+
+### What never gets simplified away
+
+- Input validation at trust boundaries. Server-side URL parsing (`_parse_youtube_url`), extension checks, size checks, article URL scheme checks - these stay on the server even if the frontend also validates.
+- Error handling that prevents data loss. `finally` blocks that close DB connections in `adapter.py`, timeouts on external calls.
+- Security. API keys stay server-side. `.env` and `config.py` are gitignored.
+- Accessibility. Focus rings, keyboard-operable controls, `aria-live` announcements, `aria-pressed` states, reduced-motion support, contrast >= 4.5:1.
+
+### Naming
+
+- Python: `snake_case` for functions, `PascalCase` for classes, `SCREAMING_SNAKE_CASE` for module-level constants.
+- API responses: `camelCase`, except SSE progress events (`snake_case`, see [docs/api-reference.md](docs/api-reference.md#get-runsidevents)).
+- DB columns and internal Python dict keys derived from the DB: `snake_case`.
+- The serializers in `server.py` handle the case flip; do not push `snake_case` out over HTTP.
+
+### Errors
+
+Server errors go through the helpers in `server.py`:
+
+```python
+_404("Session not found.")
+_409("This session already has a campaign.")
+_422("kind must be one of …", "kind")
+_413("Files are limited to 10 MB.")
 ```
 
-Full pipeline only. No unit tests, no single-stage entrypoint. To verify a change, run end to end and read `output/<session>/report.pdf`. For debugging set `KEEP_INTERMEDIATE = True` in `config.py` to dump intermediate files to `output/<session>/debug/` (most useful: `codebook.json`).
+Every helper produces the standard `{"error", "message", "field"}` shape. Do not raise bare `HTTPException` for these cases; use the helpers so the shape stays consistent.
 
-## Structure
+Pydantic validation errors are normalized to the same shape by the `RequestValidationError` handler. Do not remove that handler.
 
-| Path | Role |
-|---|---|
-| `config.py` | Not committed (gitignored). User copies from `config-template.py`. Links, keys, all tunables. |
-| `config-template.py` | The template. Edit this if adding a config knob. |
-| `run.py` | Preflight + orchestration. 5 stages, data passed in memory. |
-| `pipeline/llm.py` | ALL model access. Swap provider here only. |
-| `pipeline/collect.py` | Fetch comments/transcripts, clean, language filter. |
-| `pipeline/brief.py` | What each campaign put forward (grounded + background). |
-| `pipeline/analyze.py` | Codebook, signal transfer, emotion. |
-| `pipeline/report.py` | Write report via LLM, render PDF, export CSVs. |
+---
 
-## Architecture facts an agent will otherwise miss
+## Things that must not change without justification
 
-- **Model writes rules, code counts.** `analyze.build()` sends a stratified sample to the LLM which returns a codebook (themes + keyword lists). `analyze.apply_themes()` then applies keywords via regex to the FULL corpus. Cost is flat in corpus size; every % traces to `codebook.json`. Do not "improve" this by classifying each comment with the LLM.
-- **Grounded vs background are deliberately separate** (`brief.py`). Grounded = from transcripts, checkable. Background = model's prior knowledge, NOT checkable, labelled unverified. Never merge them or let comments leak into the video brief; keeping them apart is the core design.
-- **The report LLM sees statistics + a verbatim quote shortlist, never the corpus** (`report.py`). This is what stops invented percentages. Preserve it.
-- **Keywords must never include brand/product names** (`brief.py` prompt). Brand's own posts inflate transfer counts. This is documented as the #1 way numbers go wrong.
+These have specific reasons behind them. Read the relevant section of [docs/architecture.md](docs/architecture.md) before touching any of them.
 
-## Gotchas
+- **Thread-local `googleapiclient` service** in `collect.py`. `httplib2` is not thread-safe.
+- **Preflight checks** in `run.py`. See [docs/setup.md](docs/setup.md#running) for the checklist. Saves five model calls and a 500 MB download on misconfiguration.
+- **Grounded-only brief** in `brief.py`. The brief is grounded against transcripts only - do not reintroduce a background or search-grounded brief. User images feed the brief as multimodal parts via `images_map`; no OCR path is used.
+- **PDF requirement** in `run.py`. HTML is a build artifact.
+- **`demoApi` method signatures** in `app/app.js`. Change bodies, keep signatures.
+- **Disabled-feature honesty** in the frontend. A disabled control must be visibly disabled and explain why. Never silently do nothing.
+- **Per-session overwrite** in `server.py`. Starting a new run deletes all prior runs and their files for that session. The backend enforces one active run per session; a new run overwrites the previous one.
+- **`PipelineConfig` as the config contract**. Every pipeline module receives a `PipelineConfig` object passed as an argument. Do not reintroduce a global config module or a `sys.modules["config"]` shim. `llm` has no module-global client; `_get_client(cfg)` constructs one per API key.
 
-- **One API client per thread.** `googleapiclient`/`httplib2` is NOT thread-safe. `collect._service()` builds a thread-local client; never pass one between threads. Sharing surfaces as SSL record-layer failures or `NoneType has no attribute read`. Keep this rule if editing `collect.py`.
-- **Windows: use `python`, not `py`.** `py` uses system Python and ignores the active conda env, giving `ModuleNotFoundError: googleapiclient`.
-- **Model IDs go stale.** A 404 from Gemini means update `MODEL_CHEAP` / `MODEL_SMART` in `config.py`. They are config vars for this reason.
-- **Preflight can't see the browser.** `run.py` preflight checks the `playwright` package but not the chromium download. Preflight passing then render failing = missing `playwright install chromium`.
-- **Transient vs permanent errors** (`collect.py`): socket/SSL retry with backoff; `HttpError` (403 disabled, 404 gone) never retried. One bad video does not kill the run; run only fails if nothing is collected.
-- **JSON from the LLM is repaired** (`llm.ask_json`): strips fences, trailing commas, embedded newlines, then re-asks the model to fix on parse failure. Reuse this path for any new JSON call.
-- **CSVs use `utf-8-sig`** (BOM) for Excel. Comment data contains PII (display names); `*.csv`/`*.json` and `config.py`/`output/` are gitignored. Do not commit them.
-- **`langdetect` often tags Indonesian slang as `tl`** (Tagalog); that's why `tl` is in `KEEP_LANGUAGES`.
+---
 
-## Work conventions
+## Verification
 
-- Optimize for correct, reliable, idiomatic code. Follow existing patterns in the file you touch.
-- Lean, not bloated. This is operational tooling; do not add abstraction/wrappers/automation unless a concrete blocker justifies it.
-- Security: comment CSVs hold PII, API keys live only in gitignored `config.py`. Never commit real keys or output. If a hardening gap is left, note it one line in `SECURITY_NOTES.md`.
-- Before "done": review correctness, edge cases, thread-safety in `collect.py`, and that the grounded/background/statistics separations are intact. Use @reviewer for an adversarial pass.
-- Style bans (from user global rules): no em dashes (use `-`), no auto co-author lines in commits, never hand-edit auto-generated files.
+Full checklist: [docs/setup.md](docs/setup.md#verifying). Rules specific to making a change:
+
+- For non-trivial logic, leave one runnable check behind - an assert-based self-check in the same file, or a small script under `tests/`. No frameworks unless one already exists there.
+- If a bug is reported, reproduce it in an end-to-end setting before fixing, so you solve the real problem.
+- Do not fabricate a passing test. If you did not run it, say so.
+
+---
+
+## Git and commits
+
+- Never commit `config.py`, `.env`, or `data/`. All gitignored; keep them that way.
+- Never commit real API keys. Keep `config-template.py` as the reference.
+- Never auto-add agent names as co-authors on commits.
+- Confirm before destructive git operations (`push --force`, `reset --hard`, `clean -f`, `branch -D`).
+
+---
+
+## When making changes
+
+- Read the affected file before editing.
+- Read the relevant `docs/` file if the change touches an area you have not worked in before.
+- Match the existing style, conventions, and libraries. Do not introduce a new dependency or pattern for something the codebase already handles a different way.
+- If a change spans multiple files, describe the plan first (in your response) before editing.
+- If an approach fails twice, stop and diagnose. Do not keep patching. A third attempt with a small variation of the same idea is usually the wrong move.
+
+---
+
+## Frontend UI/UX work
+
+Any user-visible change - new pages, redesigns, component styling, layout, content presentation, interaction feedback, loading, empty, error states - is scoped work that requires design intent, not just implementation. See [docs/architecture.md](docs/architecture.md) for the visual language and the mockup-vs-backend disconnects table.
+
+Never re-enable a disabled control without a backing route landing first. Never fake an unbuilt backend feature.
+
+---
+
+## Skills
+
+Load these when a task matches:
+
+- `compact-technical-writing` - commit messages, README edits, architecture notes, any technical prose.
+- `webapp-testing` - Playwright end-to-end checks of `app/`.
+- `vercel-react-best-practices` - only if React or Next.js gets introduced. The current frontend is vanilla, so this is rarely relevant.
+- `tdd` - only when explicitly asked for test-first work.
+
+---
+
+## Deferred features
+
+Three feature areas are deferred with backing UI already in place as disabled controls. Do not build them piecemeal. Read the "Deferred features" section of [docs/architecture.md](docs/architecture.md) before starting any of them:
+
+- OCR for scanned PDFs.
+- Custom lenses for the brief stage.
+- Cross-session assistant (chat + source discovery).

@@ -1,0 +1,1448 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<style>
+  body { margin:0; background:#EFEEF1; font-family:'Plus Jakarta Sans', sans-serif; -webkit-font-smoothing:antialiased; }
+  a { color:#D6246E; text-decoration:none; }
+  a:hover { color:#A8194F; text-decoration:underline; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</helmet>
+
+<section style="padding:52px 60px 90px;display:flex;flex-direction:column;gap:34px">
+  <div style="display:flex;flex-direction:column;gap:10px;max-width:900px">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.14em;color:#9A99A8">TURN 1 · MVP UI MOCKUPS</div>
+    <div style="font-size:34px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em">Resonance — session &amp; campaign manager</div>
+    <div style="font-size:15px;line-height:1.55;color:#6E6E85;text-wrap:pretty">Six screens of the Phase B flow, drawn in the GWI visual language: white ground, one pink accent, warm guiding copy. Two directions side by side — <a href="#1a">1a</a> puts the assistant in front of you, <a href="#1b">1b</a> keeps it out of the way and makes the flow more structured. Every number in the report is clickable and opens the comments behind it.</div>
+  </div>
+
+  <div style="display:flex;gap:64px;align-items:flex-start;flex-wrap:wrap">
+
+    <div id="1a" style="display:flex;flex-direction:column;gap:30px">
+      <div style="display:flex;align-items:baseline;gap:12px;max-width:900px;flex-wrap:wrap">
+        <div style="background:#D6246E;color:#fff;font-size:12px;font-weight:800;padding:4px 10px;border-radius:6px">1a</div>
+        <div style="font-size:19px;font-weight:700;color:#1A1A2E">Flow A · Assistant-forward</div>
+        <div style="font-size:13px;color:#6E6E85">Chat hero on every empty surface · one-page session setup · progress inline in the session · evidence in a side drawer</div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">1 · HOME — EMPTY STATE</div>
+      <div data-screen-label="A1 Empty state" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,720px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="font-size:15px;font-weight:700;color:#1A1A2E">Sessions</div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="font-size:13px;color:#6E6E85">Innocean Indonesia</div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">New session</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:34px 40px 40px;display:flex;flex-direction:column;gap:30px">
+
+            <div style="border:1px solid #F6D3E3;border-radius:12px;overflow:hidden">
+              <div style="background:#FDEEF5;padding:32px 36px;display:flex;gap:28px;align-items:flex-start">
+                <div style="width:76px;height:76px;flex:0 0 76px;border-radius:50%;background:#D6246E;display:flex;align-items:center;justify-content:center;color:#fff">
+                  <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>
+                </div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+                  <div style="font-size:25px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em;line-height:1.25">{{ heroLine1 }}<br><span style="color:#D6246E">{{ heroLine2 }}</span></div>
+                  <div style="background:#fff;border:1px solid #EBD3DF;border-radius:10px;padding:14px 16px 12px;display:flex;flex-direction:column;gap:14px">
+                    <div style="font-size:14px;color:#9A99A8">Paste a YouTube link or a brief, or just describe the campaign you want to understand…</div>
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                      <div style="width:30px;height:30px;border:1px solid #E6E6EE;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#6E6E85" style-hover="border-color:#D6246E;color:#D6246E"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+                      <div style="color:#D6246E"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 8 6 8z"></path></svg></div>
+                    </div>
+                  </div>
+                  <div style="font-size:11.5px;color:#8B8A9B">Resonance only reports what real comments say — every number opens the comments behind it.</div>
+                </div>
+              </div>
+              <div style="background:#fff;border-top:1px solid #F6D3E3;padding:18px 36px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                <div style="font-size:13px;font-weight:600;color:#1A1A2E">Or start from a lens:</div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                  <div style="border:1px solid #E6E6EE;border-radius:20px;padding:7px 14px;font-size:12.5px;font-weight:600;color:#1A1A2E;display:flex;gap:8px;align-items:center" style-hover="border-color:#D6246E;color:#D6246E">Reception check <span style="color:#D6246E">→</span></div>
+                  <div style="border:1px solid #E6E6EE;border-radius:20px;padding:7px 14px;font-size:12.5px;font-weight:600;color:#1A1A2E;display:flex;gap:8px;align-items:center" style-hover="border-color:#D6246E;color:#D6246E">Crisis watch <span style="color:#D6246E">→</span></div>
+                  <div style="border:1px solid #E6E6EE;border-radius:20px;padding:7px 14px;font-size:12.5px;font-weight:600;color:#1A1A2E;display:flex;gap:8px;align-items:center" style-hover="border-color:#D6246E;color:#D6246E">Launch impact <span style="color:#D6246E">→</span></div>
+                  <div style="border:1px solid #E6E6EE;border-radius:20px;padding:7px 14px;font-size:12.5px;font-weight:600;color:#1A1A2E;display:flex;gap:8px;align-items:center" style-hover="border-color:#D6246E;color:#D6246E">Signal transfer <span style="color:#D6246E">→</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <div style="font-size:13px;font-weight:700;color:#1A1A2E">Your sessions</div>
+              <div style="border:1px dashed #D5D4DD;border-radius:12px;padding:44px 40px;display:flex;flex-direction:column;align-items:center;gap:10px">
+                <div style="width:40px;height:40px;border-radius:10px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#9A99A8"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h6l2 2.2h10V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"></path></svg></div>
+                <div style="font-size:16px;font-weight:700;color:#1A1A2E">No sessions yet</div>
+                <div style="font-size:13.5px;color:#6E6E85;text-align:center;max-width:430px;line-height:1.5;text-wrap:pretty">A session groups the campaigns you want to read together — Nike and Adidas in the same category, or one brand across three films.</div>
+                <div style="display:flex;gap:10px;margin-top:8px">
+                  <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:10px 18px;border-radius:8px" style-hover="background:#B01B5B">Create your first session</div>
+                  <sc-if value="{{ showConfigImport }}" hint-placeholder-val="{{ false }}">
+                    <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:10px 18px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Import a config file</div>
+                  </sc-if>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#E6E6EE;border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+              <div style="background:#fff;padding:20px 22px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:11px;font-weight:800;color:#D6246E;letter-spacing:.1em">STEP 1</div>
+                <div style="font-size:14px;font-weight:700;color:#1A1A2E">Add the campaign</div>
+                <div style="font-size:12.5px;color:#6E6E85;line-height:1.5">YouTube links, the brief PDF, key visuals, press articles.</div>
+              </div>
+              <div style="background:#fff;padding:20px 22px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:11px;font-weight:800;color:#D6246E;letter-spacing:.1em">STEP 2</div>
+                <div style="font-size:14px;font-weight:700;color:#1A1A2E">We read every comment</div>
+                <div style="font-size:12.5px;color:#6E6E85;line-height:1.5">Each one gets a theme label, so percentages are counted, not guessed.</div>
+              </div>
+              <div style="background:#fff;padding:20px 22px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:11px;font-weight:800;color:#D6246E;letter-spacing:.1em">STEP 3</div>
+                <div style="font-size:14px;font-weight:700;color:#1A1A2E">You get a strategy note</div>
+                <div style="font-size:12.5px;color:#6E6E85;line-height:1.5">Two charts, a written read, and the comments behind every figure.</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">2 · SESSION LIST</div>
+      <div data-screen-label="A2 Session list" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,640px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="font-size:15px;font-weight:700;color:#1A1A2E">Sessions</div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="border:1px solid #E6E6EE;border-radius:8px;padding:8px 12px;display:flex;gap:8px;align-items:center;width:220px;color:#9A99A8"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg><span style="font-size:13px">Search sessions</span></div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">New session</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:30px 40px 44px;display:flex;flex-direction:column;gap:22px">
+            <div style="display:flex;align-items:flex-end;justify-content:space-between">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="font-size:24px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em">Good afternoon, Jean Paul</div>
+                <div style="font-size:13.5px;color:#6E6E85">4 sessions · 24,532 comments read this month</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <div style="border:1px solid #1A1A2E;color:#1A1A2E;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px">All</div>
+                <div style="border:1px solid #E6E6EE;color:#6E6E85;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px" style-hover="border-color:#D6246E;color:#D6246E">Running</div>
+                <div style="border:1px solid #E6E6EE;color:#6E6E85;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px" style-hover="border-color:#D6246E;color:#D6246E">Drafts</div>
+              </div>
+            </div>
+
+            <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+              <div style="display:grid;grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px;gap:16px;padding:12px 20px;background:#FAFAFB;border-bottom:1px solid #E6E6EE;font-size:10.5px;font-weight:800;letter-spacing:.1em;color:#9A99A8">
+                <div>SESSION</div><div>CAMPAIGNS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px;gap:16px;padding:18px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Ramadan football push</div>
+                  <div style="display:flex;gap:6px"><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">RECEPTION</span></div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#3D3C52">Nike — Bola Rakyat</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#3D3C52">Adidas — Kota Lari</span>
+                </div>
+                <div style="font-size:13.5px;font-weight:600;color:#1A1A2E">8,412<div style="font-size:11px;font-weight:500;color:#9A99A8">6 videos</div></div>
+                <div><span style="font-size:12px;font-weight:700;color:#1A1A2E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#1A1A2E"></span>Complete</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">2 hours ago</div>
+                <div style="color:#C6C5D0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"></path></svg></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px;gap:16px;padding:18px 20px;border-bottom:1px solid #F0EFF3;align-items:center;background:#FDFAFC">
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">EV launch — Q3</div>
+                  <div style="display:flex;gap:6px"><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">CRISIS WATCH</span></div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#3D3C52">BYD — Kota Listrik</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#9A99A8">+1 more</span>
+                </div>
+                <div style="font-size:13.5px;font-weight:600;color:#1A1A2E">3,180<div style="font-size:11px;font-weight:500;color:#9A99A8">4 videos</div></div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <span style="font-size:12px;font-weight:700;color:#D6246E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#D6246E"></span>Classifying</span>
+                  <div style="height:4px;background:#F0EFF3;border-radius:2px;overflow:hidden;width:82px"><div style="width:38%;height:100%;background:#D6246E"></div></div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">just now</div>
+                <div style="color:#C6C5D0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"></path></svg></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px;gap:16px;padding:18px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Skincare category scan</div>
+                  <div style="display:flex;gap:6px"><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">RECEPTION</span></div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#3D3C52">Somethinc</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#3D3C52">Avoskin</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:#9A99A8">+1 more</span>
+                </div>
+                <div style="font-size:13.5px;font-weight:600;color:#1A1A2E">12,940<div style="font-size:11px;font-weight:500;color:#9A99A8">11 videos</div></div>
+                <div><span style="font-size:12px;font-weight:700;color:#1A1A2E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#1A1A2E"></span>Complete</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">3 days ago</div>
+                <div style="color:#C6C5D0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"></path></svg></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px;gap:16px;padding:18px 20px;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Coffee teaser — unnamed</div>
+                  <div style="display:flex;gap:6px"><span style="border:1px dashed #D5D4DD;color:#9A99A8;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">LENS NOT SET</span></div>
+                </div>
+                <div style="font-size:12.5px;color:#9A99A8">No campaigns yet</div>
+                <div style="font-size:13.5px;font-weight:600;color:#C6C5D0">—</div>
+                <div><span style="font-size:12px;font-weight:700;color:#9A99A8;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#C6C5D0"></span>Draft</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">5 days ago</div>
+                <div style="color:#C6C5D0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"></path></svg></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">3 · NEW SESSION — ONE-PAGE SETUP</div>
+      <div data-screen-label="A3 Session setup" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,860px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;padding:0 28px;gap:10px;color:#1A1A2E">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"></path></svg>
+            <span style="font-size:13.5px;font-weight:600">Back to sessions</span>
+          </div>
+          <div style="flex:1;padding:44px 40px 56px;display:flex;justify-content:center">
+            <div style="width:720px;display:flex;flex-direction:column;gap:34px">
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <div style="font-size:31px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em">Set up your session</div>
+                <div style="font-size:14.5px;color:#6E6E85;line-height:1.5">Three things and you're running. You can add more campaigns later.</div>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">Session name</div>
+                <div style="border:1px solid #E6E6EE;border-radius:8px;padding:13px 15px;font-size:14px;color:#1A1A2E">Ramadan football push</div>
+                <div style="font-size:11.5px;color:#9A99A8">Sessions are for organising — group the campaigns you want to read together.</div>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">What should we look for?</div>
+                  <div style="font-size:11.5px;color:#9A99A8">This tunes the questions the model asks of every comment.</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                  <div style="border:1.5px solid #D6246E;background:#FDEEF5;border-radius:10px;padding:16px 18px;display:flex;gap:13px">
+                    <div style="width:34px;height:34px;flex:0 0 34px;border-radius:8px;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H9l-5 4z"></path></svg></div>
+                    <div style="display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:14px;font-weight:700;color:#1A1A2E">Reception</div>
+                      <div style="font-size:12px;color:#5C5B70;line-height:1.45">How the work landed, and which of your ideas actually transferred.</div>
+                    </div>
+                  </div>
+                  <div style="border:1px solid #E6E6EE;border-radius:10px;padding:16px 18px;display:flex;gap:13px" style-hover="border-color:#D6246E">
+                    <div style="width:34px;height:34px;flex:0 0 34px;border-radius:8px;background:#F5F4F7;color:#6E6E85;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v10"></path><path d="M12 19h.01"></path></svg></div>
+                    <div style="display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:14px;font-weight:700;color:#1A1A2E">Crisis watch</div>
+                      <div style="font-size:12px;color:#5C5B70;line-height:1.45">Anger, boycott talk and accusations, surfaced first and counted.</div>
+                    </div>
+                  </div>
+                  <div style="border:1px solid #E6E6EE;border-radius:10px;padding:16px 18px;display:flex;gap:13px" style-hover="border-color:#D6246E">
+                    <div style="width:34px;height:34px;flex:0 0 34px;border-radius:8px;background:#F5F4F7;color:#6E6E85;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19l6-14 3 8 5-4"></path></svg></div>
+                    <div style="display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:14px;font-weight:700;color:#1A1A2E">Launch impact</div>
+                      <div style="font-size:12px;color:#5C5B70;line-height:1.45">Purchase intent, price talk and where the product question sits.</div>
+                    </div>
+                  </div>
+                  <div style="border:1px solid #E6E6EE;border-radius:10px;padding:16px 18px;display:flex;gap:13px" style-hover="border-color:#D6246E">
+                    <div style="width:34px;height:34px;flex:0 0 34px;border-radius:8px;background:#F5F4F7;color:#6E6E85;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+                    <div style="display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:14px;font-weight:700;color:#1A1A2E">Write your own</div>
+                      <div style="font-size:12px;color:#5C5B70;line-height:1.45">"Tell me if people noticed the local dialect in the voiceover."</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">First campaign</div>
+                  <div style="font-size:11.5px;color:#9A99A8">One brand, one film — or a set of films for the same idea.</div>
+                </div>
+                <div style="border:1px solid #E6E6EE;border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+                  <div style="border:1px solid #E6E6EE;border-radius:8px;padding:12px 14px;font-size:14px;color:#1A1A2E">Nike — Bola Rakyat</div>
+                  <div style="display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;align-items:center;gap:10px;border:1px solid #F0EFF3;background:#FAFAFB;border-radius:8px;padding:10px 12px">
+                      <span style="color:#D6246E"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21.6 7.2a2.8 2.8 0 0 0-2-2C17.9 4.8 12 4.8 12 4.8s-5.9 0-7.6.4a2.8 2.8 0 0 0-2 2C2 8.9 2 12 2 12s0 3.1.4 4.8a2.8 2.8 0 0 0 2 2c1.7.4 7.6.4 7.6.4s5.9 0 7.6-.4a2.8 2.8 0 0 0 2-2C22 15.1 22 12 22 12s0-3.1-.4-4.8zM10 15.2V8.8l5.2 3.2z"></path></svg></span>
+                      <span style="font-size:13px;color:#3D3C52;flex:1">youtube.com/watch?v=Kx7pQ2mBola</span>
+                      <span style="font-size:11.5px;color:#9A99A8">2,904 comments</span>
+                      <span style="color:#C6C5D0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;border:1px solid #F0EFF3;background:#FAFAFB;border-radius:8px;padding:10px 12px">
+                      <span style="color:#D6246E"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21.6 7.2a2.8 2.8 0 0 0-2-2C17.9 4.8 12 4.8 12 4.8s-5.9 0-7.6.4a2.8 2.8 0 0 0-2 2C2 8.9 2 12 2 12s0 3.1.4 4.8a2.8 2.8 0 0 0 2 2c1.7.4 7.6.4 7.6.4s5.9 0 7.6-.4a2.8 2.8 0 0 0 2-2C22 15.1 22 12 22 12s0-3.1-.4-4.8zM10 15.2V8.8l5.2 3.2z"></path></svg></span>
+                      <span style="font-size:13px;color:#3D3C52;flex:1">youtube.com/watch?v=9dLmKampung</span>
+                      <span style="font-size:11.5px;color:#9A99A8">1,318 comments</span>
+                      <span style="color:#C6C5D0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;border:1px dashed #D5D4DD;border-radius:8px;padding:10px 12px;color:#9A99A8" style-hover="border-color:#D6246E;color:#D6246E">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                      <span style="font-size:13px">Paste another YouTube link</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:12px;border-top:1px solid #F0EFF3;padding-top:22px">
+                <div style="background:#D6246E;color:#fff;font-size:13.5px;font-weight:600;padding:11px 20px;border-radius:8px" style-hover="background:#B01B5B">Create session</div>
+                <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13.5px;font-weight:600;padding:11px 20px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Save as draft</div>
+                <div style="flex:1"></div>
+                <div style="font-size:12px;color:#9A99A8">Brief and assets come next</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">4 · CAMPAIGN DETAIL — ASSISTANT AS HERO</div>
+      <div data-screen-label="A4 Campaign detail" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,820px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+              <span style="color:#6E6E85">Ramadan football push</span>
+              <span style="color:#C6C5D0">/</span>
+              <span style="font-weight:700;color:#1A1A2E">Nike — Bola Rakyat</span>
+              <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;margin-left:4px">RECEPTION</span>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Settings</div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">Run analysis</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:28px 32px 40px;display:flex;gap:26px;align-items:flex-start">
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:24px">
+              <div style="background:#FDEEF5;border:1px solid #F6D3E3;border-radius:12px;padding:22px 24px;display:flex;flex-direction:column;gap:14px">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span style="color:#D6246E"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg></span>
+                  <div style="font-size:16.5px;font-weight:700;color:#1A1A2E">Need more of the conversation? Ask me to go find it.</div>
+                </div>
+                <div style="background:#fff;border:1px solid #EBD3DF;border-radius:10px;padding:13px 15px;display:flex;align-items:center;justify-content:space-between">
+                  <span style="font-size:13.5px;color:#9A99A8">e.g. "find reaction videos to Bola Rakyat with more than 500 comments"</span>
+                  <span style="color:#D6246E"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 8 6 8z"></path></svg></span>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <span style="background:#fff;border:1px solid #EBD3DF;border-radius:18px;padding:6px 12px;font-size:12px;font-weight:600;color:#1A1A2E" style-hover="border-color:#D6246E;color:#D6246E">Find reaction videos</span>
+                  <span style="background:#fff;border:1px solid #EBD3DF;border-radius:18px;padding:6px 12px;font-size:12px;font-weight:600;color:#1A1A2E" style-hover="border-color:#D6246E;color:#D6246E">Find press coverage</span>
+                  <span style="background:#fff;border:1px solid #EBD3DF;border-radius:18px;padding:6px 12px;font-size:12px;font-weight:600;color:#1A1A2E" style-hover="border-color:#D6246E;color:#D6246E">Who else posted the film?</span>
+                  <span style="background:#fff;border:1px solid #EBD3DF;border-radius:18px;padding:6px 12px;font-size:12px;font-weight:600;color:#1A1A2E" style-hover="border-color:#D6246E;color:#D6246E">Suggest a competitor to compare</span>
+                </div>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">YouTube links <span style="color:#9A99A8;font-weight:600">· 4</span></div>
+                  <div style="font-size:12.5px;color:#6E6E85">4,412 comments available</div>
+                </div>
+                <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+                  <div style="display:flex;gap:14px;align-items:center;padding:14px 16px;border-bottom:1px solid #F0EFF3">
+                    <div style="width:96px;height:54px;flex:0 0 96px;background:#E9E8ED;border-radius:6px"></div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">Bola Rakyat — full film (60s)</div>
+                      <div style="font-size:11.5px;color:#9A99A8">Nike Indonesia · 4.2M views · 2,904 comments · ID/EN</div>
+                    </div>
+                    <span style="background:#F5F4F7;color:#3D3C52;font-size:10.5px;font-weight:700;padding:4px 8px;border-radius:5px">HERO FILM</span>
+                    <span style="color:#C6C5D0"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                  <div style="display:flex;gap:14px;align-items:center;padding:14px 16px;border-bottom:1px solid #F0EFF3">
+                    <div style="width:96px;height:54px;flex:0 0 96px;background:#E9E8ED;border-radius:6px"></div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">Kampung derby — behind the scenes</div>
+                      <div style="font-size:11.5px;color:#9A99A8">Nike Indonesia · 880K views · 1,318 comments · ID</div>
+                    </div>
+                    <span style="color:#C6C5D0"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                  <div style="display:flex;gap:14px;align-items:center;padding:14px 16px;border-bottom:1px solid #F0EFF3">
+                    <div style="width:96px;height:54px;flex:0 0 96px;background:#E9E8ED;border-radius:6px"></div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                      <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">"Sepatu buat lapangan beton?" — reaction</div>
+                      <div style="font-size:11.5px;color:#9A99A8">Bung Kicau · 210K views · 141 comments · ID</div>
+                    </div>
+                    <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:4px 8px;border-radius:5px">FOUND BY ASSISTANT</span>
+                    <span style="color:#C6C5D0"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;color:#9A99A8" style-hover="color:#D6246E">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                    <span style="font-size:13px">Paste a YouTube link</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style="width:388px;flex:0 0 388px;display:flex;flex-direction:column;gap:22px">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Campaign assets</div>
+                <div style="border:1.5px dashed #F3BFD6;background:#FEF7FA;border-radius:10px;padding:26px 20px;display:flex;flex-direction:column;align-items:center;gap:7px">
+                  <div style="color:#D6246E"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7.5 8.5 12 4l4.5 4.5"></path><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"></path></svg></div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">Drop briefs, decks or key visuals</div>
+                  <div style="font-size:12px;color:#6E6E85;text-align:center;line-height:1.45">PDF, JPG, PNG — or paste an article URL</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="border:1px solid #E6E6EE;border-radius:8px;padding:11px 12px;display:flex;gap:11px;align-items:center">
+                    <div style="width:30px;height:34px;flex:0 0 30px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#6E6E85">PDF</div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                      <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">Bola Rakyat — brief.pdf</div>
+                      <div style="font-size:11px;color:#D6246E;font-weight:600">Read · 5 ideas extracted</div>
+                    </div>
+                    <span style="color:#C6C5D0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                  <div style="border:1px solid #E6E6EE;border-radius:8px;padding:11px 12px;display:flex;gap:11px;align-items:center">
+                    <div style="width:30px;height:34px;flex:0 0 30px;background:#E9E8ED;border-radius:4px"></div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                      <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">keyvisual_kampung.jpg</div>
+                      <div style="font-size:11px;color:#6E6E85">Used as the key visual in the report</div>
+                    </div>
+                    <span style="color:#C6C5D0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                  <div style="border:1px solid #E6E6EE;border-radius:8px;padding:11px 12px;display:flex;gap:11px;align-items:center">
+                    <div style="width:30px;height:34px;flex:0 0 30px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#6E6E85"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.2"></path><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7l1.3-1.2"></path></svg></div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                      <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">kompas.com — "Iklan bola…"</div>
+                      <div style="font-size:11px;color:#D6246E;font-weight:600">Read · added to context</div>
+                    </div>
+                    <span style="color:#C6C5D0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                  </div>
+                </div>
+              </div>
+
+              <div style="border:1px solid #E6E6EE;border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:14px;font-weight:700;color:#1A1A2E">Ideas we'll test for transfer</div>
+                  <div style="font-size:11.5px;color:#9A99A8;line-height:1.45">Pulled from your brief. Edit them — these are what we look for in the comments.</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:7px">
+                  <div style="display:flex;gap:9px;align-items:flex-start;background:#FAFAFB;border-radius:7px;padding:9px 11px"><span style="font-size:10.5px;font-weight:800;color:#D6246E;margin-top:1px">01</span><span style="font-size:12.5px;color:#1A1A2E;line-height:1.4;flex:1">Every kampung is a stadium</span><span style="color:#C6C5D0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L20 8l-4-4L4 16z"></path></svg></span></div>
+                  <div style="display:flex;gap:9px;align-items:flex-start;background:#FAFAFB;border-radius:7px;padding:9px 11px"><span style="font-size:10.5px;font-weight:800;color:#D6246E;margin-top:1px">02</span><span style="font-size:12.5px;color:#1A1A2E;line-height:1.4;flex:1">Boots built for concrete, not turf</span><span style="color:#C6C5D0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L20 8l-4-4L4 16z"></path></svg></span></div>
+                  <div style="display:flex;gap:9px;align-items:flex-start;background:#FAFAFB;border-radius:7px;padding:9px 11px"><span style="font-size:10.5px;font-weight:800;color:#D6246E;margin-top:1px">03</span><span style="font-size:12.5px;color:#1A1A2E;line-height:1.4;flex:1">Play like the whole city is watching</span><span style="color:#C6C5D0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L20 8l-4-4L4 16z"></path></svg></span></div>
+                  <div style="display:flex;gap:9px;align-items:flex-start;background:#FAFAFB;border-radius:7px;padding:9px 11px"><span style="font-size:10.5px;font-weight:800;color:#D6246E;margin-top:1px">04</span><span style="font-size:12.5px;color:#1A1A2E;line-height:1.4;flex:1">Sepatu untuk semua — priced for the street</span><span style="color:#C6C5D0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L20 8l-4-4L4 16z"></path></svg></span></div>
+                  <div style="display:flex;gap:9px;align-items:flex-start;background:#FAFAFB;border-radius:7px;padding:9px 11px"><span style="font-size:10.5px;font-weight:800;color:#D6246E;margin-top:1px">05</span><span style="font-size:12.5px;color:#1A1A2E;line-height:1.4;flex:1">Made with recycled tarpaulin</span><span style="color:#C6C5D0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L20 8l-4-4L4 16z"></path></svg></span></div>
+                  <div style="display:flex;align-items:center;gap:8px;color:#9A99A8;padding:4px 2px" style-hover="color:#D6246E"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg><span style="font-size:12.5px;font-weight:600">Add an idea</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">5 · RUN STATE — INLINE, KEEP WORKING</div>
+      <div data-screen-label="A5 Run state" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,560px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+              <span style="color:#6E6E85">Ramadan football push</span><span style="color:#C6C5D0">/</span>
+              <span style="font-weight:700;color:#1A1A2E">Nike — Bola Rakyat</span>
+              <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;margin-left:4px">RUNNING</span>
+            </div>
+            <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Cancel run</div>
+          </div>
+          <div style="flex:1;padding:32px 40px 44px;display:flex;gap:26px;align-items:flex-start">
+            <div style="flex:1;min-width:0;border:1px solid #E6E6EE;border-radius:12px;padding:26px 28px;display:flex;flex-direction:column;gap:22px">
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:20px;font-weight:800;color:#1A1A2E;letter-spacing:-.01em">Reading 8,412 comments</div>
+                <div style="font-size:13.5px;color:#6E6E85">This takes about 12 minutes. You can leave the page — we'll email you when the note is ready.</div>
+              </div>
+              <div style="display:flex;flex-direction:column">
+                <div style="display:flex;gap:14px;align-items:flex-start;padding-bottom:18px">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="width:22px;height:22px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg></div><div style="width:2px;height:22px;background:#F0EFF3"></div></div>
+                  <div style="display:flex;flex-direction:column;gap:3px"><div style="font-size:14px;font-weight:700;color:#1A1A2E">Collected the comments</div><div style="font-size:12.5px;color:#6E6E85">8,412 across 4 videos, replies included</div></div>
+                </div>
+                <div style="display:flex;gap:14px;align-items:flex-start;padding-bottom:18px">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="width:22px;height:22px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg></div><div style="width:2px;height:22px;background:#F0EFF3"></div></div>
+                  <div style="display:flex;flex-direction:column;gap:3px"><div style="font-size:14px;font-weight:700;color:#1A1A2E">Found what people are talking about</div><div style="font-size:12.5px;color:#6E6E85">7 themes, drawn from a 640-comment read</div></div>
+                </div>
+                <div style="display:flex;gap:14px;align-items:flex-start;padding-bottom:18px">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="width:22px;height:22px;border-radius:50%;border:2.5px solid #F6D3E3;border-top-color:#D6246E;animation:spin 1s linear infinite"></div><div style="width:2px;height:34px;background:#F0EFF3"></div></div>
+                  <div style="display:flex;flex-direction:column;gap:8px;flex:1">
+                    <div style="font-size:14px;font-weight:700;color:#1A1A2E">Labelling every comment</div>
+                    <div style="font-size:12.5px;color:#6E6E85">3,200 of 8,412 · batch 128 of 337</div>
+                    <div style="height:6px;background:#F0EFF3;border-radius:3px;overflow:hidden;max-width:420px"><div style="width:38%;height:100%;background:#D6246E"></div></div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:14px;align-items:flex-start;padding-bottom:18px">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="width:22px;height:22px;border-radius:50%;border:2px solid #E6E6EE"></div><div style="width:2px;height:22px;background:#F0EFF3"></div></div>
+                  <div style="display:flex;flex-direction:column;gap:3px"><div style="font-size:14px;font-weight:700;color:#9A99A8">Double-checking the leftovers</div><div style="font-size:12.5px;color:#B4B3C0">If too much lands in "Other", we look for missed themes</div></div>
+                </div>
+                <div style="display:flex;gap:14px;align-items:flex-start">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><div style="width:22px;height:22px;border-radius:50%;border:2px solid #E6E6EE"></div></div>
+                  <div style="display:flex;flex-direction:column;gap:3px"><div style="font-size:14px;font-weight:700;color:#9A99A8">Writing your note</div><div style="font-size:12.5px;color:#B4B3C0">Two charts, the verdicts, and the quotes behind them</div></div>
+                </div>
+              </div>
+            </div>
+            <div style="width:300px;flex:0 0 300px;display:flex;flex-direction:column;gap:12px">
+              <div style="border:1px solid #E6E6EE;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px">
+                <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">LIVE COUNTS</div>
+                <div style="display:flex;flex-direction:column;gap:13px">
+                  <div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:13px;color:#6E6E85">Comments labelled</span><span style="font-size:17px;font-weight:800;color:#1A1A2E">3,200</span></div>
+                  <div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:13px;color:#6E6E85">Themes in play</span><span style="font-size:17px;font-weight:800;color:#1A1A2E">7</span></div>
+                  <div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:13px;color:#6E6E85">Landing in "Other"</span><span style="font-size:17px;font-weight:800;color:#D6246E">9%</span></div>
+                </div>
+              </div>
+              <div style="background:#FDEEF5;border:1px solid #F6D3E3;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:7px">
+                <div style="font-size:13px;font-weight:700;color:#1A1A2E">Early read</div>
+                <div style="font-size:12.5px;color:#5C5B70;line-height:1.5;text-wrap:pretty">Street-football nostalgia is the loudest theme so far. Price talk is heavier than the brief expected.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">6 · RESULTS — REPORT WITH AN EVIDENCE DRAWER</div>
+      <div data-screen-label="A6 Results" style="width:1320px;height:1000px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,1000px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+              <span style="color:#6E6E85">Ramadan football push</span><span style="color:#C6C5D0">/</span>
+              <span style="font-weight:700;color:#1A1A2E">Nike — Bola Rakyat</span>
+              <span style="background:#F5F4F7;color:#3D3C52;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;margin-left:4px">COMPLETE</span>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Export CSVs</div>
+              <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Download PDF</div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">Share</div>
+            </div>
+          </div>
+          <div style="flex:1;min-height:0;display:flex">
+            <div style="flex:1;min-width:0;overflow:auto;padding:34px 38px 48px">
+              <div style="max-width:720px;display:flex;flex-direction:column;gap:30px">
+                <div style="display:flex;flex-direction:column;gap:12px">
+                  <div style="font-size:11px;font-weight:800;letter-spacing:.12em;color:#D6246E">STRATEGY NOTE · 12 JULY 2026</div>
+                  <div style="font-size:33px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em;line-height:1.15">{{ verdict1 }}<br>{{ verdict2 }}</div>
+                  <div style="font-size:13px;color:#6E6E85">8,412 comments · 4 videos · 7 themes · Indonesian / English</div>
+                </div>
+
+                <div style="border:1px solid #F6D3E3;background:#FDEEF5;border-radius:12px;padding:24px 26px;display:flex;gap:24px;align-items:center">
+                  <div style="display:flex;flex-direction:column;gap:2px">
+                    <div onClick="{{ open.transfer }}" style="font-size:46px;font-weight:800;color:#D6246E;letter-spacing:-.03em;line-height:1;border-bottom:2px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">41%</div>
+                  </div>
+                  <div style="font-size:15px;color:#3D3C52;line-height:1.5;text-wrap:pretty">of comments echoed at least one idea from your brief — but three quarters of those echoed the <strong style="color:#1A1A2E">place</strong>, not the <strong style="color:#1A1A2E">product</strong>. Click any number to read the comments behind it.</div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:18px;font-weight:800;color:#1A1A2E">Which ideas arrived</div>
+                    <div style="font-size:12.5px;color:#9A99A8">Share of all 8,412 comments that echoed each idea in the brief</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Every kampung is a stadium</span><span onClick="{{ open.transfer }}" style="font-size:13.5px;font-weight:800;color:#D6246E;border-bottom:1.5px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">47%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:47%;height:100%;background:#D6246E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Play like the whole city is watching</span><span onClick="{{ open.city }}" style="font-size:13.5px;font-weight:800;color:#D6246E;border-bottom:1.5px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">24%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:24%;height:100%;background:#D6246E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Boots built for concrete, not turf</span><span onClick="{{ open.concrete }}" style="font-size:13.5px;font-weight:800;color:#D6246E;border-bottom:1.5px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">14%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:14%;height:100%;background:#D6246E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Sepatu untuk semua — priced for the street</span><span onClick="{{ open.price }}" style="font-size:13.5px;font-weight:800;color:#D6246E;border-bottom:1.5px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">9%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:9%;height:100%;background:#D6246E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Made with recycled tarpaulin</span><span onClick="{{ open.tarp }}" style="font-size:13.5px;font-weight:800;color:#D6246E;border-bottom:1.5px dotted #D6246E;cursor:pointer" style-hover="color:#8F1442">2%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:2%;height:100%;background:#D6246E"></div></div>
+                    </div>
+                  </div>
+                  <sc-if value="{{ showMethod }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;gap:14px;align-items:center;font-size:11.5px;color:#9A99A8"><span>Counted from per-comment labels — never estimated.</span><span style="color:#D6246E;font-weight:700">chart_transfer.csv ↓</span></div>
+                  </sc-if>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:18px;font-weight:800;color:#1A1A2E">What the audience talked about</div>
+                    <div style="font-size:12.5px;color:#9A99A8">Every comment carries exactly one theme label</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Nostalgia for street football</span><span onClick="{{ open.nostalgia }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">22%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:22%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Price and value</span><span onClick="{{ open.price }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">18%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:18%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Will they survive concrete?</span><span onClick="{{ open.concrete }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">15%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:15%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Casting and cameos</span><span onClick="{{ open.casting }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">12%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:12%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Craft and the music</span><span onClick="{{ open.craft }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">9%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:9%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#1A1A2E">Doubt about the brand's motive</span><span onClick="{{ open.doubt }}" style="font-size:13.5px;font-weight:800;color:#1A1A2E;border-bottom:1.5px dotted #1A1A2E;cursor:pointer" style-hover="color:#D6246E">8%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:8%;height:100%;background:#1A1A2E"></div></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#9A99A8">Other</span><span style="font-size:13.5px;font-weight:800;color:#9A99A8">16%</span></div>
+                      <div style="height:14px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:16%;height:100%;background:#C6C5D0"></div></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:14px;border-top:1px solid #F0EFF3;padding-top:26px">
+                  <div style="font-size:18px;font-weight:800;color:#1A1A2E">What we heard</div>
+                  <div style="font-size:14.5px;color:#3D3C52;line-height:1.65;text-wrap:pretty">The film's cultural claim landed almost intact. Nearly half of the conversation repeated the idea that the neighbourhood pitch is the real stadium, often unprompted and in the audience's own words — the strongest transfer we have measured on this account.</div>
+                  <div style="border-left:3px solid #D6246E;padding:4px 0 4px 16px;font-size:15px;color:#1A1A2E;line-height:1.55;font-weight:600">"lapangan depan rumah gue lebih rame dari GBK kalau sore 😂"<span style="display:block;font-size:11.5px;font-weight:600;color:#9A99A8;margin-top:6px">Nostalgia · joy · 1,204 likes</span></div>
+                  <div style="font-size:14.5px;color:#3D3C52;line-height:1.65;text-wrap:pretty">The product did not travel with it. Only 14% engaged the concrete-boot claim, and where they did, the tone flipped to a question: how long will these last on a real street pitch? Price talk took 18% of the conversation without the brief inviting it, which suggests the "for everyone" line was heard as a promise about cost, not access.</div>
+                  <sc-if value="{{ showMethod }}" hint-placeholder-val="{{ true }}">
+                    <div style="background:#FAFAFB;border-radius:10px;padding:16px 18px;font-size:12.5px;color:#6E6E85;line-height:1.55;text-wrap:pretty"><strong style="color:#1A1A2E">One caution.</strong> Sarcasm is the label to trust least — Indonesian comment humour reads as praise to the model more often than we would like. Treat the "joy" share on the doubt theme as a floor, not a ceiling.</div>
+                  </sc-if>
+                </div>
+              </div>
+            </div>
+
+            <sc-if value="{{ evOpen }}" hint-placeholder-val="{{ true }}">
+              <div style="width:400px;flex:0 0 400px;border-left:1px solid #E6E6EE;display:flex;flex-direction:column;min-height:0;background:#FCFCFD">
+                <div style="padding:20px 22px 16px;border-bottom:1px solid #E6E6EE;display:flex;flex-direction:column;gap:10px">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#D6246E">{{ evKicker }}</div>
+                      <div style="font-size:16px;font-weight:800;color:#1A1A2E;line-height:1.3">{{ evTitle }}</div>
+                      <div style="font-size:12px;color:#6E6E85">{{ evSub }}</div>
+                    </div>
+                    <div onClick="{{ closeEv }}" style="color:#9A99A8;cursor:pointer;padding:2px" style-hover="color:#D6246E"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div>
+                  </div>
+                  <div style="display:flex;gap:7px;flex-wrap:wrap">
+                    <span style="background:#1A1A2E;color:#fff;font-size:11px;font-weight:700;padding:5px 10px;border-radius:16px">All</span>
+                    <span style="border:1px solid #E6E6EE;color:#6E6E85;font-size:11px;font-weight:700;padding:5px 10px;border-radius:16px" style-hover="border-color:#D6246E;color:#D6246E">Joy</span>
+                    <span style="border:1px solid #E6E6EE;color:#6E6E85;font-size:11px;font-weight:700;padding:5px 10px;border-radius:16px" style-hover="border-color:#D6246E;color:#D6246E">Skeptical</span>
+                    <span style="border:1px solid #E6E6EE;color:#6E6E85;font-size:11px;font-weight:700;padding:5px 10px;border-radius:16px" style-hover="border-color:#D6246E;color:#D6246E">Most liked</span>
+                  </div>
+                </div>
+                <div style="flex:1;min-height:0;overflow:auto;padding:16px 22px 22px;display:flex;flex-direction:column;gap:10px">
+                  <sc-for list="{{ evComments }}" as="c" hint-placeholder-count="4">
+                    <div style="border:1px solid #EDECF1;background:#fff;border-radius:10px;padding:13px 14px;display:flex;flex-direction:column;gap:8px">
+                      <div style="font-size:13px;color:#1A1A2E;line-height:1.5">{{ c.text }}</div>
+                      <div style="font-size:10.5px;font-weight:600;color:#9A99A8">{{ c.meta }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="font-size:11.5px;color:#9A99A8;line-height:1.5;padding-top:6px">Showing 4 of {{ evCount }} labelled comments. <span style="color:#D6246E;font-weight:700">Export all as CSV ↓</span></div>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">7 · FILES — EVERYTHING IN AND OUT, ACROSS SESSIONS</div>
+      <div data-screen-label="A7 Files" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" active="files" hint-size="60px,700px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="font-size:15px;font-weight:700;color:#1A1A2E">Files</div>
+            <div style="border:1px solid #E6E6EE;border-radius:8px;padding:8px 12px;display:flex;gap:8px;align-items:center;width:220px;color:#9A99A8"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg><span style="font-size:13px">Search files</span></div>
+          </div>
+          <div style="flex:1;padding:30px 40px 44px;display:flex;flex-direction:column;gap:20px">
+            <div style="display:flex;align-items:flex-end;justify-content:space-between">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="font-size:24px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em">Files</div>
+                <div style="font-size:13.5px;color:#6E6E85">Everything you gave us, and everything we made — across all sessions.</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <div style="border:1px solid #1A1A2E;color:#1A1A2E;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px">All</div>
+                <div style="border:1px solid #E6E6EE;color:#6E6E85;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px" style-hover="border-color:#D6246E;color:#D6246E">You added</div>
+                <div style="border:1px solid #E6E6EE;color:#6E6E85;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px" style-hover="border-color:#D6246E;color:#D6246E">We made</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:12px 20px;background:#FAFAFB;border-bottom:1px solid #E6E6EE;font-size:10.5px;font-weight:800;letter-spacing:.1em;color:#9A99A8">
+                <div>FILE</div><div>CAMPAIGN</div><div>KIND</div><div>SIZE</div><div>ADDED</div><div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">PDF</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">report.pdf</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">WE MADE</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">1.8 MB</div>
+                <div style="font-size:12.5px;color:#6E6E85">2 hours ago</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Open</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">CSV</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">chart_transfer.csv</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">WE MADE</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">4 KB</div>
+                <div style="font-size:12.5px;color:#6E6E85">2 hours ago</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Download</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">CSV</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">chart_themes.csv</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">WE MADE</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">3 KB</div>
+                <div style="font-size:12.5px;color:#6E6E85">2 hours ago</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Download</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">CSV</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">comments.csv</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">WE MADE</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">6.2 MB</div>
+                <div style="font-size:12.5px;color:#6E6E85">2 hours ago</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Download</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">PDF</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">Bola Rakyat — brief.pdf</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="border:1px solid #E6E6EE;color:#3D3C52;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">YOU ADDED</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">820 KB</div>
+                <div style="font-size:12.5px;color:#6E6E85">yesterday</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Open</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;border-bottom:1px solid #F0EFF3;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#E9E8ED;border-radius:4px"></div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">keyvisual_kampung.jpg</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Nike — Bola Rakyat</div>
+                <div><span style="border:1px solid #E6E6EE;color:#3D3C52;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">YOU ADDED</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">2.4 MB</div>
+                <div style="font-size:12.5px;color:#6E6E85">yesterday</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Open</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 70px;gap:16px;padding:15px 20px;align-items:center" style-hover="background:#FDFAFC">
+                <div style="display:flex;gap:11px;align-items:center">
+                  <div style="width:26px;height:30px;flex:0 0 26px;background:#F5F4F7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#6E6E85">PDF</div>
+                  <div style="font-size:13.5px;font-weight:700;color:#1A1A2E">report.pdf</div>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">Somethinc — Glow Ritual</div>
+                <div><span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">WE MADE</span></div>
+                <div style="font-size:12.5px;color:#6E6E85">2.1 MB</div>
+                <div style="font-size:12.5px;color:#6E6E85">3 days ago</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E">Open</div>
+              </div>
+            </div>
+            <div style="font-size:12px;color:#9A99A8">7 files · 13.3 MB. Deleting an input you added won't change a report that has already run.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="1b" style="display:flex;flex-direction:column;gap:30px">
+      <div style="display:flex;align-items:baseline;gap:12px;max-width:900px;flex-wrap:wrap">
+        <div style="background:#1A1A2E;color:#fff;font-size:12px;font-weight:800;padding:4px 10px;border-radius:6px">1b</div>
+        <div style="font-size:19px;font-weight:700;color:#1A1A2E">Flow B · Structured &amp; quiet</div>
+        <div style="font-size:13px;color:#6E6E85">Assistant behind a launcher button · stepped wizard, one question per screen · full-page run · evidence opens under the number</div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">1 · HOME — EMPTY STATE</div>
+      <div data-screen-label="B1 Empty state" style="position:relative;width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,680px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="font-size:15px;font-weight:700;color:#1A1A2E">Sessions</div>
+            <div style="font-size:13px;color:#6E6E85">Innocean Indonesia</div>
+          </div>
+          <div style="flex:1;padding:64px 40px 76px;display:flex;justify-content:center">
+            <div style="width:760px;display:flex;flex-direction:column;gap:30px">
+              <div style="display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center">
+                <div style="width:52px;height:52px;border-radius:14px;background:#FDEEF5;border:1px solid #F6D3E3;display:flex;align-items:center;justify-content:center;color:#D6246E"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H9l-5 4z"></path></svg></div>
+                <div style="font-size:30px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em">Let's listen to your first campaign</div>
+                <div style="font-size:14.5px;color:#6E6E85;line-height:1.55;max-width:520px;text-wrap:pretty">Add a campaign's videos and its brief. We read every comment, one at a time, and tell you which of your ideas actually made it across.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+                <div style="border:1px solid #E6E6EE;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:8px" style-hover="border-color:#D6246E">
+                  <div style="width:32px;height:32px;border-radius:8px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#6E6E85"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H9l-5 4z"></path></svg></div>
+                  <div style="font-size:14px;font-weight:700;color:#1A1A2E">Reception check</div>
+                  <div style="font-size:12px;color:#6E6E85;line-height:1.5">Did the idea land, and in whose words?</div>
+                  <div style="font-size:12px;font-weight:700;color:#D6246E;margin-top:2px">Start →</div>
+                </div>
+                <div style="border:1px solid #E6E6EE;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:8px" style-hover="border-color:#D6246E">
+                  <div style="width:32px;height:32px;border-radius:8px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#6E6E85"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v10"></path><path d="M12 19h.01"></path></svg></div>
+                  <div style="font-size:14px;font-weight:700;color:#1A1A2E">Crisis watch</div>
+                  <div style="font-size:12px;color:#6E6E85;line-height:1.5">Find the anger early, and how much of it there is.</div>
+                  <div style="font-size:12px;font-weight:700;color:#D6246E;margin-top:2px">Start →</div>
+                </div>
+                <div style="border:1px solid #E6E6EE;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:8px" style-hover="border-color:#D6246E">
+                  <div style="width:32px;height:32px;border-radius:8px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#6E6E85"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19l6-14 3 8 5-4"></path></svg></div>
+                  <div style="font-size:14px;font-weight:700;color:#1A1A2E">Launch impact</div>
+                  <div style="font-size:12px;color:#6E6E85;line-height:1.5">Price, intent, and the questions people ask.</div>
+                  <div style="font-size:12px;font-weight:700;color:#D6246E;margin-top:2px">Start →</div>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:center;gap:10px">
+                <div style="background:#D6246E;color:#fff;font-size:13.5px;font-weight:600;padding:11px 22px;border-radius:8px" style-hover="background:#B01B5B">New session</div>
+                <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13.5px;font-weight:600;padding:11px 22px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">See a sample report</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;right:26px;bottom:24px;display:flex;align-items:center;gap:10px;background:#D6246E;color:#fff;padding:11px 16px;border-radius:24px;box-shadow:0 6px 18px rgba(214,36,110,.28)" style-hover="background:#B01B5B">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>
+          <span style="font-size:13px;font-weight:700">Ask the assistant</span>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">2 · SESSION LIST — CARDS WITH THE VERDICT UP FRONT</div>
+      <div data-screen-label="B2 Session list" style="position:relative;width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,660px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="font-size:15px;font-weight:700;color:#1A1A2E">Sessions</div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="border:1px solid #E6E6EE;border-radius:8px;padding:8px 12px;display:flex;gap:8px;align-items:center;width:200px;color:#9A99A8"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg><span style="font-size:13px">Search</span></div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">New session</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:30px 40px 44px;display:flex;flex-direction:column;gap:20px">
+            <div style="display:flex;align-items:flex-end;justify-content:space-between">
+              <div style="font-size:24px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em">Your sessions</div>
+              <div style="font-size:13px;color:#6E6E85">Sorted by last activity</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+              <div style="border:1px solid #E6E6EE;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px" style-hover="border-color:#D6246E">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">RECEPTION</span>
+                  <span style="font-size:11.5px;color:#9A99A8">2h ago</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:16px;font-weight:700;color:#1A1A2E">Ramadan football push</div>
+                  <div style="font-size:12.5px;color:#6E6E85">2 campaigns · 6 videos · 8,412 comments</div>
+                </div>
+                <div style="background:#FAFAFB;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">TOP LINE</div>
+                  <div style="font-size:13px;color:#1A1A2E;line-height:1.45"><strong>41%</strong> echoed the brief — the place landed, the product didn't.</div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid #F0EFF3;padding-top:12px">
+                  <span style="font-size:12px;font-weight:700;color:#1A1A2E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#1A1A2E"></span>Complete</span>
+                  <span style="font-size:12.5px;font-weight:700;color:#D6246E">Open report →</span>
+                </div>
+              </div>
+              <div style="border:1.5px solid #F6D3E3;background:#FEFAFC;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">CRISIS WATCH</span>
+                  <span style="font-size:11.5px;color:#9A99A8">now</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:16px;font-weight:700;color:#1A1A2E">EV launch — Q3</div>
+                  <div style="font-size:12.5px;color:#6E6E85">2 campaigns · 4 videos · 3,180 comments</div>
+                </div>
+                <div style="background:#fff;border:1px solid #F6D3E3;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:12.5px;font-weight:700;color:#1A1A2E">Labelling comments · 38%</div>
+                  <div style="height:6px;background:#F5E2EB;border-radius:3px;overflow:hidden"><div style="width:38%;height:100%;background:#D6246E"></div></div>
+                  <div style="font-size:11.5px;color:#6E6E85">about 7 minutes left</div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid #F6D3E3;padding-top:12px">
+                  <span style="font-size:12px;font-weight:700;color:#D6246E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#D6246E"></span>Running</span>
+                  <span style="font-size:12.5px;font-weight:700;color:#6E6E85">Watch progress →</span>
+                </div>
+              </div>
+              <div style="border:1px solid #E6E6EE;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px" style-hover="border-color:#D6246E">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">RECEPTION</span>
+                  <span style="font-size:11.5px;color:#9A99A8">3d ago</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:16px;font-weight:700;color:#1A1A2E">Skincare category scan</div>
+                  <div style="font-size:12.5px;color:#6E6E85">3 campaigns · 11 videos · 12,940 comments</div>
+                </div>
+                <div style="background:#FAFAFB;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">TOP LINE</div>
+                  <div style="font-size:13px;color:#1A1A2E;line-height:1.45"><strong>Ingredient talk</strong> beat every brand claim in all three campaigns.</div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid #F0EFF3;padding-top:12px">
+                  <span style="font-size:12px;font-weight:700;color:#1A1A2E;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#1A1A2E"></span>Complete</span>
+                  <span style="font-size:12.5px;font-weight:700;color:#D6246E">Open report →</span>
+                </div>
+              </div>
+              <div style="border:1px dashed #D5D4DD;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:8px;justify-content:center;align-items:flex-start;min-height:150px" style-hover="border-color:#D6246E">
+                <div style="width:30px;height:30px;border-radius:8px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#6E6E85"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+                <div style="font-size:14px;font-weight:700;color:#1A1A2E">New session</div>
+                <div style="font-size:12px;color:#6E6E85;line-height:1.45">Group the campaigns you want to read together.</div>
+              </div>
+              <div style="border:1px solid #E6E6EE;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px;opacity:.75" style-hover="opacity:1;border-color:#D6246E">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="border:1px dashed #D5D4DD;color:#9A99A8;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">LENS NOT SET</span>
+                  <span style="font-size:11.5px;color:#9A99A8">5d ago</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-size:16px;font-weight:700;color:#1A1A2E">Coffee teaser — unnamed</div>
+                  <div style="font-size:12.5px;color:#6E6E85">No campaigns yet</div>
+                </div>
+                <div style="flex:1"></div>
+                <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid #F0EFF3;padding-top:12px">
+                  <span style="font-size:12px;font-weight:700;color:#9A99A8;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:#C6C5D0"></span>Draft</span>
+                  <span style="font-size:12.5px;font-weight:700;color:#D6246E">Finish setup →</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;right:26px;bottom:24px;width:48px;height:48px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(214,36,110,.28)" style-hover="background:#B01B5B">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">3 · NEW SESSION — STEPPED WIZARD</div>
+      <div data-screen-label="B3 Wizard step 1" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,760px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:34px 40px 60px">
+          <div style="display:flex;align-items:center;gap:10px;color:#1A1A2E">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"></path></svg>
+            <span style="font-size:13.5px;font-weight:600">Back</span>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:16px">
+            <div style="font-size:12.5px;font-weight:600;color:#1A1A2E">Step 1 of 3: Lens</div>
+            <div style="width:250px;height:5px;background:#EDECF1;border-radius:3px;overflow:hidden"><div style="width:33%;height:100%;background:#D6246E"></div></div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:9px;margin-top:30px">
+            <div style="font-size:34px;font-weight:800;color:#1A1A2E;letter-spacing:-.025em">What are you listening for?</div>
+            <div style="font-size:14.5px;color:#6E6E85">Pick a lens and we'll tune every question we ask of the comments</div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:34px;max-width:1000px;align-self:center;width:100%">
+            <div style="border:1.5px solid #D6246E;border-radius:12px;overflow:hidden;background:#fff">
+              <div style="background:#FDEEF5;height:120px;display:flex;align-items:center;justify-content:center;color:#D6246E"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H9l-5 4z"></path><path d="M8 9h8"></path><path d="M8 12h5"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#1A1A2E">Reception</div>
+                <div style="font-size:12.5px;color:#5C5B70;line-height:1.5">How the work landed, and which of your ideas actually transferred into the audience's own words.</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;overflow:hidden;background:#fff" style-hover="border-color:#D6246E">
+              <div style="background:#F7F6F9;height:120px;display:flex;align-items:center;justify-content:center;color:#3D3C52"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 4l9 16H3z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#1A1A2E">Crisis watch</div>
+                <div style="font-size:12.5px;color:#5C5B70;line-height:1.5">Anger, boycott talk and accusations pulled to the top, with a count behind each one.</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;overflow:hidden;background:#fff;position:relative" style-hover="border-color:#D6246E">
+              <div style="position:absolute;top:12px;left:12px;background:#D6246E;color:#fff;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:12px">NEW</div>
+              <div style="background:#F7F6F9;height:120px;display:flex;align-items:center;justify-content:center;color:#3D3C52"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 19l6-13 3.5 8L19 9"></path><path d="M3 21h18"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#1A1A2E">Launch impact</div>
+                <div style="font-size:12.5px;color:#5C5B70;line-height:1.5">Purchase intent, price talk, and the product questions nobody answered.</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;overflow:hidden;background:#fff" style-hover="border-color:#D6246E">
+              <div style="background:#F7F6F9;height:120px;display:flex;align-items:center;justify-content:center;color:#3D3C52"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20h4L20 9l-4-4L5 16z"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#1A1A2E">Write your own lens</div>
+                <div style="font-size:12.5px;color:#5C5B70;line-height:1.5">"Tell me whether anyone noticed the Javanese in the voiceover."</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;overflow:hidden;background:#fff;position:relative">
+              <div style="position:absolute;top:12px;left:12px;background:#fff;border:1px solid #E6E6EE;color:#6E6E85;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:12px">COMING SOON</div>
+              <div style="background:#EDECF1;height:120px;display:flex;align-items:center;justify-content:center;color:#9A99A8"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9" cy="8" r="3"></circle><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5"></path><path d="M17 6a3 3 0 0 1 0 6"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#9A99A8">Audience profile</div>
+                <div style="font-size:12.5px;color:#9A99A8;line-height:1.5">Who is doing the talking, cross-cut with GWI panels.</div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;overflow:hidden;background:#fff;position:relative">
+              <div style="position:absolute;top:12px;left:12px;background:#fff;border:1px solid #E6E6EE;color:#6E6E85;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:12px">COMING SOON</div>
+              <div style="background:#EDECF1;height:120px;display:flex;align-items:center;justify-content:center;color:#9A99A8"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6h7v12H4z"></path><path d="M13 6h7v12h-7z"></path></svg></div>
+              <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:15px;font-weight:700;color:#9A99A8">Head to head</div>
+                <div style="font-size:12.5px;color:#9A99A8;line-height:1.5">One report comparing two brands in the same category.</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:center;gap:10px;margin-top:34px">
+            <div style="background:#D6246E;color:#fff;font-size:13.5px;font-weight:600;padding:12px 26px;border-radius:8px" style-hover="background:#B01B5B">Continue</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">4 · CAMPAIGN DETAIL — TABBED, ASSISTANT ON A LAUNCHER</div>
+      <div data-screen-label="B4 Campaign detail" style="position:relative;width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,760px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="border-bottom:1px solid #E6E6EE;padding:18px 32px 0;display:flex;flex-direction:column;gap:16px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between">
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#6E6E85"><span>Ramadan football push</span><span style="color:#C6C5D0">/</span><span style="font-weight:600;color:#3D3C52">Campaign</span></div>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="font-size:22px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em">Nike — Bola Rakyat</div>
+                  <span style="background:#FDEEF5;color:#A8194F;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px">RECEPTION</span>
+                </div>
+                <div style="font-size:12.5px;color:#6E6E85">4 videos · 4,412 comments available · 3 assets · 5 ideas to test</div>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center">
+                <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Settings</div>
+                <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">Run analysis</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:26px">
+              <div style="font-size:13.5px;font-weight:700;color:#1A1A2E;padding-bottom:11px;border-bottom:2px solid #D6246E">Assets</div>
+              <div style="font-size:13.5px;font-weight:600;color:#6E6E85;padding-bottom:11px" style-hover="color:#D6246E">Videos · 4</div>
+              <div style="font-size:13.5px;font-weight:600;color:#6E6E85;padding-bottom:11px" style-hover="color:#D6246E">Ideas to test · 5</div>
+              <div style="font-size:13.5px;font-weight:600;color:#6E6E85;padding-bottom:11px" style-hover="color:#D6246E">Past runs · 2</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:28px 32px 44px;display:flex;flex-direction:column;gap:22px">
+            <div style="border:1.5px dashed #F3BFD6;background:#FEF7FA;border-radius:12px;padding:30px;display:flex;flex-direction:column;align-items:center;gap:8px">
+              <div style="color:#D6246E"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7.5 8.5 12 4l4.5 4.5"></path><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"></path></svg></div>
+              <div style="font-size:16px;font-weight:700;color:#1A1A2E">Drop the brief, the deck, the key visuals</div>
+              <div style="font-size:13px;color:#6E6E85">PDF, JPG, PNG — or paste an article URL. We read them for the ideas you want tested.</div>
+              <div style="display:flex;gap:9px;margin-top:8px">
+                <div style="background:#D6246E;color:#fff;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">Choose files</div>
+                <div style="background:#fff;border:1px solid #EBD3DF;color:#1A1A2E;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Paste a URL</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+              <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+                <div style="height:104px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#9A99A8">PDF</div>
+                <div style="padding:13px 14px;display:flex;flex-direction:column;gap:5px;border-top:1px solid #E6E6EE">
+                  <div style="font-size:13px;font-weight:700;color:#1A1A2E">Bola Rakyat — brief.pdf</div>
+                  <div style="font-size:11.5px;color:#D6246E;font-weight:600">Read · 5 ideas extracted</div>
+                </div>
+              </div>
+              <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+                <div style="height:104px;background:#E9E8ED"></div>
+                <div style="padding:13px 14px;display:flex;flex-direction:column;gap:5px;border-top:1px solid #E6E6EE">
+                  <div style="font-size:13px;font-weight:700;color:#1A1A2E">keyvisual_kampung.jpg</div>
+                  <div style="font-size:11.5px;color:#6E6E85">Key visual in the report</div>
+                </div>
+              </div>
+              <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+                <div style="height:104px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#9A99A8"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.2"></path><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7l1.3-1.2"></path></svg></div>
+                <div style="padding:13px 14px;display:flex;flex-direction:column;gap:5px;border-top:1px solid #E6E6EE">
+                  <div style="font-size:13px;font-weight:700;color:#1A1A2E">kompas.com — "Iklan bola…"</div>
+                  <div style="font-size:11.5px;color:#D6246E;font-weight:600">Read · added to context</div>
+                </div>
+              </div>
+              <div style="border:1px solid #E6E6EE;border-radius:10px;overflow:hidden;opacity:.9">
+                <div style="height:104px;background:#F5F4F7;display:flex;align-items:center;justify-content:center;color:#9A99A8"><div style="width:22px;height:22px;border-radius:50%;border:2.5px solid #E6E6EE;border-top-color:#D6246E;animation:spin 1s linear infinite"></div></div>
+                <div style="padding:13px 14px;display:flex;flex-direction:column;gap:5px;border-top:1px solid #E6E6EE">
+                  <div style="font-size:13px;font-weight:700;color:#1A1A2E">deck_final_v4.pdf</div>
+                  <div style="font-size:11.5px;color:#6E6E85">Reading page 6 of 24…</div>
+                </div>
+              </div>
+            </div>
+            <div style="border:1px solid #E6E6EE;border-radius:12px;padding:20px 22px;display:flex;gap:26px">
+              <div style="flex:1;display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Ideas we'll test for transfer</div>
+                  <div style="font-size:12px;color:#9A99A8">Pulled from your brief — edit or add before the run</div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px">
+                  <span style="border:1px solid #E6E6EE;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#1A1A2E">Every kampung is a stadium</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#1A1A2E">Boots built for concrete</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#1A1A2E">Play like the city is watching</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#1A1A2E">Sepatu untuk semua</span>
+                  <span style="border:1px solid #E6E6EE;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#1A1A2E">Recycled tarpaulin</span>
+                  <span style="border:1px dashed #D5D4DD;border-radius:18px;padding:7px 13px;font-size:12.5px;font-weight:600;color:#9A99A8" style-hover="border-color:#D6246E;color:#D6246E">+ Add an idea</span>
+                </div>
+              </div>
+              <div style="width:1px;background:#F0EFF3"></div>
+              <div style="width:260px;flex:0 0 260px;display:flex;flex-direction:column;gap:8px">
+                <div style="font-size:14.5px;font-weight:700;color:#1A1A2E">Videos</div>
+                <div style="font-size:12.5px;color:#6E6E85;line-height:1.5">4 links · 4,412 comments. One was suggested by the assistant.</div>
+                <div style="font-size:12.5px;font-weight:700;color:#D6246E;margin-top:2px">Manage videos →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;right:26px;bottom:24px;width:48px;height:48px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(214,36,110,.28)" style-hover="background:#B01B5B">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">5 · RUN STATE — FULL PAGE, ONE THING HAPPENING</div>
+      <div data-screen-label="B5 Run state" style="width:1320px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,620px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;padding:64px 40px 72px;gap:26px">
+          <div style="width:88px;height:88px;border-radius:50%;background:#D6246E;display:flex;align-items:center;justify-content:center;color:#fff">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+            <div style="font-size:24px;font-weight:800;color:#1A1A2E;letter-spacing:-.015em">Reading 8,412 comments</div>
+            <div style="font-size:13.5px;color:#6E6E85">About 12 minutes. We'll email you when the note is ready.</div>
+          </div>
+          <div style="display:flex;flex-direction:column;width:420px;margin-top:6px">
+            <div style="display:flex;gap:14px;align-items:center;padding-bottom:16px">
+              <div style="display:flex;flex-direction:column;align-items:center"><div style="width:22px;height:22px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg></div></div>
+              <div style="font-size:14.5px;font-weight:700;color:#1A1A2E;flex:1">Collected the comments</div>
+              <div style="font-size:12.5px;color:#6E6E85">8,412</div>
+            </div>
+            <div style="display:flex;gap:14px;align-items:center;padding-bottom:16px">
+              <div style="width:22px;height:22px;border-radius:50%;background:#D6246E;color:#fff;display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg></div>
+              <div style="font-size:14.5px;font-weight:700;color:#1A1A2E;flex:1">Found the themes</div>
+              <div style="font-size:12.5px;color:#6E6E85">7</div>
+            </div>
+            <div style="display:flex;gap:14px;align-items:flex-start;padding-bottom:16px">
+              <div style="width:22px;height:22px;border-radius:50%;border:2.5px solid #F6D3E3;border-top-color:#D6246E;animation:spin 1s linear infinite;flex:0 0 22px"></div>
+              <div style="flex:1;display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:14.5px;font-weight:700;color:#1A1A2E">Labelling every comment</span><span style="font-size:12.5px;color:#D6246E;font-weight:700">38%</span></div>
+                <div style="height:6px;background:#F0EFF3;border-radius:3px;overflow:hidden"><div style="width:38%;height:100%;background:#D6246E"></div></div>
+                <div style="font-size:12px;color:#6E6E85">3,200 of 8,412 · batch 128 of 337</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:14px;align-items:center;padding-bottom:16px">
+              <div style="width:22px;height:22px;border-radius:50%;border:2px solid #E6E6EE;flex:0 0 22px"></div>
+              <div style="font-size:14.5px;font-weight:700;color:#9A99A8;flex:1">Double-checking the leftovers</div>
+            </div>
+            <div style="display:flex;gap:14px;align-items:center">
+              <div style="width:22px;height:22px;border-radius:50%;border:2px solid #E6E6EE;flex:0 0 22px"></div>
+              <div style="font-size:14.5px;font-weight:700;color:#9A99A8;flex:1">Writing your note</div>
+            </div>
+          </div>
+          <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13.5px;font-weight:600;padding:11px 30px;border-radius:8px;margin-top:8px" style-hover="border-color:#D6246E;color:#D6246E">Cancel run</div>
+          <div style="font-size:12.5px;color:#9A99A8">Every percentage in the report comes from counting these labels — nothing is estimated.</div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#9A99A8">6 · RESULTS — EVIDENCE OPENS UNDER THE NUMBER</div>
+      <div data-screen-label="B6 Results" style="width:1320px;height:1000px;background:#fff;border:1px solid #E6E6EE;border-radius:12px;box-shadow:0 1px 3px rgba(26,26,46,.05);display:flex;overflow:hidden">
+        <dc-import name="Sidebar" hint-size="60px,1000px"></dc-import>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="height:56px;flex:0 0 56px;border-bottom:1px solid #E6E6EE;display:flex;align-items:center;justify-content:space-between;padding:0 28px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+              <span style="color:#6E6E85">Ramadan football push</span><span style="color:#C6C5D0">/</span>
+              <span style="font-weight:700;color:#1A1A2E">Nike — Bola Rakyat</span>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div style="border:1px solid #E6E6EE;color:#1A1A2E;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px" style-hover="border-color:#D6246E;color:#D6246E">Export CSVs</div>
+              <div style="background:#D6246E;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px" style-hover="background:#B01B5B">Download PDF</div>
+            </div>
+          </div>
+          <div style="flex:1;min-height:0;display:flex">
+            <div style="width:210px;flex:0 0 210px;border-right:1px solid #E6E6EE;padding:24px 20px;display:flex;flex-direction:column;gap:12px">
+              <div style="font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#9A99A8">IN THIS NOTE</div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <div style="font-size:13px;font-weight:700;color:#D6246E;border-left:2px solid #D6246E;padding-left:10px">The top line</div>
+                <div style="font-size:13px;color:#6E6E85;padding-left:12px" style-hover="color:#D6246E">Which ideas arrived</div>
+                <div style="font-size:13px;color:#6E6E85;padding-left:12px" style-hover="color:#D6246E">What they talked about</div>
+                <div style="font-size:13px;color:#6E6E85;padding-left:12px" style-hover="color:#D6246E">What we heard</div>
+                <div style="font-size:13px;color:#6E6E85;padding-left:12px" style-hover="color:#D6246E">What to do next</div>
+                <div style="font-size:13px;color:#6E6E85;padding-left:12px" style-hover="color:#D6246E">Method &amp; cautions</div>
+              </div>
+              <div style="flex:1"></div>
+              <div style="border-top:1px solid #F0EFF3;padding-top:14px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:11.5px;color:#9A99A8">Downloads</div>
+                <div style="font-size:12px;font-weight:700;color:#D6246E">chart_transfer.csv</div>
+                <div style="font-size:12px;font-weight:700;color:#D6246E">chart_themes.csv</div>
+                <div style="font-size:12px;font-weight:700;color:#D6246E">comments.csv</div>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0;overflow:auto;padding:34px 40px 48px">
+              <div style="max-width:740px;display:flex;flex-direction:column;gap:28px">
+                <div style="display:flex;gap:24px;align-items:flex-start">
+                  <div style="flex:1;display:flex;flex-direction:column;gap:11px">
+                    <div style="font-size:11px;font-weight:800;letter-spacing:.12em;color:#D6246E">STRATEGY NOTE · 12 JULY 2026</div>
+                    <div style="font-size:31px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em;line-height:1.15">{{ verdict1 }} {{ verdict2 }}</div>
+                    <div style="font-size:13px;color:#6E6E85">8,412 comments · 4 videos · 7 themes · Indonesian / English</div>
+                  </div>
+                  <div style="width:150px;height:110px;flex:0 0 150px;background:#E9E8ED;border-radius:8px"></div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#E6E6EE;border:1px solid #E6E6EE;border-radius:10px;overflow:hidden">
+                  <div style="background:#fff;padding:18px 20px;display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">ECHOED THE BRIEF</div>
+                    <div style="font-size:28px;font-weight:800;color:#D6246E;letter-spacing:-.02em">41%</div>
+                    <div style="font-size:11.5px;color:#6E6E85">3,449 comments</div>
+                  </div>
+                  <div style="background:#fff;padding:18px 20px;display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">STRONGEST IDEA</div>
+                    <div style="font-size:28px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em">47%</div>
+                    <div style="font-size:11.5px;color:#6E6E85">Every kampung is a stadium</div>
+                  </div>
+                  <div style="background:#fff;padding:18px 20px;display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:11px;font-weight:800;letter-spacing:.1em;color:#9A99A8">UNPROMPTED RISK</div>
+                    <div style="font-size:28px;font-weight:800;color:#1A1A2E;letter-spacing:-.02em">18%</div>
+                    <div style="font-size:11.5px;color:#6E6E85">Price and value talk</div>
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style="font-size:18px;font-weight:800;color:#1A1A2E">Which ideas arrived</div>
+                    <div style="font-size:12.5px;color:#9A99A8">Click a bar to read the comments counted into it</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:11px">
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Every kampung is a stadium</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:47%;height:100%;background:#D6246E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#D6246E;text-align:right">47%</div>
+                    </div>
+                    <div style="border:1px solid #F6D3E3;background:#FEFAFC;border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+                      <div style="display:flex;align-items:center;justify-content:space-between">
+                        <div style="font-size:13px;font-weight:700;color:#1A1A2E">3,954 comments carry this label</div>
+                        <div style="display:flex;gap:7px">
+                          <span style="background:#1A1A2E;color:#fff;font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:14px">Most liked</span>
+                          <span style="border:1px solid #EBD3DF;color:#6E6E85;font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:14px">Newest</span>
+                          <span style="border:1px solid #EBD3DF;color:#6E6E85;font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:14px">Skeptical</span>
+                        </div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <div style="background:#fff;border:1px solid #EDECF1;border-radius:8px;padding:11px 13px;display:flex;flex-direction:column;gap:6px">
+                          <div style="font-size:13px;color:#1A1A2E;line-height:1.5">lapangan depan rumah gue lebih rame dari GBK kalau sore 😂</div>
+                          <div style="font-size:10.5px;font-weight:600;color:#9A99A8">Nostalgia · joy · echoed: kampung is a stadium · 1,204 likes</div>
+                        </div>
+                        <div style="background:#fff;border:1px solid #EDECF1;border-radius:8px;padding:11px 13px;display:flex;flex-direction:column;gap:6px">
+                          <div style="font-size:13px;color:#1A1A2E;line-height:1.5">bener sih, kita gak butuh rumput mahal buat main bola</div>
+                          <div style="font-size:10.5px;font-weight:600;color:#9A99A8">Nostalgia · joy · echoed: kampung is a stadium · 612 likes</div>
+                        </div>
+                        <div style="background:#fff;border:1px solid #EDECF1;border-radius:8px;padding:11px 13px;display:flex;flex-direction:column;gap:6px">
+                          <div style="font-size:13px;color:#1A1A2E;line-height:1.5">finally an ad that gets it. gang sempit pun jadi arena</div>
+                          <div style="font-size:10.5px;font-weight:600;color:#9A99A8">Craft · admiration · echoed: kampung is a stadium · 488 likes</div>
+                        </div>
+                      </div>
+                      <div style="display:flex;align-items:center;justify-content:space-between">
+                        <span style="font-size:12px;font-weight:700;color:#D6246E">See all 3,954 →</span>
+                        <span style="font-size:11.5px;color:#9A99A8">Collapse</span>
+                      </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Play like the whole city is watching</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:24%;height:100%;background:#D6246E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#D6246E;text-align:right">24%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Boots built for concrete, not turf</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:14%;height:100%;background:#D6246E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#D6246E;text-align:right">14%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Sepatu untuk semua</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:9%;height:100%;background:#D6246E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#D6246E;text-align:right">9%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Made with recycled tarpaulin</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:2%;height:100%;background:#D6246E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#D6246E;text-align:right">2%</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:16px;border-top:1px solid #F0EFF3;padding-top:26px">
+                  <div style="font-size:18px;font-weight:800;color:#1A1A2E">What the audience talked about</div>
+                  <div style="display:flex;flex-direction:column;gap:11px">
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Nostalgia for street football</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:22%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">22%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Price and value</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:18%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">18%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Will they survive concrete?</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:15%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">15%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Casting and cameos</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:12%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">12%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Craft and the music</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:9%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">9%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#1A1A2E">Doubt about the brand's motive</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:8%;height:100%;background:#1A1A2E"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#1A1A2E;text-align:right">8%</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:14px">
+                      <div style="width:230px;flex:0 0 230px;font-size:13px;font-weight:600;color:#9A99A8">Other</div>
+                      <div style="flex:1;height:20px;background:#F5F4F7;border-radius:2px;overflow:hidden"><div style="width:16%;height:100%;background:#C6C5D0"></div></div>
+                      <div style="width:46px;font-size:13.5px;font-weight:800;color:#9A99A8;text-align:right">16%</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:14px;border-top:1px solid #F0EFF3;padding-top:26px">
+                  <div style="font-size:18px;font-weight:800;color:#1A1A2E">What we heard</div>
+                  <div style="font-size:14.5px;color:#3D3C52;line-height:1.65;text-wrap:pretty">The cultural claim landed almost intact: nearly half the conversation repeated the idea that the neighbourhood pitch is the real stadium, unprompted and in the audience's own words. The product claim did not travel with it — only 14% engaged the concrete boot, and where they did the tone turned into a question about durability.</div>
+                  <sc-if value="{{ showMethod }}" hint-placeholder-val="{{ true }}">
+                    <div style="background:#FAFAFB;border-radius:10px;padding:16px 18px;font-size:12.5px;color:#6E6E85;line-height:1.55;text-wrap:pretty"><strong style="color:#1A1A2E">One caution.</strong> Sarcasm is the label to trust least — Indonesian comment humour reads as praise to the model more often than we would like. Treat the "joy" share on the doubt theme as a floor.</div>
+                  </sc-if>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;tone&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Warm and guiding&quot;,&quot;Direct and factual&quot;],&quot;default&quot;:&quot;Warm and guiding&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Voice&quot;},&quot;evidenceDefault&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Open on the top line&quot;,&quot;Closed until a number is clicked&quot;],&quot;default&quot;:&quot;Open on the top line&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Report behaviour&quot;},&quot;showMethodNotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Report behaviour&quot;},&quot;allowConfigImport&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Report behaviour&quot;}}">
+const EV = {
+  transfer: {
+    kicker: "IDEA · BRIEF POINT 01",
+    title: "Every kampung is a stadium",
+    sub: "3,954 of 8,412 comments echoed this idea · 47%",
+    count: "3,954",
+    comments: [
+      { text: "lapangan depan rumah gue lebih rame dari GBK kalau sore 😂", meta: "Nostalgia · joy · echoed: kampung is a stadium · 1,204 likes" },
+      { text: "bener sih, kita gak butuh rumput mahal buat main bola", meta: "Nostalgia · joy · echoed: kampung is a stadium · 612 likes" },
+      { text: "finally an ad that gets it. gang sempit pun jadi arena", meta: "Craft · admiration · echoed: kampung is a stadium · 488 likes" },
+      { text: "tiap sore lapangan voli disulap jadi lapangan bola, itu kita banget", meta: "Nostalgia · joy · echoed: kampung is a stadium · 331 likes" }
+    ]
+  },
+  city: {
+    kicker: "IDEA · BRIEF POINT 03",
+    title: "Play like the whole city is watching",
+    sub: "2,019 of 8,412 comments echoed this idea · 24%",
+    count: "2,019",
+    comments: [
+      { text: "main bola di kampung tuh tekanannya lebih gede dari liga 😭", meta: "Nostalgia · joy · echoed: whole city watching · 902 likes" },
+      { text: "the whole gang watching you take a penalty, no pressure at all", meta: "Casting · joy · echoed: whole city watching · 410 likes" },
+      { text: "kalau kalah, diomongin seminggu sama tetangga", meta: "Nostalgia · joy · echoed: whole city watching · 288 likes" },
+      { text: "ini kenapa anak kampung mentalnya kuat", meta: "Nostalgia · pride · echoed: whole city watching · 176 likes" }
+    ]
+  },
+  concrete: {
+    kicker: "IDEA · BRIEF POINT 02",
+    title: "Boots built for concrete, not turf",
+    sub: "1,178 of 8,412 comments echoed this idea · 14%",
+    count: "1,178",
+    comments: [
+      { text: "beton itu pembunuh sepatu, bertahan berapa lama nih?", meta: "Durability · skeptical · echoed: built for concrete · 744 likes" },
+      { text: "kalau outsole-nya beneran tahan beton gue beli", meta: "Durability · anticipation · echoed: built for concrete · 502 likes" },
+      { text: "my last pair lasted two months on the same pitch lol", meta: "Durability · skeptical · echoed: built for concrete · 233 likes" },
+      { text: "ada yang udah nyoba di lapangan futsal semen?", meta: "Durability · curiosity · echoed: built for concrete · 121 likes" }
+    ]
+  },
+  price: {
+    kicker: "THEME · PRICE AND VALUE",
+    title: "Price and value",
+    sub: "1,514 of 8,412 comments · 18% of the conversation",
+    count: "1,514",
+    comments: [
+      { text: "sepatu untuk semua tapi harganya 2 juta 🙂", meta: "Price · sarcasm (low confidence) · 1,880 likes" },
+      { text: "kalau bener buat rakyat, harganya jangan gaji sebulan", meta: "Price · anger · 964 likes" },
+      { text: "nunggu diskon 11.11 aja deh", meta: "Price · resignation · 402 likes" },
+      { text: "worth it kalau tahan setahun, kalau nggak ya mahal", meta: "Price · skeptical · 190 likes" }
+    ]
+  },
+  tarp: {
+    kicker: "IDEA · BRIEF POINT 05",
+    title: "Made with recycled tarpaulin",
+    sub: "168 of 8,412 comments echoed this idea · 2%",
+    count: "168",
+    comments: [
+      { text: "wait ini dari bahan terpal? keren juga", meta: "Craft · surprise · echoed: recycled tarpaulin · 96 likes" },
+      { text: "recycled material tapi harga premium, klasik", meta: "Price · skeptical · echoed: recycled tarpaulin · 74 likes" },
+      { text: "gak nyangka terpal bisa jadi sepatu", meta: "Craft · surprise · echoed: recycled tarpaulin · 51 likes" },
+      { text: "is the tarpaulin thing in the film? i missed it", meta: "Other · confusion · 12 likes" }
+    ]
+  },
+  nostalgia: {
+    kicker: "THEME · MOST TALKED ABOUT",
+    title: "Nostalgia for street football",
+    sub: "1,851 of 8,412 comments · 22% of the conversation",
+    count: "1,851",
+    comments: [
+      { text: "jadi kangen main bola pakai sandal jepit", meta: "Nostalgia · joy · 1,410 likes" },
+      { text: "gawangnya batu, garisnya pakai kapur, mantap", meta: "Nostalgia · joy · 890 likes" },
+      { text: "this is my childhood exactly, no notes", meta: "Nostalgia · joy · 655 likes" },
+      { text: "sekarang lapangannya udah jadi ruko 😔", meta: "Nostalgia · sadness · 402 likes" }
+    ]
+  },
+  casting: {
+    kicker: "THEME · CASTING AND CAMEOS",
+    title: "Casting and cameos",
+    sub: "1,009 of 8,412 comments · 12% of the conversation",
+    count: "1,009",
+    comments: [
+      { text: "yang jadi kiper itu anak Tangerang kan? kenal banget mukanya", meta: "Casting · joy · 512 likes" },
+      { text: "casting-nya real people, bukan model, respect", meta: "Casting · admiration · 388 likes" },
+      { text: "kirain bakal ada Egy, ternyata anak kampung semua, lebih bagus", meta: "Casting · surprise · 244 likes" },
+      { text: "who is the kid in the yellow jersey, he carried the ad", meta: "Casting · joy · 130 likes" }
+    ]
+  },
+  craft: {
+    kicker: "THEME · CRAFT AND THE MUSIC",
+    title: "Craft and the music",
+    sub: "757 of 8,412 comments · 9% of the conversation",
+    count: "757",
+    comments: [
+      { text: "backsound-nya nagih, ada di spotify gak?", meta: "Craft · joy · 622 likes" },
+      { text: "editingnya rapi banget buat iklan lokal", meta: "Craft · admiration · 340 likes" },
+      { text: "the drone shot over the gang, chef's kiss", meta: "Craft · admiration · 201 likes" },
+      { text: "sound design-nya bikin merinding", meta: "Craft · admiration · 88 likes" }
+    ]
+  },
+  doubt: {
+    kicker: "THEME · TREAT WITH CARE",
+    title: "Doubt about the brand's motive",
+    sub: "673 of 8,412 comments · 8% of the conversation",
+    count: "673",
+    comments: [
+      { text: "peduli kampung tapi jual sepatu 2 juta, oke deh 👏", meta: "Doubt · sarcasm (low confidence) · 1,102 likes" },
+      { text: "brand baru sadar ada lapangan kampung setelah 30 tahun", meta: "Doubt · anger · 540 likes" },
+      { text: "nice ad, but the CSR budget would build an actual pitch", meta: "Doubt · skeptical · 318 likes" },
+      { text: "cuma marketing, tapi gue tetep suka filmnya", meta: "Doubt · ambivalence · 145 likes" }
+    ]
+  }
+};
+
+const TONE = {
+  "Warm and guiding": {
+    heroLine1: "Hi Jean Paul — what conversation",
+    heroLine2: "should we listen to today?",
+    verdict1: "The street heard you.",
+    verdict2: "The shoe did not."
+  },
+  "Direct and factual": {
+    heroLine1: "Start an analysis",
+    heroLine2: "Add a campaign to begin.",
+    verdict1: "Cultural claim transferred.",
+    verdict2: "Product claim did not."
+  }
+};
+
+class Component extends DCLogic {
+  state = { ev: undefined };
+  renderVals() {
+    const tone = TONE[this.props.tone] || TONE["Warm and guiding"];
+    const evDefault = (this.props.evidenceDefault ?? "Open on the top line") === "Open on the top line" ? "transfer" : null;
+    const k = this.state.ev === undefined ? evDefault : this.state.ev;
+    const e = EV[k] || null;
+    const open = {};
+    Object.keys(EV).forEach(key => { open[key] = () => this.setState({ ev: key }); });
+    return {
+      ...tone,
+      showMethod: this.props.showMethodNotes ?? true,
+      showConfigImport: this.props.allowConfigImport ?? false,
+      open,
+      closeEv: () => this.setState({ ev: null }),
+      evOpen: !!e,
+      evKicker: e ? e.kicker : "",
+      evTitle: e ? e.title : "",
+      evSub: e ? e.sub : "",
+      evCount: e ? e.count : "",
+      evComments: e ? e.comments : []
+    };
+  }
+}
+</script>
+</body>
+</html>

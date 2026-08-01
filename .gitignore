@@ -14,6 +14,10 @@ output/
 *.json
 !pipeline/__init__.py
 
+# The data/ dir holds the sqlite DB, uploads, and per-run outputs (PDFs,
+# comment CSVs with PII). None of it belongs in git regardless of extension.
+data/
+
 # ── HuggingFace model cache ───────────────────────────────────────────────────
 # The emotion models download here on first run (~500 MB each).
 .cache/

@@ -1,24 +1,17 @@
 """
 Work out what each campaign put forward.
 
-One call per group, covering all of that group's videos plus the
-background, rather than one call per video plus one per group. For six
-videos across three groups that is 3 calls instead of 9, and each call
-still sees only one campaign, so nothing is diluted.
+One call per group, covering all of that group's videos, rather than one
+call per video plus one per group. For six videos across three groups
+that is 3 calls instead of 9, and each call still sees only one
+campaign, so nothing is diluted.
 
-The call returns two things that are kept strictly apart:
-
-  grounded    read from the transcripts. Every claim checkable.
-  background  what the model knows about the campaign, with search
-              grounding where the tier allows. NOT checkable.
-
-They are separated because a model asked "what was campaign X about"
-produces fluent, specific, confident detail whether or not it knows, and
-taglines, unit counts and launch dates are exactly what it invents.
+The call is grounded only: every claim is read from the transcripts and
+is checkable. No ungrounded background is generated or returned.
 """
 
 from pipeline import llm
-import config
+from pipeline.config_types import PipelineConfig
 
 LENS = {
     "brand_ad": "the CREATIVE DECISIONS the brand made: the narrative or "
@@ -48,30 +41,22 @@ For each video below, identify {lens}.
 Return JSON:
 {{
   "summary": "one sentence on what this campaign is",
-  "background": "markdown, under 200 words: what the campaign is, who ran it and when, its tagline, the audience it targets, and the competitive context. Write 'unverified' beside anything you are inferring rather than reading from the transcripts. Never invent a statistic, a unit count, a price or a date.",
   "points": [
     {{
       "label": "short name for the idea, 3 to 6 words",
       "video_id": "which video above this came from",
-      "description": "one sentence on what the video says about it",
-      "keywords": ["8 to 15 words or short phrases, in the language the COMMENTS will be in, that somebody would use when talking about this idea"]
+      "description": "one sentence on what the video says about it"
     }}
   ]
 }}
 
-Give 4 to 8 points per video, ordered by how central they are.
-
-Keywords are the important part, so get them right:
-- lowercase, specific, in the audience's language
-- NEVER include the brand or product name. The brand's own posts will
-  match it and inflate the count. This is the single most common way
-  these numbers go wrong.
-- no generic words that would match anything ("good", "car", "video")"""
+Give 4 to 8 points per video, ordered by how central they are."""
 
 
-def run(meta_df, context_map=None):
-    """Return (grounded_markdown, background_markdown, points)."""
-    grounded, background, points = [], [], []
+def run(meta_df, cfg: PipelineConfig, context_map=None,
+        images_map=None):
+    """Return (grounded_markdown, points)."""
+    grounded, points = [], []
     context_map = context_map or {}
 
     for group, sub in meta_df.groupby("group", sort=False):
@@ -90,10 +75,15 @@ def run(meta_df, context_map=None):
 
         print(f"    briefing {group} ({len(sub)} video"
               f"{'s' if len(sub) > 1 else ''})")
-        result = llm.ask_json(PROMPT.format(
-            group=group, lens=lens,
-            context=context_map.get(group, "(none supplied)"),
-            videos="\n\n".join(blocks)))
+        images = images_map.get(group) if images_map else None
+        result = llm.ask_json(
+            PROMPT.format(
+                group=group, lens=lens,
+                context=context_map.get(group, "(none supplied)"),
+                videos="\n\n".join(blocks)),
+            cfg,
+            grounded=False,
+            images=images)
 
         known = set(sub["video_id"])
         for point in result.get("points", []):
@@ -102,8 +92,7 @@ def run(meta_df, context_map=None):
                 "group": group,
                 "video_id": vid if vid in known else sub.iloc[0]["video_id"],
                 "label": point["label"],
-                "description": point.get("description", ""),
-                "keywords": point.get("keywords", [])})
+                "description": point.get("description", "")})
 
         lines = [f"## {group}", "", result.get("summary", ""), "",
                  "**What the videos put forward:**", ""]
@@ -116,9 +105,4 @@ def run(meta_df, context_map=None):
                           "evidence."]
         grounded.append("\n".join(lines))
 
-        if config.CAMPAIGN_BACKGROUND and result.get("background"):
-            background.append(f"## {group}\n\n{result['background']}")
-
-    return ("\n\n".join(grounded),
-            "\n\n".join(background),
-            points)
+    return ("\n\n".join(grounded), points)

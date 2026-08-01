@@ -1,21 +1,16 @@
 """
 Turn comments into numbers.
 
-The architectural point of this file: the model writes the rules, the
-code does the counting.
+The architectural point of this file: the LLM labels each comment against
+a fixed theme set (discovered from a sample), and the code counts the
+labels to produce percentages.
 
-  build()   one model call reads a sample and writes a codebook: the
-            themes present in this conversation and the keywords for each
-  apply()   regex applies that codebook to every comment, free
-
-That inversion is what makes cost flat in corpus size, results
-reproducible, and every figure traceable to a rule you can read in
-debug/codebook.json.
-
-It gives up paraphrase and negation. A comment praising something without
-using a keyword is missed, and "not worth it" matches a "worth" keyword.
-Transfer figures therefore say whether a subject arrived, not its exact
-share.
+  build()     one model call reads a stratified sample and writes a
+              codebook: themes + definitions. No keywords.
+  classify()  LLM labels every comment; pt__ columns track signal transfer.
+  extend()    if "Other" is too large, one top-up pass over that subset.
+  summarise() count labels -> the two tables the report reasons over.
+  affect()    local HuggingFace, runs both emotion and sentiment models.
 """
 
 import re
@@ -23,7 +18,7 @@ import re
 import pandas as pd
 
 from pipeline import llm
-import config
+from pipeline.config_types import PipelineConfig
 
 CODEBOOK_PROMPT = """Below is a sample of {n} comments from a YouTube
 comment section. The videos are: {summary}
@@ -38,11 +33,7 @@ COMMENTS:
 
 Return JSON:
 {{"themes": [{{"name": "short name",
-               "definition": "one sentence",
-               "keywords": ["10 to 20 lowercase words or short phrases in the language(s) the comments use"]}}]}}
-
-Order from most specific to most generic: the first match wins when these
-are applied, so catch-all themes like generic praise go last."""
+               "definition": "one sentence"}}]}}"""
 
 TOPUP_PROMPT = """These comments matched no existing theme.
 Videos: {summary}
@@ -55,131 +46,241 @@ Identify 1 to 4 ADDITIONAL themes covering them. Do not duplicate an
 existing theme. If they are genuinely noise with no shared subject, return
 an empty list.
 
-Return JSON: {{"themes": [{{"name": "...", "definition": "...", "keywords": ["..."]}}]}}"""
+Return JSON: {{"themes": [{{"name": "...", "definition": "..."}}]}}"""
+
+CLASSIFY_PROMPT = """Classify each comment below.
+
+THEMES (pick exactly one name, or "Other" if none fit):
+{themes}
+
+BRIEF POINTS for this video (list any the comment echoes):
+{points}
+
+COMMENTS:
+{comments}
+
+Return a JSON array, one entry per comment:
+[{{"index": <int>, "theme": "<theme name or Other>",
+   "echoed": [<point labels that appear in the comment>]}}]
+
+Every index must appear. Use "Other" when no theme fits.
+Valid theme names: {theme_names}
+Valid point labels: {point_labels}"""
 
 
 # ------------------------------------------------------------- sampling
 
 def _sample(df, size):
     """
-    Draw across groups and across engagement, not flat random.
-
-    A flat draw over-represents whichever video got the most comments and
-    misses the high-engagement comments, which is where a thread's shared
-    vocabulary lives. Three slices per group: most-liked, longest, random.
-
-    The sample only DISCOVERS themes. Every percentage is counted over the
-    full corpus, so this never has to be proportionally representative. It
-    only has to contain one example of everything worth naming.
+    Draw four strata per video: most-liked, most-replied, longest, random
+    tail. The sample is used only to DISCOVER themes; percentages are
+    counted over the full corpus afterwards. The sample must contain at
+    least one example of everything worth naming - not be proportionally
+    representative.
     """
-    groups = df["group"].unique()
-    per_group = max(30, size // max(len(groups), 1))
+    videos = df["video_id"].unique()
+    per_video = max(30, size // max(len(videos), 1))
     picks = []
 
-    for group in groups:
-        sub = df[df["group"] == group]
-        take = min(per_group, len(sub))
-        n_top = n_long = take // 4
+    for vid in videos:
+        sub = df[df["video_id"] == vid]
+        take = min(per_video, len(sub))
+        stratum = max(1, take // 4)
 
-        top = sub.nlargest(n_top, "likes")
-        rest = sub.drop(top.index)
+        liked = sub.nlargest(stratum, "likes")
+        rest = sub.drop(liked.index)
+
+        replied = (rest.nlargest(stratum, "reply_count")
+                   if "reply_count" in rest.columns
+                   else pd.DataFrame(columns=rest.columns))
+        rest = rest.drop(replied.index, errors="ignore")
+
         longest = (rest.assign(_len=rest["comment"].str.len())
-                       .nlargest(n_long, "_len").drop(columns="_len"))
-        rest = rest.drop(longest.index)
-        random = rest.sample(min(take - n_top - n_long, len(rest)),
-                             random_state=0)
-        picks += [top, longest, random]
+                       .nlargest(stratum, "_len").drop(columns="_len"))
+        rest = rest.drop(longest.index, errors="ignore")
+
+        tail_n = min(take - stratum * 3, len(rest))
+        tail = rest.sample(max(0, tail_n), random_state=0)
+
+        picks += [liked, replied, longest, tail]
 
     return pd.concat(picks).drop_duplicates(subset=["comment"])
 
 
-def _pattern(keywords):
-    """One regex from a keyword list. Matches nothing if the list is empty."""
-    parts = [re.escape(k.strip().lower()) for k in keywords if k.strip()]
-    return re.compile("|".join(parts) if parts else r"(?!x)x", re.IGNORECASE)
-
-
 # ------------------------------------------------------------- codebook
 
-def build(df, summary):
-    """One model call. Returns the theme list."""
-    target = max(config.CODEBOOK_SAMPLE_SIZE, int(len(df) * 0.08))
-    size = int(min(target, config.CODEBOOK_SAMPLE_MAX, len(df)))
+def build(df, summary, cfg: "PipelineConfig"):
+    """One model call. Returns the theme list (name + definition only)."""
+    target = max(cfg.CODEBOOK_SAMPLE_SIZE, int(len(df) * 0.08))
+    size = int(min(target, cfg.CODEBOOK_SAMPLE_MAX, len(df)))
+    # Cap at 800 per spec (500-800 target on Pro tier).
+    size = min(size, 800)
     sample = _sample(df, size)
     print(f"    codebook sample: {len(sample)} of {len(df)}, "
-          f"stratified by group and engagement")
+          f"stratified by video and engagement")
 
     result = llm.ask_json(CODEBOOK_PROMPT.format(
         n=len(sample), summary=summary,
-        sample="\n".join(f"- {c[:220]}" for c in sample["comment"])))
+        sample="\n".join(f"- {c[:220]}" for c in sample["comment"])),
+        cfg)
     return result.get("themes", [])
 
 
-def apply_themes(df, themes):
+# ------------------------------------------------------------- classification
+
+def classify(df, themes, points, cfg: "PipelineConfig" = None):
     """
-    First match wins. Vectorised: str.contains runs in C, where a row-wise
-    apply would loop in Python once per theme per comment.
+    LLM labels every comment with a theme and echoed brief points.
+
+    Returns (df_with_new_cols, columns) where columns maps
+    pt__slug -> original label string.
+
+    cfg is required for production use; accepts None only so the existing
+    test_classify.py stub (which calls the 3-arg form) keeps working.
     """
     df = df.copy()
-    df["theme"] = "Unclassified"
-    unassigned = pd.Series(True, index=df.index)
+    df["theme"] = "Other"
 
-    for theme in themes:
-        if not unassigned.any():
-            break
-        hits = unassigned & df["comment"].str.contains(
-            _pattern(theme.get("keywords", [])), na=False)
-        df.loc[hits, "theme"] = theme["name"]
-        unassigned &= ~hits
+    theme_names = [t["name"] for t in themes]
 
-    return df
+    # Build pt__ columns: one per unique label across all points.
+    # Collision-safe: two labels that truncate to the same 40-char slug
+    # get a numeric suffix so they never silently merge.
+    columns = {}         # pt__col -> original label
+    label_to_col = {}    # original label -> pt__col (for write-back)
+    for point in points:
+        base = "pt__" + re.sub(r"\W+", "_", point["label"].lower())[:40]
+        col = base
+        i = 2
+        while col in columns:
+            col = f"{base}_{i}"
+            i += 1
+        columns[col] = point["label"]
+        # pd.NA sentinel: rows whose video is NOT associated with this point
+        # stay NA so summarise can skip non-associated (group, column) pairs
+        # without a separate points lookup. Associated rows are set to False
+        # (then True if echoed) in the per-video loop below.
+        df[col] = pd.NA
+        label_to_col[point["label"]] = col
+
+    # Group points by video so each batch only sees its own video's points.
+    points_by_video = {}
+    for point in points:
+        points_by_video.setdefault(point["video_id"], []).append(point)
+
+    batch_size = cfg.CLASSIFY_BATCH_SIZE if cfg is not None else 25
+
+    themes_text = "\n".join(
+        f"- {t['name']}: {t['definition']}" for t in themes)
+
+    for vid, group_df in df.groupby("video_id"):
+        vid_points = points_by_video.get(vid, [])
+        point_labels = [p["label"] for p in vid_points]
+
+        # Activate (False) only the columns that belong to this video.
+        # Rows for other videos stay NA and are excluded from summarise.
+        for vp in vid_points:
+            col = label_to_col[vp["label"]]
+            df.loc[group_df.index, col] = False
+
+        points_text = "\n".join(
+            f"- {p['label']}: {p['description']}" for p in vid_points
+        ) if vid_points else "(none)"
+
+        indices = group_df.index.tolist()
+
+        for chunk_start in range(0, len(indices), batch_size):
+            chunk_idx = indices[chunk_start: chunk_start + batch_size]
+            comments_text = "\n".join(
+                f"{i}: {df.at[i, 'comment'][:300]}"
+                for i in chunk_idx)
+
+            prompt = CLASSIFY_PROMPT.format(
+                themes=themes_text,
+                points=points_text,
+                comments=comments_text,
+                theme_names=", ".join(f'"{n}"' for n in theme_names + ["Other"]),
+                point_labels=", ".join(f'"{l}"' for l in point_labels) or "(none)",
+            )
+
+            try:
+                results = llm.classify_batch(
+                    prompt, theme_names, point_labels, cfg)
+            except Exception as exc:
+                print(f"    ! classify_batch failed for {vid} "
+                      f"chunk {chunk_start}: {exc}. Marking Other.")
+                results = []
+
+            seen = set()
+            for row in results:
+                idx = row.get("index")
+                if idx not in chunk_idx:
+                    continue
+                seen.add(idx)
+                theme_val = row.get("theme", "Other")
+                if theme_val not in theme_names:
+                    theme_val = "Other"
+                df.at[idx, "theme"] = theme_val
+
+                for label in row.get("echoed", []):
+                    # Use label_to_col to avoid re-slugging and prevent
+                    # collision-induced writes to the wrong column.
+                    col = label_to_col.get(label)
+                    if col and col in columns:
+                        df.at[idx, col] = True
+
+            # Indices the model omitted stay "Other" (already initialised).
+
+    return df, columns
 
 
-def extend(df, themes, summary):
+def extend(df, themes, points, summary, cfg: "PipelineConfig",
+           on_progress=None):
     """
-    Second pass, only if too much fell through. A high unclassified share
-    means the sample missed vocabulary the rest of the corpus uses, so
-    show the model what it missed rather than guessing.
-    """
-    leftover = df[df["theme"] == "Unclassified"]
-    share = len(leftover) / len(df) * 100
-    if share < config.UNCLASSIFIED_LIMIT or len(leftover) < 25:
-        return themes, share
+    Second pass only if too much fell through. Reclassifies only the
+    Other subset against the extended theme set.
 
-    print(f"    {share:.0f}% unclassified, one top-up pass")
-    sample = _sample(leftover, min(config.CODEBOOK_SAMPLE_MAX,
+    Returns (df, themes, other_share) where other_share is the POST-recalc
+    share so callers always see the current state, not the stale pre-topup
+    value.
+    """
+    leftover = df[df["theme"] == "Other"]
+    leftover_pct = len(leftover) / len(df) * 100
+    if leftover_pct < cfg.UNCLASSIFIED_LIMIT or len(leftover) < 25:
+        return df, themes, leftover_pct
+
+    if on_progress:
+        on_progress("Refining themes - high uncategorised count")
+
+    print(f"    {leftover_pct:.0f}% Other, one top-up pass")
+    sample = _sample(leftover, min(cfg.CODEBOOK_SAMPLE_MAX,
                                    max(60, len(leftover) // 4)))
     result = llm.ask_json(TOPUP_PROMPT.format(
         summary=summary,
         existing=", ".join(t["name"] for t in themes),
-        sample="\n".join(f"- {c[:220]}" for c in sample["comment"])))
-    return themes + result.get("themes", []), share
+        sample="\n".join(f"- {c[:220]}" for c in sample["comment"])),
+        cfg)
+    new_themes = result.get("themes", [])
+    if not new_themes:
+        other_share = float((df["theme"] == "Other").mean() * 100)
+        return df, themes, other_share
+
+    extended = themes + new_themes[:4]
+    # Reclassify only the Other rows against the extended set.
+    sub_df, _ = classify(leftover, extended, points, cfg)
+    df = df.copy()
+    df.loc[leftover.index, "theme"] = sub_df["theme"]
+    # Update pt__ columns from the reclassified subset too.
+    for col in [c for c in df.columns if c.startswith("pt__")]:
+        if col in sub_df.columns:
+            df.loc[leftover.index, col] = sub_df[col]
+
+    # Return the POST-recalc Other share, not the stale pre-topup value.
+    other_share = float((df["theme"] == "Other").mean() * 100)
+    return df, extended, other_share
 
 
 # -------------------------------------------------------------- signals
-
-def apply_points(df, points):
-    """
-    For each idea a video pushed, did it appear in that video's comments?
-
-    These overlap on purpose, so they are boolean columns rather than one
-    label. A point is only measured against the video it came from.
-    """
-    df = df.copy()
-    columns = {}
-
-    for point in points:
-        column = "pt__" + re.sub(r"\W+", "_", point["label"].lower())[:40]
-        if column in columns:
-            continue
-        columns[column] = point["label"]
-        mask = df["video_id"] == point["video_id"]
-        df[column] = False
-        df.loc[mask, column] = df.loc[mask, "comment"].str.contains(
-            _pattern(point.get("keywords", [])), na=False)
-
-    return df, columns
-
 
 def summarise(df, columns):
     """The two tables the report reasons over."""
@@ -189,52 +290,72 @@ def summarise(df, columns):
     rows = []
     for column, label in columns.items():
         for group, sub in df.groupby("group"):
-            hits = int(sub[column].sum())
-            if hits:
-                rows.append({"group": group, "point": label,
-                             "echoed_pct": round(sub[column].mean() * 100, 1),
-                             "n": hits})
+            # Skip groups whose rows are all NA for this column - those
+            # groups were never shown this brief point, so a zero row
+            # would be spurious. Groups that were shown it but got 0
+            # echoes produce n=0, echoed_pct=0.0 (the meaningful zero case).
+            active = sub[column].dropna()
+            if active.empty:
+                continue
+            hits = int(active.sum())
+            rows.append({"group": group, "point": label,
+                         "echoed_pct": round(active.mean() * 100, 1),
+                         "n": hits})
     return themes, pd.DataFrame(rows)
 
 
-# -------------------------------------------------------------- emotion
+# -------------------------------------------------------------- affect
 
-def emotion(df):
+def affect(df, cfg: "PipelineConfig"):
     """
-    Runs locally through HuggingFace, so it costs no tokens whatever the
-    corpus size. First run downloads roughly 500 MB.
+    Runs both HuggingFace models locally over the full base. No tokens
+    consumed whatever the corpus size. First run downloads roughly 500 MB.
 
-    Weak evidence and treated as such downstream: labels are assigned per
-    comment with no context, so sarcasm and measured criticism both read
-    as anger. The confidence share travels with the numbers so the report
-    cannot present them without the caveat.
+    Both models run sequentially. Labels are the raw model labels with no
+    remapping. Weak evidence - per-comment inference with no context means
+    sarcasm and measured criticism both read as anger. The low_confidence_pct
+    and caveat travel with the numbers so the report cannot present them
+    without the disclaimer.
+
+    Returns:
+        (df, {"emotion": {"table": ..., "low_confidence_pct": ..., "caveat": ...},
+              "sentiment": {"table": ..., "low_confidence_pct": ..., "caveat": ...}})
+
+    # ponytail: two sequential local inference passes; if memory-bound,
+    # could share tokenizer or run lazily per model.
     """
-    name = {"emotion": config.EMOTION_MODEL,
-            "sentiment": config.SENTIMENT_MODEL}.get(config.EMOTION_MODE)
-    if not name:
-        raise ValueError(
-            f"EMOTION_MODE must be 'emotion' or 'sentiment', "
-            f"got {config.EMOTION_MODE!r}")
-
     from transformers import pipeline as hf
-    print(f"    loading {name}")
-    classifier = hf("text-classification", model=name)
-    results = classifier(df["comment"].tolist(), truncation=True,
-                         max_length=128, batch_size=32)
 
     df = df.copy()
-    df["emotion"] = [r["label"] for r in results]
-    df["emotion_confidence"] = [round(r["score"], 3) for r in results]
+    result = {}
 
-    low = (df["emotion_confidence"] < 0.6).mean() * 100
-    print(f"    {low:.0f}% of labels below 0.6 confidence")
-    if low > 40:
-        print("    WARNING: mostly low-confidence. Directional at best.")
+    for col_prefix, model_name in (("emotion", cfg.EMOTION_MODEL),
+                                   ("sentiment", cfg.SENTIMENT_MODEL)):
+        print(f"    loading {model_name}")
+        classifier = hf("text-classification", model=model_name)
+        preds = classifier(df["comment"].tolist(), truncation=True,
+                           max_length=128, batch_size=32)
 
-    table = (pd.crosstab(df["group"], df["emotion"], normalize="index")
-             .mul(100).round(1))
-    return df, {"table": table, "low_confidence_pct": low,
-                "caveat": f"Model: {name}. {low:.0f}% of labels scored below "
-                          f"0.6 confidence. Labels are assigned per comment "
-                          f"with no context, so sarcasm and measured "
-                          f"criticism are frequently misread."}
+        df[col_prefix] = [r["label"] for r in preds]
+        df[f"{col_prefix}_confidence"] = [round(r["score"], 3) for r in preds]
+
+        low = float((df[f"{col_prefix}_confidence"] < 0.6).mean() * 100)
+        print(f"    {col_prefix}: {low:.0f}% of labels below 0.6 confidence")
+        if low > 40:
+            print(f"    WARNING ({col_prefix}): mostly low-confidence. "
+                  f"Directional at best.")
+
+        table = (pd.crosstab(df["group"], df[col_prefix], normalize="index")
+                 .mul(100).round(1))
+        result[col_prefix] = {
+            "table": table,
+            "low_confidence_pct": low,
+            "caveat": (
+                f"Model: {model_name}. {low:.0f}% of labels scored below "
+                f"0.6 confidence. Labels are assigned per comment with no "
+                f"context, so sarcasm and measured criticism are frequently "
+                f"misread."
+            ),
+        }
+
+    return df, result

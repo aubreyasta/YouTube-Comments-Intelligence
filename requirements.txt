@@ -9,15 +9,7 @@ markdown>=3.5
 transformers>=4.40
 torch>=2.0
 
-# PDF Output
+# PDF Output. Alternatives tried in this order if playwright is absent:
+# weasyprint>=68, then pdfkit>=1.0.0. See docs/setup.md#pdf-engine for why.
 playwright>=1.49
 #   playwright install chromium
-
-# Alternatives, tried in this order if playwright is absent:
-#   weasyprint>=68        needs GTK on Windows, which is the painful part.
-#                         68 is the floor: CVE-2025-68616 was fixed there.
-#                         Recent versions also require a newer Python.
-#   pdfkit>=1.0.0         thin wrapper; you must install the wkhtmltopdf
-#                         binary separately. Last release was 2021 and
-#                         wkhtmltopdf itself is archived, so treat this as
-#                         a last resort on a machine that already has it.
