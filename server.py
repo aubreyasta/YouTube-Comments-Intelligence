@@ -190,6 +190,25 @@ def _ser_session(row, conn) -> dict:
         "SELECT id FROM campaigns WHERE session_id = ?", (sid,)
     ).fetchall()
     campaign_ids = [c["id"] for c in campaigns]
+
+    latest_run_row = conn.execute(
+        "SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+        (sid,)
+    ).fetchone()
+    if latest_run_row is not None:
+        state = latest_run_row["state"]
+        stage = state if state in ("complete", "failed") else ("connecting" if state == "queued" else "running")
+        latest_run = {
+            "id": latest_run_row["id"],
+            "status": state,
+            "stage": stage,
+            "pct": 100 if state == "complete" else 0,
+            "message": "",
+            "error": latest_run_row["error"],
+        }
+    else:
+        latest_run = None
+
     return {
         "id": sid,
         "name": row["name"],
@@ -198,6 +217,7 @@ def _ser_session(row, conn) -> dict:
         "status": _session_status(sid, conn),
         "updatedAt": row["updated_at"],
         "createdAt": row["created_at"],
+        "latestRun": latest_run,
     }
 
 
@@ -667,6 +687,32 @@ def remove_asset(asset_id: str):
                 (_now(), camp["session_id"])
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# /api/assets/{id}/file  GET
+# ---------------------------------------------------------------------------
+
+@app.get("/api/assets/{asset_id}/file")
+def get_asset_file(asset_id: str):
+    conn = db.get_conn()
+    try:
+        a = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        if a is None:
+            _404("Asset not found.")
+        path = a["file_path"]
+        if not path:
+            _404("Asset not found.")  # ponytail: could distinguish article vs missing file; one message keeps it simple
+        if not os.path.isfile(path):
+            _404("Asset not found.")
+        filename = os.path.basename(path)
+        return FileResponse(
+            path,
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     finally:
         conn.close()
 

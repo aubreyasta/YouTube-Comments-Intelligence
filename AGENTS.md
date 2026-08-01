@@ -58,6 +58,26 @@ Mark deliberate simplifications with a `# ponytail:` comment that names the ceil
 - DB columns and internal Python dict keys derived from the DB: `snake_case`.
 - The serializers in `server.py` handle the case flip; do not push `snake_case` out over HTTP.
 
+### Terminology
+
+Use these product terms in prose, comments, and docs. Never the banned jargon. Code identifiers keep their names; the table maps them.
+
+| Term | Means | Code equivalent |
+|---|---|---|
+| Campaign | The analysis unit (one campaign; multi-campaign planned) | `session` + `campaign` |
+| User Inputs | Articles, PDFs, briefs, images the user adds for context | `assets`, `CAMPAIGN_CONTEXT` |
+| Videos | The YouTube videos under analysis | `videos` |
+| Key Messages | What the campaign pushes, drawn from titles, captions, descriptions, User Inputs | `points` |
+| Theme book | The discovered theme set applied to comments | codebook themes |
+| Themes | Labels assigned to each comment | `theme` column |
+| Emotions | Emotional labels | `emotion` column |
+| Sentiment | Positive / neutral / negative | `sentiment` column |
+| Extend function | The 30%-Other top-up pass | `analyze.extend()` |
+| Mentions | A comment referencing a Key Message | `echoed` / `pt__` columns |
+| Chat feature | Deferred assistant (chat + source discovery) | deferred |
+
+Banned in any feature context: "Signal transfer" (say "how many comments mention a Key Message"), "Affect" (say "Emotions and Sentiment"), "Codebook", "Echoed", "Session" as an analysis term, "Source discovery", "Cross-session assistant".
+
 ### Errors
 
 Server errors go through the helpers in `server.py`:
@@ -144,4 +164,4 @@ Three feature areas are deferred with backing UI already in place as disabled co
 
 - OCR for scanned PDFs.
 - Custom lenses for the brief stage.
-- Cross-session assistant (chat + source discovery).
+- Chat feature (deferred assistant; source discovery is part of it).

@@ -10,7 +10,7 @@ Works on brand ads, creator reviews, and explainer or viral content. Handles the
 
 ```bash
 pip install -r requirements.txt
-pip install playwright && playwright install chromium
+playwright install chromium
 ```
 
 Then either run the CLI:
@@ -25,10 +25,10 @@ or start the backend API:
 ```bash
 # put YOUTUBE_API_KEY and GEMINI_API_KEY in a .env file at repo root
 pip install -r requirements.txt -r requirements-server.txt
-pip install playwright && playwright install chromium
+playwright install chromium
 python server.py
 # API at http://localhost:8000/api
-# browser UI at http://localhost:8000 (fixture data only - pipeline wiring is a later phase)
+# browser UI at http://localhost:8000 (live mode - frontend probes the backend and runs the real pipeline)
 ```
 
 Full install, keys, PDF engine, and troubleshooting notes live in [docs/setup.md](docs/setup.md).
@@ -68,7 +68,7 @@ Set `KEEP_INTERMEDIATE = True` in `config.py` to also get a `debug/` folder with
 ## Two entry points
 
 - **CLI** (`python run.py`): edit `config.py`, run, get a folder in `output/`. The fastest way to produce a report.
-- **Backend server** (`python server.py`): FastAPI at `localhost:8000` with sessions, campaigns, uploads, and a brief-review interrupt. The API is functional and runs the same pipeline internally. The browser UI at `/` currently runs against fixture data - pipeline wiring is a later phase. The CLI is the fully working end-to-end path today.
+- **Backend server** (`python server.py`): FastAPI at `localhost:8000` with sessions, campaigns, uploads, and a brief-review interrupt. The browser UI at `http://localhost:8000/` probes the same-origin backend at boot; when the probe succeeds the frontend switches to live mode and all calls go to the real API. Starting a run invokes the actual pipeline and streams progress through SSE.
 
 Both share the same analysis engine in `pipeline/`.
 

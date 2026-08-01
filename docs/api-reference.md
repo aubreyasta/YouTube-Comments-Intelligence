@@ -102,7 +102,15 @@ Response `200`:
     "commentCount": 0,
     "status": "ready",
     "updatedAt": "...",
-    "createdAt": "..."
+    "createdAt": "...",
+    "latestRun": {
+      "id": "...",
+      "status": "queued | running | complete | failed",
+      "stage": "connecting | running | complete | failed",
+      "pct": 0,
+      "message": "",
+      "error": null
+    }
   }
 ]
 ```
@@ -110,6 +118,8 @@ Response `200`:
 `status` values: `ready`, `running`, `complete`, `failed`. Derived from the most recent run.
 
 `commentCount` is read from the latest complete run's `report.json`; `0` if no complete run yet.
+
+`latestRun` is the most recent run for the session, ordered by `started_at DESC, rowid DESC`. Fields use the same derivation as `GET /runs/{id}` (`stage` is `"connecting"` when queued, `"running"` when active, `"complete"` or `"failed"` when terminal). `latestRun` is `null` when the session has no run. `briefPointIds` and `artifacts` are omitted.
 
 ### `GET /sessions/{id}`
 
@@ -127,9 +137,19 @@ Response `200`:
   "updatedAt": "...",
   "createdAt": "...",
   "campaigns": [ { "..." : "..." } ],
-  "runs": [ { "..." : "..." } ]
+  "runs": [ { "..." : "..." } ],
+  "latestRun": {
+    "id": "...",
+    "status": "queued | running | complete | failed",
+    "stage": "connecting | running | complete | failed",
+    "pct": 0,
+    "message": "",
+    "error": null
+  }
 }
 ```
+
+`latestRun` is the same shape as in `GET /sessions`. `null` when the session has no run.
 
 Errors: `404` if the session does not exist.
 
@@ -255,6 +275,15 @@ Errors:
 ### `DELETE /assets/{id}`
 
 Remove an asset. For uploaded files, the file on disk is also removed. Idempotent.
+
+### `GET /assets/{id}/file`
+
+Download the raw bytes of an uploaded asset. Returns the file with `Content-Disposition: attachment` set.
+
+Same shape as `GET /runs/{id}/artifacts/{artifact_id}`.
+
+Errors:
+- `404` asset record not found, asset has no `file_path` (article assets), or file missing on disk.
 
 ### Asset object shape
 

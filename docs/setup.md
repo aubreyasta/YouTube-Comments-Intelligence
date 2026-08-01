@@ -32,11 +32,11 @@ Two requirement files. Install what you need for the entry point you plan to use
 ```bash
 # CLI pipeline only
 pip install -r requirements.txt
-pip install playwright && playwright install chromium
+playwright install chromium
 
 # Backend server (adds the CLI's dependencies plus FastAPI stack)
 pip install -r requirements.txt -r requirements-server.txt
-pip install playwright && playwright install chromium
+playwright install chromium
 ```
 
 The Chromium download from `playwright install chromium` is not part of the Python package and cannot be checked by `pip`. If the pipeline's preflight passes but PDF rendering later fails, this is the reason.
@@ -138,19 +138,21 @@ or
 python server.py
 ```
 
-Both start the API on `http://localhost:8000/api` and serve the frontend at `http://localhost:8000/`. The browser UI currently runs against fixture data - pipeline wiring is a later phase. The CLI (`python run.py`) is the fully working end-to-end path today. The server binds `127.0.0.1` by design - it is single-user, unauthenticated, and localhost only.
+Both start the API on `http://localhost:8000/api` and serve the frontend at `http://localhost:8000/`. At boot the frontend probes `GET /api/sessions` from the same origin. When the probe succeeds, the frontend switches to live mode: all calls go to the real backend and starting a run invokes the actual pipeline, streaming progress through SSE. The server binds `127.0.0.1` by design - it is single-user, unauthenticated, and localhost only.
 
 On first start, `db.init()` creates `data/app.db` with the seven required tables. Uploads land in `data/uploads/`. Run outputs go to `data/runs/<run_id>/` and `data/artifacts/<run_id>/`.
 
-### Frontend, static only
+### Frontend, fixture demo mode
 
-If you want the browser demo without the backend, any static server works:
+To run the frontend without the backend, serve `app/` from any static server:
 
 ```bash
 python -m http.server 8797 --bind 127.0.0.1 --directory app
 ```
 
-Bind to `127.0.0.1` on a fresh port. Reusing a stale port causes `ERR_EMPTY_RESPONSE` from lingering processes. The static-only mode runs against the frontend's in-memory fixture; nothing hits the pipeline.
+Open `http://127.0.0.1:8797/`. This is fixture demo mode. The frontend loads `live.js` but the backend probe (`GET /api/sessions`) is cross-origin and fails, so the frontend stays in demo mode for the entire session. All data is in-memory, generated from fixture content. The run engine simulates pipeline progress with fixed timing. No backend, YouTube API, Gemini, or pipeline calls are made. Everything resets on page refresh.
+
+Bind to `127.0.0.1` on a fresh port. Reusing a stale port causes `ERR_EMPTY_RESPONSE` from lingering processes.
 
 ---
 
@@ -160,7 +162,7 @@ The pipeline refuses to start without a PDF engine. Engines are tried in this or
 
 | Engine | Notes |
 |---|---|
-| `playwright>=1.49` | Recommended. Same output on every OS. Two steps: `pip install playwright` then `playwright install chromium`. |
+| `playwright>=1.49` | Recommended. Same output on every OS. Installed via `requirements.txt`; run `playwright install chromium` once to download the browser binary. |
 | `weasyprint>=68` | Needs GTK on Windows. `68` is the floor because that release includes the fix that keeps it current with Python and CSS support. |
 | `pdfkit>=1.0.0` | Thin wrapper around `wkhtmltopdf`, which installs separately and is archived upstream. Last resort. |
 

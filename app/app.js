@@ -938,6 +938,38 @@ function engineFailAfterProceed(eng) {
 
 window.demoApi = demoApi;
 
+/* ============================== Mode dispatcher ============================== */
+/* demoApi.mode is "live" or "demo". Resolved once at boot below.
+   Each method delegates to __liveApi when mode === "live". */
+
+demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
+
+/* Wrap every async method so live mode delegates to __liveApi.
+   subscribeRun is synchronous-return; handled separately below. */
+(function wrapForLive() {
+  const asyncMethods = [
+    "listSessions","getSession","createSession","getCampaign",
+    "addVideo","removeVideo","uploadAsset","addArticle","removeAsset",
+    "setKeyVisual","startRun","getRun","getRunningRun",
+    "updateBriefPoints","proceedRun",
+    "getReport","getAssetData","getArtifact","listFiles","listArtifacts",
+    "simulateDisconnect","simulateFailure",
+  ];
+  for (const m of asyncMethods) {
+    const orig = demoApi[m].bind(demoApi);
+    demoApi[m] = async function (...args) {
+      if (demoApi.mode === "live") return window.__liveApi[m](...args);
+      return orig(...args);
+    };
+  }
+  // subscribeRun returns an unsubscribe fn (not a Promise).
+  const origSub = demoApi.subscribeRun.bind(demoApi);
+  demoApi.subscribeRun = function (id, handlers) {
+    if (demoApi.mode === "live") return window.__liveApi.subscribeRun(id, handlers);
+    return origSub(id, handlers);
+  };
+})();
+
 /* ============================== View helpers ============================== */
 
 const view = document.getElementById("view");
@@ -1069,6 +1101,7 @@ function cleanupRoute() {
 /* ---------- Home ---------- */
 async function renderHome() {
   setSidebarActive("sessions");
+  const live = demoApi.mode === "live";
   const sessions = await demoApi.listSessions();
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
@@ -1092,13 +1125,13 @@ async function renderHome() {
                 <div class="send">${ICONS.send}</div>
               </div>
             </div>`,
-            "The assistant is not available in this local demo. Create a session manually below.")}
+            live ? "The assistant is not available yet. Create a session manually below." : "The assistant is not available in this local demo. Create a session manually below.")}
           <div class="hero-note">Resonance only reports what real comments say — every number opens the comments behind it.</div>
         </div>
       </div>
       <div class="hero-foot">
-        <span class="lead">This local demo runs without the assistant.</span>
-        <span class="why">Start with a manual session — everything else works end to end on fixture data.</span>
+        <span class="lead">${live ? "The assistant is not available." : "This local demo runs without the assistant."}</span>
+        <span class="why">${live ? "Start with a manual session - everything else works end to end." : "Start with a manual session — everything else works end to end on fixture data."}</span>
       </div>
     </section>
 
@@ -1114,8 +1147,8 @@ async function renderHome() {
         </div>
       </div>` : `
       <div class="empty-block">
-        <h3>${sessions.length} session${sessions.length === 1 ? "" : "s"} in this demo</h3>
-        <p>Nothing is saved between page loads — this local demo keeps everything in memory.</p>
+        <h3>${sessions.length} session${sessions.length === 1 ? "" : "s"}${live ? "" : " in this demo"}</h3>
+        <p>${live ? "Everything you create is saved on the server." : "Nothing is saved between page loads — this local demo keeps everything in memory."}</p>
         <div class="actions">
           <a class="btn primary" href="#/sessions">Open sessions</a>
           <a class="btn secondary" href="#/sessions/new">New session</a>
@@ -1136,12 +1169,13 @@ const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", compl
 
 async function renderSessions() {
   setSidebarActive("sessions");
+  const live = demoApi.mode === "live";
   const sessions = await demoApi.listSessions();
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
       ${disWrap(`<span class="searchbox" aria-disabled="true">${ICONS.search}<span>Search sessions</span></span>`,
-        "Search is not available in this local demo.")}
+        live ? "Search is not available." : "Search is not available in this local demo.")}
       <a class="btn primary" href="#/sessions/new">New session</a>
     </div>`);
 
@@ -1175,7 +1209,7 @@ async function renderSessions() {
     const statusCell = s.status === "running" && runningRun
       ? `<div style="display:flex;flex-direction:column;gap:6px">
            <span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>
-           <div class="progressbar" style="width:82px"><div style="width:${runningRun.pct}%"></div></div>
+           ${live ? "" : `<div class="progressbar" style="width:82px"><div style="width:${runningRun.pct}%"></div></div>`}
          </div>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
     return `
@@ -1194,11 +1228,11 @@ async function renderSessions() {
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
         <h2 class="greeting">Good afternoon</h2>
-        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${fmtNum(totalComments)} comments read in this demo</div>
+        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${fmtNum(totalComments)} comments read${live ? "" : " in this demo"}</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
         <button class="pill active" type="button">All</button>
-        ${disWrap('<button class="pill" type="button" disabled>Drafts</button>', "Drafts are not available in this local demo — sessions save immediately.")}
+        ${disWrap('<button class="pill" type="button" disabled>Drafts</button>', live ? "Drafts are not available - sessions save immediately." : "Drafts are not available in this local demo — sessions save immediately.")}
       </div>
     </div>
     <div class="table-scroll">
@@ -1259,7 +1293,7 @@ async function renderNewSession() {
 
       <div class="setup-foot">
         <button class="btn primary lg" type="submit">Create session</button>
-        ${disWrap('<button class="btn lg" type="button" disabled>Save as draft</button>', "Drafts are not available in this local demo — sessions save immediately.")}
+        ${disWrap('<button class="btn lg" type="button" disabled>Save as draft</button>', demoApi.mode === "live" ? "Drafts are not available - sessions save immediately." : "Drafts are not available in this local demo — sessions save immediately.")}
         <span class="tail"></span>
         <span class="note">Brief and assets come next</span>
       </div>
@@ -1332,11 +1366,13 @@ async function renderNewSession() {
 /* ---------- Campaign detail ---------- */
 async function renderCampaign(sessionId, campaignId) {
   setSidebarActive("sessions");
-  const [session, campaign] = await Promise.all([
-    demoApi.getSession(sessionId), demoApi.getCampaign(campaignId),
+  const live = demoApi.mode === "live";
+  const [session, campaign, briefPoints, runningRun] = await Promise.all([
+    demoApi.getSession(sessionId),
+    demoApi.getCampaign(campaignId),
+    latestBriefPointsFor(sessionId),
+    demoApi.getRunningRun(sessionId),
   ]);
-  const briefPoints = latestBriefPointsFor(sessionId);
-  const runningRun = [...store.runs.values()].find((r) => r.sessionId === sessionId && r.status === "running");
 
   setTopbar(`
     <div class="topbar-left">
@@ -1348,8 +1384,8 @@ async function renderCampaign(sessionId, campaignId) {
       </nav>
     </div>
     <div class="topbar-right">
-      ${disWrap('<button class="btn secondary" type="button" disabled>Settings</button>', "Session settings are not available in this local demo.")}
-      <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress…" : "Run analysis"}</button>
+      ${live ? "" : disWrap('<button class="btn secondary" type="button" disabled>Settings</button>', "Session settings are not available in this local demo.")}
+      <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>
     </div>`);
   const runBtn = document.getElementById("btn-run");
   if (runningRun) {
@@ -1358,13 +1394,57 @@ async function renderCampaign(sessionId, campaignId) {
   } else {
     runBtn.addEventListener("click", async () => {
       try {
+        // Live mode: confirm overwrite when session is not fresh.
+        if (live && session.status !== "ready") {
+          if (!window.confirm("A new run replaces this session's previous results. Continue?")) return;
+        }
         const run = await demoApi.startRun(sessionId);
         location.hash = `#/runs/${run.id}`;
       } catch (err) { alert(err.message); }
     });
   }
 
-  const totalComments = campaign.videos.reduce((a, v) => a + v.commentCount, 0);
+  // Live: videos show URL + kind tag from parseYouTubeUrl; no comment count line.
+  // Demo: videos show title, channel, comment count.
+  const videos = campaign.videos || [];
+  const videoRowsHtml = videos.map((v) => {
+    const kindTag = (() => {
+      const parsed = parseYouTubeUrl(v.url || "");
+      const k = parsed.kind || v.kind || "video";
+      return k === "short" ? '<span class="kind-tag short">Short</span>' : '<span class="kind-tag">Video</span>';
+    })();
+    if (live) {
+      return `
+      <div class="video-row">
+        <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
+        <div class="video-info">
+          <div class="video-title">${esc(v.url)}</div>
+        </div>
+        ${kindTag}
+        <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.url)}">${ICONS.x}</button>
+      </div>`;
+    }
+    return `
+    <div class="video-row">
+      <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
+      <div class="video-info">
+        <div class="video-title">${esc(v.title)}</div>
+        <div class="video-meta">${esc(v.channel)} · ${fmtNum(v.commentCount)} comments · demo metadata</div>
+      </div>
+      ${kindTag}
+      <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.title)}">${ICONS.x}</button>
+    </div>`;
+  }).join("");
+
+  const totalComments = live ? 0 : videos.reduce((a, v) => a + (v.commentCount || 0), 0);
+  const commentCountLine = live
+    ? ""
+    : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
+
+  const ocrNotice = live
+    ? `<div class="notice">Scanned documents are kept, but OCR is not yet available - image-only PDFs add no text to the brief context.</div>`
+    : `<div class="notice">Scanned documents are kept, but OCR is unavailable in this local demo - image-only PDFs add no text to the brief context.</div>`;
+
   view.innerHTML = `
   <div class="campaign-layout">
     <div class="campaign-main">
@@ -1373,7 +1453,7 @@ async function renderCampaign(sessionId, campaignId) {
           <span class="star">${ICONS.star}</span>
           <h2 id="discovery-h">Source discovery</h2>
         </div>
-        <p class="unavail">Automatic source discovery is not available in this local demo. Add individual YouTube URLs below.</p>
+        <p class="unavail">Automatic source discovery is not available${live ? "." : " in this local demo. Add individual YouTube URLs below."}</p>
         <div class="fake-input" aria-disabled="true">
           <span>e.g. "find reaction videos to ${esc(campaign.name)} with more than 500 comments"</span>
           <span>${ICONS.send}</span>
@@ -1382,21 +1462,12 @@ async function renderCampaign(sessionId, campaignId) {
 
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
-          <div class="panel-title" id="videos-h">YouTube links <span style="color:var(--quiet);font-weight:600">· ${campaign.videos.length}</span></div>
-          <div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>
+          <div class="panel-title" id="videos-h">YouTube links <span style="color:var(--quiet);font-weight:600">· ${videos.length}</span></div>
+          ${commentCountLine}
         </div>
         <div class="video-list">
-          ${campaign.videos.map((v) => `
-          <div class="video-row">
-            <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
-            <div class="video-info">
-              <div class="video-title">${esc(v.title)}</div>
-              <div class="video-meta">${esc(v.channel)} · ${fmtNum(v.commentCount)} comments · demo metadata</div>
-            </div>
-            ${v.kind === "short" ? '<span class="kind-tag short">Short</span>' : '<span class="kind-tag">Video</span>'}
-            <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.title)}">${ICONS.x}</button>
-          </div>`).join("")}
-          ${campaign.videos.length === 0 ? '<div style="padding:18px 16px;font-size:13px;color:var(--muted)">No videos yet — add at least one before running an analysis.</div>' : ""}
+          ${videoRowsHtml}
+          ${videos.length === 0 ? '<div style="padding:18px 16px;font-size:13px;color:var(--muted)">No videos yet - add at least one before running an analysis.</div>' : ""}
         </div>
         <div class="url-add">
           <input class="input" id="c-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="Add a YouTube link">
@@ -1412,7 +1483,7 @@ async function renderCampaign(sessionId, campaignId) {
         <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
           <span class="up">${ICONS.up}</span>
           <span class="t">Drop briefs, decks or key visuals</span>
-          <span class="d">PDF, PPTX, DOCX, JPG, PNG, WEBP up to 10 MB — or paste an article URL below</span>
+          <span class="d">PDF, PPTX, DOCX, JPG, PNG, WEBP up to 10 MB - or paste an article URL below</span>
           <span class="d">Disallowed types bounce off; nothing is uploaded until it passes.</span>
         </div>
         <input type="file" id="file-input" hidden multiple>
@@ -1423,9 +1494,9 @@ async function renderCampaign(sessionId, campaignId) {
         </div>
         <div class="field-error" id="article-err" hidden></div>
         <div style="display:flex;flex-direction:column;gap:8px" id="asset-list">
-          ${campaign.assets.map((a) => assetRowHtml(a)).join("")}
+          ${(campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
-        <div class="notice">Scanned documents are kept, but OCR is unavailable in this local demo — image-only PDFs add no text to the brief context.</div>
+        ${ocrNotice}
       </section>
 
       <section class="card" aria-labelledby="ideas-h" style="display:flex;flex-direction:column;gap:12px">
@@ -1527,31 +1598,68 @@ async function renderCampaign(sessionId, campaignId) {
   });
 }
 
-function assetRowHtml(a) {
+function assetRowHtml(a, live) {
+  // Live mode: article name prettify - show host + " - article" when name starts with http.
+  const displayName = (live && a.name && a.name.startsWith("http"))
+    ? (() => { try { return new URL(a.name).hostname + " - article"; } catch { return a.name; } })()
+    : a.name;
   const ext = a.kind === "article" ? "" : (a.name.split(".").pop() || "").toUpperCase().slice(0, 4);
   const icon = a.kind === "article"
     ? `<div class="asset-icon">${ICONS.link}</div>`
     : a.kind === "image"
       ? `<div class="asset-icon img" aria-hidden="true"></div>`
       : `<div class="asset-icon">${esc(ext)}</div>`;
-  const sub = a.kind === "article"
-    ? `<div class="asset-sub ok">Linked · added to context at run time</div>`
-    : a.isKeyVisual
+  let sub;
+  if (a.kind === "article") {
+    sub = `<div class="asset-sub ok">Linked · added to context at run time</div>`;
+  } else if (live) {
+    // Live: no key-visual wording; image context line unchanged, document line unchanged.
+    sub = `<div class="asset-sub">${a.kind === "image" ? fmtSize(a.size) + " · image context at run time" : fmtSize(a.size) + " · text added to context at run time"}</div>`;
+  } else {
+    sub = a.isKeyVisual
       ? `<div class="asset-sub ok">Used as the key visual in the report</div>`
       : `<div class="asset-sub">${a.kind === "image" ? fmtSize(a.size) + " · image context" : fmtSize(a.size) + " · text added to context at run time"}</div>`;
+  }
+  // Live: hide key-visual toggle (no backing route).
+  const kvToggle = (live || a.kind !== "image") ? "" :
+    `<button class="kv-toggle ${a.isKeyVisual ? "on" : ""}" type="button" data-kv="${a.id}" ${a.isKeyVisual ? "aria-pressed=\"true\"" : ""}>${a.isKeyVisual ? "Key visual" : "Set as key visual"}</button>`;
   return `
   <div class="asset-row">
     ${icon}
     <div class="asset-info">
-      <div class="asset-name" title="${esc(a.name)}">${esc(a.name)}</div>
+      <div class="asset-name" title="${esc(displayName)}">${esc(displayName)}</div>
       ${sub}
     </div>
-    ${a.kind === "image" ? `<button class="kv-toggle ${a.isKeyVisual ? "on" : ""}" type="button" data-kv="${a.id}" ${a.isKeyVisual ? "aria-pressed=\"true\"" : ""}>${a.isKeyVisual ? "Key visual" : "Set as key visual"}</button>` : ""}
-    <button class="icon-btn" type="button" data-rm-asset="${a.id}" aria-label="Remove ${esc(a.name)}">${ICONS.x}</button>
+    ${kvToggle}
+    <button class="icon-btn" type="button" data-rm-asset="${a.id}" aria-label="Remove ${esc(displayName)}">${ICONS.x}</button>
   </div>`;
 }
 
-function latestBriefPointsFor(sessionId) {
+async function latestBriefPointsFor(sessionId) {
+  if (demoApi.mode === "live") {
+    // In live mode, get the latest run and return its briefPoints array.
+    const runningRun = await demoApi.getRunningRun(sessionId);
+    if (runningRun && runningRun.id) {
+      try {
+        const run = await demoApi.getRun(runningRun.id);
+        return (run.briefPoints || []).slice().sort((a, b) => a.order - b.order);
+      } catch { return []; }
+    }
+    // Also check session for a complete run.
+    const sess = await demoApi.getSession(sessionId);
+    const runs = (sess.runs || []).slice().sort((a, b) =>
+      (b.createdAt || "").localeCompare(a.createdAt || ""));
+    for (const rs of runs) {
+      try {
+        const run = await demoApi.getRun(rs.id);
+        if (run.briefPoints && run.briefPoints.length) {
+          return run.briefPoints.slice().sort((a, b) => a.order - b.order);
+        }
+      } catch { /* skip */ }
+    }
+    return [];
+  }
+  // Demo mode: read from store.
   const runs = [...store.runs.values()]
     .filter((r) => r.sessionId === sessionId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -1568,37 +1676,61 @@ const STEP_DEFS = [
   { key: "emotion", label: "Double-checking the leftovers", pending: "If too much lands in \"Other\", we look for missed themes" },
   { key: "report", label: "Writing your note", pending: "Two charts, the verdicts, and the quotes behind them" },
 ];
-const STAGE_TO_STEP = { connecting: -1, collect: 0, brief: 0, brief_pause: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2 };
+// error -> -2 (live terminal failure), running -> -1 (live pre-collect stage).
+const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
+
+/* Parse adapter.py SSE detail strings into a plain object for counter updates.
+   Live detail is a string; demo detail is already an object.
+   Known patterns from adapter.py _push calls:
+     "total fetched: N"  -> { total: N }
+     "N themes"          -> { themes: N }
+     "other_share=X.Y"   -> { otherShare: X.Y }
+   Unparseable returns null; callers show "-". */
+function parseDetailStr(detail) {
+  if (!detail || typeof detail !== "string") return null;
+  const m1 = detail.match(/^total fetched: (\d+)$/i);
+  if (m1) return { total: parseInt(m1[1], 10) };
+  const m2 = detail.match(/^(\d+)\s+themes?$/i);
+  if (m2) return { themes: parseInt(m2[1], 10) };
+  const m3 = detail.match(/other_share=([\d.]+)/i);
+  if (m3) return { otherShare: parseFloat(m3[1]) };
+  return null;
+}
 
 async function renderRun(runId) {
   setSidebarActive("sessions");
+  const live = demoApi.mode === "live";
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
-  const campaign = store.campaigns.get(session.campaignIds[0]);
+  const campaign = live
+    ? ((session.campaigns && session.campaigns[0]) || null)
+    : store.campaigns.get(session.campaignIds[0]);
+  const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
 
   setTopbar(`
     <div class="topbar-left">
       <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaign ? campaign.id : ""}">${esc(session.name)}</a>
+        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
         <span class="sep">/</span>
         <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
         <span class="badge" id="run-badge">${run.status === "failed" ? "Failed" : run.status === "complete" ? "Complete" : "Running"}</span>
       </nav>
     </div>
     <div class="topbar-right">
-      <span class="topbar-org" style="font-size:12px">No cancellation in this demo — a run always finishes.</span>
+      ${live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo \u2014 a run always finishes.</span>'}
     </div>`);
 
   view.innerHTML = `
   <div class="run-layout">
     <div class="run-main">
       <div style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
-        <h1 class="run-title" id="run-title">Getting ready…</h1>
-        <p class="run-sub" id="run-sub">This demo runs on fixture data in about half a minute.</p>
+        <h1 class="run-title" id="run-title">Getting ready\u2026</h1>
+        <p class="run-sub" id="run-sub">${live ? "Connecting to the server\u2026" : "This demo runs on fixture data in about half a minute."}</p>
       </div>
       <div id="run-banner"></div>
       <div id="brief-review" hidden></div>
       <div class="stepper" id="stepper"></div>
+      ${live ? "" : `
       <details class="demo-controls">
         <summary>Demo controls</summary>
         <div class="inner">
@@ -1608,20 +1740,20 @@ async function renderRun(runId) {
             <button class="btn secondary danger" type="button" id="demo-fail">Simulate failure</button>
           </div>
         </div>
-      </details>
+      </details>`}
     </div>
     <div class="run-rail">
       <div class="rail-card">
         <div class="rail-kicker">LIVE COUNTS</div>
         <div style="display:flex;flex-direction:column;gap:13px">
           <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">0</span></div>
-          <div class="count-row"><span class="k">Themes in play</span><span class="v" id="cnt-themes">—</span></div>
-          <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">—</span></div>
+          <div class="count-row"><span class="k">Themes in play</span><span class="v" id="cnt-themes">\u2014</span></div>
+          <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
         </div>
       </div>
-      <div class="notice pink">
-        <strong>Early read.</strong> Street-football nostalgia tends to lead. The full picture lands with the note.
-      </div>
+      ${live
+        ? `<div class="notice pink">The full picture lands with the note.</div>`
+        : `<div class="notice pink"><strong>Early read.</strong> Street-football nostalgia tends to lead. The full picture lands with the note.</div>`}
     </div>
   </div>`;
 
@@ -1645,13 +1777,21 @@ async function renderRun(runId) {
     const d = state.detail || {};
     const details = [
       state.stage === "collect" || currentStep > 0
-        ? `${fmtNum(d.collected || (currentStep > 0 ? totalComments() : 0))} across ${d.videos || videoCount()} videos, replies included`
+        ? (live && d.collected == null
+            ? "—"
+            : `${fmtNum(d.collected || (currentStep > 0 ? totalComments() : 0))} across ${d.videos || videoCount()} videos, replies included`)
         : STEP_DEFS[0].pending,
-      currentStep > 1 ? "7 themes, drawn from a 640-comment read" : STEP_DEFS[1].pending,
+      currentStep > 1
+        ? (d.themes ? d.themes + " themes, identified from the sample" : (live ? "Themes identified from the sample" : "7 themes, drawn from a 640-comment read"))
+        : STEP_DEFS[1].pending,
       state.stage === "classify"
-        ? `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total || totalComments())} · batch ${d.batch || 1} of ${d.batches || 1}`
+        ? (live && d.labelled == null
+            ? "—"
+            : `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total || totalComments())} · batch ${d.batch || 1} of ${d.batches || 1}`)
         : currentStep > 2 ? `${fmtNum(totalComments())} labelled` : STEP_DEFS[2].pending,
-      currentStep > 3 ? "Theme list holds — \"Other\" stayed low" : STEP_DEFS[3].pending,
+      currentStep > 3
+        ? (d.otherShare != null ? `"Other" held at ${d.otherShare.toFixed(1)}%` : (live ? 'Theme list holds' : 'Theme list holds \u2014 "Other" stayed low'))
+        : STEP_DEFS[3].pending,
       currentStep > 4 ? "Note written" : STEP_DEFS[4].pending,
     ];
     stepperEl.innerHTML = STEP_DEFS.map((s, i) => {
@@ -1661,7 +1801,7 @@ async function renderRun(runId) {
         ? `<div class="step-dot done">${ICONS.check}</div>`
         : cur ? `<div class="step-dot current" role="img" aria-label="In progress"></div>` : `<div class="step-dot"></div>`;
       const line = i < STEP_DEFS.length - 1 ? `<div class="step-line"></div>` : "";
-      const bar = cur && state.stage === "classify"
+      const bar = cur && state.stage === "classify" && d.total != null
         ? `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`
         : "";
       return `
@@ -1680,12 +1820,14 @@ async function renderRun(runId) {
     return (state.detail && state.detail.total) || initialTotal;
   }
   function videoCount() {
-    return (state.detail && state.detail.videos) || (campaign ? campaign.videoIds.length : 1);
+    if (state.detail && state.detail.videos) return state.detail.videos;
+    return campaign ? (campaign.videoIds ? campaign.videoIds.length : (campaign.videos ? campaign.videos.length : 1)) : 1;
   }
 
-  const initialTotal = campaign
+  // Live: no commentCount on videos; 0 is the sentinel so totalComments() uses detail.total.
+  const initialTotal = live ? 0 : (campaign
     ? Math.max(1200, campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0))
-    : 8412;
+    : 8412);
 
   function paintHeader() {
     if (state.failed) {
@@ -1697,7 +1839,7 @@ async function renderRun(runId) {
           <div style="flex:1">${esc(state.failed)}</div>
         </div>
         <div style="display:flex;gap:10px;margin-top:12px">
-          <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaign ? campaign.id : ""}">Return to campaign</a>
+          <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaignId}">Return to campaign</a>
           <button class="btn primary" type="button" id="btn-fresh-run">Start a fresh run</button>
         </div>`;
       const fresh = document.getElementById("btn-fresh-run");
@@ -1715,56 +1857,70 @@ async function renderRun(runId) {
           <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open the strategy note</a>
         </div>`;
     } else if (state.disconnected) {
-      titleEl.textContent = "Reconnecting…";
-      subEl.textContent = "The connection dropped. The analysis is still running — progress picks up where it left off.";
+      titleEl.textContent = "Reconnecting\u2026";
+      subEl.textContent = "The connection dropped. The analysis is still running - progress picks up where it left off.";
       bannerEl.innerHTML = `
         <div class="banner warn" role="status">
           <span class="spinner sm" aria-hidden="true"></span>
-          <div style="flex:1">Connection lost — retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
+          <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
         </div>`;
     } else {
       const msg = {
-        connecting: "Connecting…", collect: "Reading " + fmtNum(totalComments()) + " comments",
-        brief: "Reading the brief…", brief_pause: "Confirm the ideas before we label",
+        connecting: "Connecting\u2026", running: "Connecting\u2026",
+        collect: "Reading " + fmtNum(totalComments()) + " comments",
+        brief: "Reading the brief\u2026", brief_pause: "Confirm the ideas before we label",
         classify: "Reading " + fmtNum(totalComments()) + " comments",
         emotion: "Reading " + fmtNum(totalComments()) + " comments",
         report: "Reading " + fmtNum(totalComments()) + " comments",
-      }[state.stage] || "Working…";
+      }[state.stage] || "Working\u2026";
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
-        : "You can leave the page — in this demo the run finishes in under a minute.";
+        : live
+          ? "You can leave the page - the analysis runs on the server."
+          : "You can leave the page - in this demo the run finishes in under a minute.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }
   }
 
   function renderBriefReview() {
-    const points = run.briefPointIds.map((id) => store.briefPoints.get(id)).filter(Boolean)
-      .sort((a, b) => a.order - b.order)
-      .map((p) => ({ ...p })); // local working copy; store untouched until Confirm
+    // Live: briefPoints come from run.briefPoints (server response).
+    // Demo: briefPoints come from store via run.briefPointIds.
+    const sourcePoints = live
+      ? (run.briefPoints || []).slice().sort((a, b) => a.order - b.order)
+      : run.briefPointIds.map((id) => store.briefPoints.get(id)).filter(Boolean)
+          .sort((a, b) => a.order - b.order);
+    const points = sourcePoints.map((p) => ({ ...p })); // local working copy
     briefEl.hidden = false;
 
     function paint() {
+      const addBtn = live ? "" : `<button class="add-line" type="button" id="bp-add">${ICONS.plusSm}<span>Add an idea</span></button>`;
+      const liveNote = live ? `<div class="panel-note" style="color:var(--quiet)">Ideas are fixed for this run. Exclude one to drop it.</div>` : "";
       briefEl.innerHTML = `
       <section class="card" aria-labelledby="brief-h" style="border-color:var(--pink-border);display:flex;flex-direction:column;gap:14px">
         <div style="display:flex;flex-direction:column;gap:4px">
           <h2 class="panel-title" id="brief-h" style="font-size:16px">Ideas we'll test for transfer</h2>
-          <div class="panel-note">Pulled from your brief. Edit, reorder, drop or add — these are what we look for in the comments. Nothing is saved until you confirm.</div>
+          <div class="panel-note">Pulled from your brief. ${live ? "Exclude ideas you don't want tested." : "Edit, reorder, drop or add - these are what we look for in the comments."} Nothing is saved until you confirm.</div>
+          ${liveNote}
         </div>
         <div class="brief-list">
-          ${points.map((p, i) => `
+          ${points.map((p, i) => {
+            const upDown = live ? "" : `
+                <button class="icon-btn" type="button" data-up="${i}" aria-label="Move idea ${i + 1} up" ${i === 0 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.upArr}</button>
+                <button class="icon-btn" type="button" data-down="${i}" aria-label="Move idea ${i + 1} down" ${i === points.length - 1 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.downArr}</button>`;
+            const delBtn = live ? "" : `<button class="icon-btn" type="button" data-del="${i}" aria-label="Delete idea ${i + 1}">${ICONS.x}</button>`;
+            return `
           <div class="brief-item ${p.included ? "" : "excluded"}" data-idx="${i}">
             <div class="top">
               <div class="fields">
                 <label class="sr-only" for="bp-label-${i}">Idea ${i + 1} label</label>
-                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" value="${esc(p.label)}">
+                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" value="${esc(p.label)}"${live ? " readonly" : ""}>
                 <label class="sr-only" for="bp-desc-${i}">Idea ${i + 1} description</label>
-                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" rows="2">${esc(p.description)}</textarea>
+                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" rows="2"${live ? " readonly" : ""}>${esc(p.description)}</textarea>
               </div>
               <div class="brief-tools">
-                <button class="icon-btn" type="button" data-up="${i}" aria-label="Move idea ${i + 1} up" ${i === 0 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.upArr}</button>
-                <button class="icon-btn" type="button" data-down="${i}" aria-label="Move idea ${i + 1} down" ${i === points.length - 1 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.downArr}</button>
-                <button class="icon-btn" type="button" data-del="${i}" aria-label="Delete idea ${i + 1}">${ICONS.x}</button>
+                ${upDown}
+                ${delBtn}
               </div>
             </div>
             <label class="switch">
@@ -1772,9 +1928,10 @@ async function renderRun(runId) {
               <span class="track" aria-hidden="true"></span>
               <span class="sw-label">${p.included ? "Included" : "Excluded"}</span>
             </label>
-          </div>`).join("")}
+          </div>`;
+          }).join("")}
         </div>
-        <button class="add-line" type="button" id="bp-add">${ICONS.plusSm}<span>Add an idea</span></button>
+        ${addBtn}
         <div class="field-error" id="bp-err" hidden></div>
         <div class="brief-foot">
           <button class="btn primary lg" type="button" id="bp-confirm">Confirm and continue</button>
@@ -1782,32 +1939,35 @@ async function renderRun(runId) {
         </div>
       </section>`;
 
-      briefEl.querySelectorAll("[data-f]").forEach((inp) => {
-        inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
-      });
       briefEl.querySelectorAll("[data-inc]").forEach((t) => {
         t.addEventListener("change", () => { points[Number(t.dataset.inc)].included = t.checked; paint(); });
       });
-      briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
-        const i = Number(b.dataset.up);
-        [points[i - 1], points[i]] = [points[i], points[i - 1]];
-        paint();
-      }));
-      briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
-        const i = Number(b.dataset.down);
-        [points[i + 1], points[i]] = [points[i], points[i + 1]];
-        paint();
-      }));
-      briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
-        points.splice(Number(b.dataset.del), 1);
-        paint();
-      }));
-      briefEl.querySelector("#bp-add").addEventListener("click", () => {
-        points.push({ id: uid(), label: "", description: "", included: true, order: points.length + 1 });
-        paint();
-        const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
-        if (last) last.focus();
-      });
+      if (!live) {
+        briefEl.querySelectorAll("[data-f]").forEach((inp) => {
+          inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
+        });
+        briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
+          const i = Number(b.dataset.up);
+          [points[i - 1], points[i]] = [points[i], points[i - 1]];
+          paint();
+        }));
+        briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
+          const i = Number(b.dataset.down);
+          [points[i + 1], points[i]] = [points[i], points[i + 1]];
+          paint();
+        }));
+        briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+          points.splice(Number(b.dataset.del), 1);
+          paint();
+        }));
+        const addLine = briefEl.querySelector("#bp-add");
+        if (addLine) addLine.addEventListener("click", () => {
+          points.push({ id: uid(), label: "", description: "", included: true, order: points.length + 1 });
+          paint();
+          const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
+          if (last) last.focus();
+        });
+      }
       briefEl.querySelector("#bp-confirm").addEventListener("click", async () => {
         const errEl = briefEl.querySelector("#bp-err");
         const payload = points.map((p, i) => ({ ...p, order: i + 1 }));
@@ -1829,21 +1989,33 @@ async function renderRun(runId) {
   function onEvent(e) {
     state.stage = e.stage;
     state.pct = e.pct;
-    state.detail = e.detail || {};
-    if (e.detail && e.detail.error) state.failed = e.detail.error;
+    // Live: detail is a string from adapter.py; parse it into an object.
+    // Demo: detail is already an object.
+    const parsedStr = (live && typeof e.detail === "string") ? parseDetailStr(e.detail) : null;
+    state.detail = parsedStr || (e.detail && typeof e.detail === "object" ? e.detail : {});
+
+    // Live: terminal failure comes as stage === "error" (not "failed").
+    if (e.stage === "error") {
+      state.failed = (live && typeof e.detail === "string" ? e.detail : null)
+        || (state.detail && state.detail.error) || e.message || "Run failed.";
+    }
     if (e.stage === "failed") { state.failed = state.failed || e.message; }
+    if (state.detail && state.detail.error) state.failed = state.detail.error;
     if (e.stage === "complete") { state.completed = true; }
 
     const stepIdx = STAGE_TO_STEP[e.stage];
     if (stepIdx >= 0) currentStep = Math.max(currentStep, stepIdx);
     if (e.stage === "complete") currentStep = 5;
 
-    if (e.detail) {
-      if (e.detail.labelled != null) cntLabelled.textContent = fmtNum(e.detail.labelled);
-      else if (state.completed) cntLabelled.textContent = fmtNum(totalComments());
-      if (currentStep >= 1) cntThemes.textContent = "7";
-      if (e.detail.other != null) cntOther.textContent = e.detail.other + "%";
-      else if (currentStep >= 3) cntOther.textContent = "6%";
+    if (state.detail) {
+      if (state.detail.labelled != null) cntLabelled.textContent = fmtNum(state.detail.labelled);
+      else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
+      else if (live) cntLabelled.textContent = "—";
+      if (state.detail.themes != null) cntThemes.textContent = String(state.detail.themes);
+      else if (currentStep >= 1 && !live) cntThemes.textContent = "7";
+      if (state.detail.otherShare != null) cntOther.textContent = state.detail.otherShare.toFixed(1) + "%";
+      else if (state.detail.other != null) cntOther.textContent = state.detail.other + "%";
+      else if (currentStep >= 3 && !live) cntOther.textContent = "6%";
     }
 
     if (e.stage === "brief_pause" && !briefRendered) {
@@ -1886,12 +2058,14 @@ async function renderRun(runId) {
 
   const unsubscribe = demoApi.subscribeRun(runId, { onEvent, onDisconnect, onReconnect });
 
-  document.getElementById("demo-disconnect").addEventListener("click", () => {
-    demoApi.simulateDisconnect(runId);
-  });
-  document.getElementById("demo-fail").addEventListener("click", () => {
-    demoApi.simulateFailure(runId);
-  });
+  if (!live) {
+    document.getElementById("demo-disconnect").addEventListener("click", () => {
+      demoApi.simulateDisconnect(runId);
+    });
+    document.getElementById("demo-fail").addEventListener("click", () => {
+      demoApi.simulateFailure(runId);
+    });
+  }
 
   routeCleanup = () => {
     unsubscribe();
@@ -1913,11 +2087,22 @@ function closeEvidenceDrawer() {
 
 function openEvidenceDrawer(report, metric, originEl) {
   closeEvidenceDrawer();
+  const live = demoApi.mode === "live";
   const prevFocus = originEl || document.activeElement;
   const overlay = window.matchMedia("(max-width: 1179px)").matches;
   const host = overlay ? overlayRoot : view.querySelector(".report-layout");
 
-  const root = document.createElement(overlay ? "div" : "div");
+  // Live: derive emotion pills from unique emotion labels in report.evidence.
+  // Demo: fixed pills.
+  const emotionPills = live
+    ? [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
+        (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(em)}</button>`
+      ).join("")
+    : `<button class="pill sm" type="button" data-filter="Joy" aria-pressed="false">Joy</button>
+          <button class="pill sm" type="button" data-filter="Skeptical" aria-pressed="false">Skeptical</button>
+          <button class="pill sm" type="button" data-filter="Neutral" aria-pressed="false">Neutral</button>`;
+
+  const root = document.createElement("div");
   root.style.display = "contents";
   root.innerHTML = `
     ${overlay ? '<div class="ev-backdrop" data-ev-backdrop></div>' : ""}
@@ -1933,9 +2118,7 @@ function openEvidenceDrawer(report, metric, originEl) {
         </div>
         <div class="pill-row" role="group" aria-label="Evidence filters">
           <button class="pill sm active" type="button" data-filter="All" aria-pressed="true">All</button>
-          <button class="pill sm" type="button" data-filter="Joy" aria-pressed="false">Joy</button>
-          <button class="pill sm" type="button" data-filter="Skeptical" aria-pressed="false">Skeptical</button>
-          <button class="pill sm" type="button" data-filter="Neutral" aria-pressed="false">Neutral</button>
+          ${emotionPills}
           <button class="pill sm" type="button" data-filter="Most liked" aria-pressed="false">Most liked</button>
         </div>
       </div>
@@ -1952,13 +2135,20 @@ function openEvidenceDrawer(report, metric, originEl) {
     if (filter === "Most liked") list.sort((a, b) => b.likes - a.likes);
     else if (filter !== "All") list = list.filter((e) => e.emotion === filter);
     body.innerHTML = list.length
-      ? list.map((e) => `
+      ? list.map((e) => {
+          // Live: no author field; meta is "emotion · likes" with sentiment when present.
+          // Demo: "emotion · author · likes".
+          const meta = live
+            ? esc(e.emotion) + " · " + fmtNum(e.likes) + " likes" + (e.sentiment ? " · " + esc(e.sentiment) : "")
+            : esc(e.emotion) + " · " + esc(e.author) + " · " + fmtNum(e.likes) + " likes";
+          return `
         <div class="ev-card">
           <div class="ev-text">${esc(e.text)}</div>
-          <div class="ev-meta">${esc(e.emotion)} · ${esc(e.author)} · ${fmtNum(e.likes)} likes</div>
-        </div>`).join("")
-        + `<div class="ev-count">Showing ${list.length} of ${fmtNum(metric.evidenceCount)} labelled comments. Fixture evidence in this demo.</div>`
-      : `<div class="ev-empty">No comments match this filter for “${esc(metric.label)}”. Try another filter.</div>`;
+          <div class="ev-meta">${meta}</div>
+        </div>`;
+        }).join("")
+        + `<div class="ev-count">Showing ${list.length} of ${fmtNum(metric.evidenceCount)} labelled comments.${live ? " Full list in comments.csv." : " Fixture evidence in this demo."}</div>`
+      : `<div class="ev-empty">No comments match this filter for "${esc(metric.label)}". Try another filter.</div>`;
   }
 
   root.querySelectorAll("[data-filter]").forEach((b) => {
@@ -1995,6 +2185,7 @@ function openEvidenceDrawer(report, metric, originEl) {
 
 async function renderResults(runId) {
   setSidebarActive("sessions");
+  const live = demoApi.mode === "live";
   let report;
   try {
     report = await demoApi.getReport(runId);
@@ -2013,15 +2204,22 @@ async function renderResults(runId) {
   }
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
-  const campaign = store.campaigns.get(session.campaignIds[0]);
-  const artifacts = [...store.artifacts.values()].filter((a) => a.runId === runId);
-  const pdf = artifacts.find((a) => a.kind === "pdf");
+  const campaign = live
+    ? ((session.campaigns && session.campaigns[0]) || null)
+    : store.campaigns.get(session.campaignIds[0]);
+  const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
+  // Live: artifacts come from run.artifacts (present when status===complete).
+  // Demo: artifacts come from store.
+  const artifacts = live
+    ? (run.artifacts || [])
+    : [...store.artifacts.values()].filter((a) => a.runId === runId);
+  const pdf = artifacts.find((a) => a.kind === "pdf" || a.kind === "report_pdf");
   report._totalComments = session.commentCount || 8412;
 
   setTopbar(`
     <div class="topbar-left">
       <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaign ? campaign.id : ""}">${esc(session.name)}</a>
+        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
         <span class="sep">/</span>
         <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
         <span class="badge neutral">Complete</span>
@@ -2031,11 +2229,20 @@ async function renderResults(runId) {
       <button class="btn secondary" type="button" id="btn-pdf">Download PDF</button>
     </div>`);
 
-  document.getElementById("btn-pdf").addEventListener("click", () => {
-    if (pdf) downloadBlob(pdf.content, pdf.name, "application/pdf");
+  document.getElementById("btn-pdf").addEventListener("click", async () => {
+    if (!pdf) return;
+    if (live) {
+      const a = await demoApi.getArtifact(pdf.id);
+      downloadBlob(a.content, a.name, "application/pdf");
+    } else {
+      downloadBlob(pdf.content, pdf.name, "application/pdf");
+    }
   });
 
   const [line1, line2] = report.title.split("\n");
+  const metaLine = live
+    ? esc(report.subtitle)
+    : esc(report.subtitle) + " · fixture data";
   view.innerHTML = `
   <div class="report-layout">
     <div class="report-scroll">
@@ -2043,12 +2250,12 @@ async function renderResults(runId) {
         <div style="display:flex;flex-direction:column;gap:12px">
           <span class="kicker">STRATEGY NOTE · ${new Date(run.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</span>
           <h1>${esc(line1)}<br>${esc(line2 || "")}</h1>
-          <div class="meta">${esc(report.subtitle)} · fixture data</div>
+          <div class="meta">${metaLine}</div>
         </div>
 
         <div class="stat-block">
           <div><button class="big-stat" type="button" data-metric="overall">${report.overallTransfer}%</button></div>
-          <p class="explain">of comments echoed at least one idea from your brief — but most of those echoed the <strong>place</strong>, not the <strong>product</strong>. Click any number to read the comments behind it.</p>
+          <p class="explain">of comments echoed at least one idea from your brief. Click any number to read the comments behind it.</p>
         </div>
 
         <section class="chart" aria-labelledby="chart-transfer-h">
@@ -2126,11 +2333,12 @@ let filesFilter = "all";
 
 async function renderFiles() {
   setSidebarActive("files");
+  const live = demoApi.mode === "live";
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Files</span></div>
     <div class="topbar-right">
       ${disWrap(`<span class="searchbox" aria-disabled="true">${ICONS.search}<span>Search files</span></span>`,
-        "Search is not available in this local demo.")}
+        live ? "Search is not available." : "Search is not available in this local demo.")}
     </div>`);
 
   const files = await demoApi.listFiles();
@@ -2138,7 +2346,7 @@ async function renderFiles() {
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
   const rows = shown.map((f) => {
-    const campaign = store.campaigns.get(f.campaignId);
+    const campaign = (f.campaignName ? { name: f.campaignName } : store.campaigns.get(f.campaignId)) || null;
     const isArtifact = f._file === "artifact";
     const ext = isArtifact ? (f.kind === "pdf" ? "PDF" : "CSV")
       : f.kind === "article" ? null : (f.name.split(".").pop() || "").toUpperCase().slice(0, 4);
@@ -2169,7 +2377,7 @@ async function renderFiles() {
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
         <h2 class="greeting">Files</h2>
-        <div class="greeting-sub">Everything you gave us, and everything we made — across all sessions in this demo run.</div>
+        <div class="greeting-sub">Everything you gave us, and everything we made — across all sessions${live ? "" : " in this demo run"}.</div>
       </div>
       <div class="pill-row" role="group" aria-label="File filters">
         <button class="pill ${filesFilter === "all" ? "active" : ""}" type="button" data-ff="all" aria-pressed="${filesFilter === "all"}">All</button>
@@ -2205,7 +2413,7 @@ async function renderFiles() {
         downloadBlob(a.content, a.name, a.kind === "pdf" ? "application/pdf" : "text/csv");
       } else {
         const blob = await demoApi.getAssetData(b.dataset.dlFile);
-        const a = store.assets.get(b.dataset.dlFile);
+        const a = live ? f : store.assets.get(b.dataset.dlFile);
         if (blob && a) downloadBlob(blob, a.name, a.mimeType);
         else if (a && a.sourceUrl) window.open(a.sourceUrl, "_blank", "noopener");
       }
@@ -2216,10 +2424,10 @@ async function renderFiles() {
       if (b.dataset.kind === "artifact") {
         const a = await demoApi.getArtifact(b.dataset.open);
         const url = URL.createObjectURL(new Blob([a.content], { type: "application/pdf" }));
-        openModal(a.name + " (demo data)", `<iframe src="${url}" title="Preview of ${esc(a.name)}"></iframe>`, url);
+        openModal(a.name + (live ? "" : " (demo data)"), `<iframe src="${url}" title="Preview of ${esc(a.name)}"></iframe>`, url);
       } else {
         const blob = await demoApi.getAssetData(b.dataset.open);
-        const a = store.assets.get(b.dataset.open);
+        const a = live ? f : store.assets.get(b.dataset.open);
         if (blob && a) {
           const url = URL.createObjectURL(blob);
           openModal(a.name, `<img src="${url}" alt="Preview of ${esc(a.name)}">`, url);
@@ -2265,6 +2473,23 @@ document.addEventListener("keydown", (e) => {
 });
 // Only boot the UI when the app shell is mounted. self-check.html loads this
 // file for the store/demoApi assertions but has no #view/#topbar shell.
-if (view && topbar && overlayRoot) route();
+if (view && topbar && overlayRoot) {
+  // Mode probe: live when __liveApi exists AND GET /api/sessions succeeds within 1200ms.
+  // self-check.html has no shell elements so this block never runs there.
+  (async function resolveMode() {
+    if (window.__liveApi) {
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 1200);
+        const resp = await fetch("/api/sessions", { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (resp.ok) demoApi.mode = "live";
+      } catch { /* network error or timeout: stay demo */ }
+    }
+    route();
+  })();
+} else {
+  // self-check.html path: no probe, no route.
+}
 
 })();

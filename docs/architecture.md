@@ -15,7 +15,7 @@ There are three things in this repo, each with its own scope:
 
 1. **Pipeline** (`run.py`, `pipeline/`) - the CLI. YouTube URLs in, report out. This is the only real analysis engine.
 2. **Backend** (`server.py`, `db.py`, `storage.py`, `assets.py`, `adapter.py`) - a FastAPI wrapper that exposes the pipeline over HTTP with sessions, campaigns, uploads, and a run lifecycle.
-3. **Frontend** (`app/`) - a single-page vanilla JS demo. It runs entirely against an in-memory fixture layer and does not yet call the backend, whether or not the server is running. Wiring it to the API is a later phase.
+3. **Frontend** (`app/`) - a single-page vanilla JS app. It runs in live mode when served by `server.py` (real fetch calls to the backend) and in demo mode otherwise (in-memory fixture store). `self-check.html` always runs in demo mode.
 
 The pipeline can be used alone via `python run.py`. The backend wraps it. The frontend is the user-facing surface.
 
@@ -188,42 +188,61 @@ Single-page vanilla app. No framework, no build step.
 
 Targets desktop and tablet (768 px and wider).
 
-The frontend is still fixture-only and does not yet call the backend. Wiring `demoApi` bodies to real fetch calls is a later phase.
+### Live and demo modes
 
-### Fixture layer and the backend swap
+The frontend runs in one of two modes, resolved once at boot:
 
-`app/app.js` reads and writes through a single object called `demoApi`. Every method is async and returns copies of store data. When the backend is running, each method should be replaced with a `fetch` call to the corresponding route; the method signatures stay the same so call sites do not change.
+- **Live**: `server.py` is serving the app at `http://localhost:8000/`. Every `demoApi` call is a real `fetch` to the backend. The run screen is driven by SSE.
+- **Demo**: the backend is unreachable, or `live.js` is not loaded. The in-memory fixture store and run engine handle all calls. `self-check.html` always runs in demo mode.
 
-The route map:
+Mode resolution:
+
+1. `app.js` checks for `window.__liveApi` (defined by `live.js`, which `index.html` loads before `app.js`).
+2. If present, and the shell elements (`#view`, `#topbar`, `#overlay-root`) exist, `app.js` probes `GET /api/sessions` with a 1200 ms `AbortController` timeout. Success selects live; any failure selects demo.
+3. `self-check.html` loads only `app.js`, never `live.js`, so it never probes and always tests the store in demo mode.
+4. `demoApi.mode` exposes `"live"` or `"demo"` for renderers.
+
+The probe requires no CORS middleware. Live mode is only reachable when the backend serves the app (same-origin). Serving standalone on a different port, or via `file://`, the fetch is cross-origin and the app falls back to demo.
+
+`window.__liveApi` is defined in `app/live.js` as an IIFE. It implements the same method signatures as `demoApi` using real `fetch` calls. `demoApi` delegates to it in live mode.
+
+### Fixture layer (demo mode)
+
+The fixture store and run engine in `app/app.js` back all `demoApi` calls in demo mode. The store is in-memory. The run engine simulates the pipeline lifecycle with fixed timing: `connecting` -> `collect` -> `brief` -> `brief_pause`, waits for `proceedRun`, then `classify` -> `emotion` -> `report` -> `complete`.
+
+### Route map
 
 | `demoApi` method | Target route |
 |---|---|
 | `listSessions` | `GET /api/sessions` |
 | `getSession` | `GET /api/sessions/{id}` |
 | `createSession` | `POST /api/sessions` then `POST /api/sessions/{id}/campaigns` then `POST /api/campaigns/{id}/videos` |
-| `getCampaign` | `GET /api/sessions/{id}/campaigns` (single) |
+| `getCampaign` | list sessions, find session by `campaignIds`, then `GET /api/sessions/{id}` |
 | `addVideo` | `POST /api/campaigns/{id}/videos` |
 | `removeVideo` | `DELETE /api/videos/{id}` |
 | `uploadAsset` | `POST /api/campaigns/{id}/assets/upload` |
 | `addArticle` | `POST /api/campaigns/{id}/assets/article` |
 | `removeAsset` | `DELETE /api/assets/{id}` |
+| `getAssetData` | `GET /api/assets/{id}/file` (blob); `null` for article assets |
 | `startRun` | `POST /api/sessions/{id}/runs` |
 | `getRun` | `GET /api/runs/{id}` |
+| `getRunningRun` | `GET /api/sessions/{id}` - returns `latestRun` when status is `queued` or `running`, else `null` |
 | `subscribeRun` | `GET /api/runs/{id}/events` (SSE) |
 | `updateBriefPoints` | `PATCH /api/runs/{id}/brief_points` |
 | `proceedRun` | `POST /api/runs/{id}/proceed` |
 | `getReport` | `GET /api/runs/{id}/report` |
-| `getArtifact` | `GET /api/runs/{id}/artifacts/{artifact_id}` |
-| `listFiles` | composed client-side from artifacts and assets |
-| `getAssetData`, `getRunningRun` | demo-only store accessors |
-| `setKeyVisual` | frontend-only stub; no backing route yet |
-| `simulateDisconnect`, `simulateFailure` | demo-only, no backend equivalent |
+| `getArtifact` | `GET /api/runs/{id}/artifacts/{artifact_id}` (blob) |
+| `listFiles` | composed client-side from all sessions' assets and complete runs' artifacts |
+| `setKeyVisual` | demo-only; no backing route (key-visual selection is deferred) |
+| `simulateDisconnect`, `simulateFailure` | demo-only; no backend equivalent |
 
 ### Run engine (demo mode)
 
-In fixture mode the run engine holds all the timing. `startRun` mints a fresh run id. Flow: `connecting` -> `collect` -> `brief` -> `brief_pause`, wait for `proceedRun`, then `classify` -> `emotion` -> `report` -> `complete`.
+In demo mode the run engine holds all the timing. `startRun` mints a fresh run id. Flow: `connecting` -> `collect` -> `brief` -> `brief_pause`, waits for `proceedRun`, then `classify` -> `emotion` -> `report` -> `complete`.
 
-The report and its artifacts are created only at `complete`. `subscribeRun` returns an unsubscribe function and guards against duplicate timers and listeners. `Run.stage` mostly matches the SSE stages so swapping in `EventSource` is mechanical, but two values differ: the demo adds a `connecting` stage before `collect` (SSE starts directly at `collect`), and the demo's terminal failure stage is `failed` where SSE emits `error`. Account for both when wiring the real `EventSource` handler.
+The report and its artifacts are created only at `complete`. `subscribeRun` returns an unsubscribe function and guards against duplicate timers and listeners.
+
+Two stage values differ from the live SSE stream: the demo adds a `connecting` stage before `collect` (the SSE stream starts directly at `collect`), and the demo's terminal failure stage is `failed` where SSE emits `error`. Live mode maps `STAGE_TO_STEP` with `error` -> `-2` and `running` -> `-1`, and treats `stage === "error"` as failure.
 
 ### Screens
 
@@ -247,13 +266,33 @@ Playlists (`?list=...`) and duplicates within a campaign are rejected with a fie
 
 ### Mockup-vs-backend disconnects
 
-The mockup drew a finished product; the backend supports a subset. Every gap resolves one of four ways:
+The mockup drew a finished product; the backend supports a subset. Static resolutions apply in both modes. Live-mode resolutions apply only when `demoApi.mode === "live"`.
+
+**Static resolutions (both modes):**
 
 - **Disabled-and-visible**: Chat, global search, "Save as draft", source discovery, settings. Native `disabled`, out of tab order, with an explanatory note. Re-enable only when a backing route lands.
 - **Removed**: Cancel run, share, email notifications, lens controls.
-- **Frontend-only stub**: key-visual selection (no route yet), OCR note (uploads keep the file, no OCR happens).
+- **Frontend-only stub**: OCR note (uploads keep the file, no OCR happens).
 - **Corrected**: per-metric CSV export replaced with the full `comments.csv` link; upload types now match what the backend accepts (`.pdf`, `.pptx`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.webp`); background brief gone (backend and CLI both grounded-only now); one campaign per session enforced.
-- **Not yet wired**: the frontend fixture layer does not call the backend. Emotion label vocabulary in fixtures may not match the raw labels the HuggingFace models return. Both gaps remain open.
+
+**Live-mode resolutions:**
+
+| Gap | Live-mode resolution |
+|---|---|
+| Videos have no `title`/`channel`/`commentCount` in the API | Video row shows the pasted URL; the Short/Video tag derives from `parseYouTubeUrl(v.url).kind`. The "N comments available" line is removed. |
+| `setKeyVisual` has no route; `isKeyVisual` is always `false` | The key-visual toggle and its "Used as the key visual" sub-line are hidden. Image sub-line reads "image context at run time". |
+| Brief-point add/delete has no route; PATCH skips unknown ids | The "Add an idea" button and per-row delete are hidden. The review note adds: "Ideas are fixed for this run. Exclude one to drop it." |
+| SSE `detail` is a string, not an object | The stepper and rail counters parse the known detail strings; unparseable detail shows "-". No object access. |
+| SSE has no `connecting` stage; terminal stage is `error` | `STAGE_TO_STEP` maps `error` to `-2` and `running` to `-1`. `onEvent` treats `stage === "error"` as failure (`state.failed = e.detail || e.message`). |
+| `demoApi.getCampaign(id)` needs a session id | Live body: list sessions, find the one whose `campaignIds` includes `id`, then `GET /sessions/{sid}` and return `.campaigns.find(c => c.id === id)`. |
+| Report artifact blobs are not served | Live `getArtifact(id)` fetches the artifact route, returns `{...artifact, content: blob}`. Renderers keep calling `downloadBlob(a.content, ...)` unchanged. |
+| Uploaded file blobs are not served | Live `getAssetData(id)` fetches `GET /api/assets/{id}/file` and returns the blob. |
+| Evidence filter pills are fixture-specific (`Joy`/`Skeptical`/`Neutral`) | Live pills derive from the unique emotion labels in `report.evidence`, plus "Most liked". The demo keeps its fixed pills. |
+| `report.evidence` has `sentiment`, no `author` | The evidence card meta reads `emotion - likes`. `sentiment` shows when present. |
+| Overwrite semantics: a new run deletes prior results | Live "Run analysis" shows `window.confirm` when `session.status !== "ready"`: "A new run replaces this session's previous results. Continue?". Demo keeps its fresh-run behavior. |
+| Session list has no live progress bar | Live row shows the status pill and `latestRun.message`; no bar (the server does not persist `pct`). Demo keeps its bar. |
+| Article asset `name` is the raw URL | `assetRowHtml` displays host + " - article" when the name starts with `http`. |
+| Fixture-specific copy | Home, session list, run screen, evidence drawer, and OCR note drop "local demo" / "fixture data" phrasing in live mode. |
 
 Never make a disabled control silently do nothing. If a control cannot do what it looks like it does, it must be visibly disabled and explain why.
 
@@ -290,8 +329,8 @@ Never make a disabled control silently do nothing. If a control cannot do what i
 |---|---|
 | Article fetch hangs | 15 s httpx timeout; empty text on failure; run continues. |
 | pypdf empty on encrypted or scanned PDFs | Warning logged, empty text returned. OCR is out of scope. |
-| Fixture and backend contracts drift | Route map above is the mapping. Keep `demoApi` signatures stable when swapping bodies. |
-| Affect label vocabulary mismatch | Fixture layer uses placeholder labels; real model returns raw HuggingFace labels. Align when wiring the frontend. |
+| Fixture and live shapes drift | One dispatcher, one signature set. `self-check.html` pins the demo side; Task 7 E2E steps pin the live side. |
+| Affect label vocabulary mismatch | Live mode uses raw HuggingFace labels from `report.evidence`; emotion pills derive from those labels dynamically. Fixture labels are placeholders used only in demo mode. |
 
 ### Team-deployment seams
 
