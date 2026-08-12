@@ -8,7 +8,20 @@ campaign, so nothing is diluted.
 
 The call is grounded only: every claim is read from the transcripts and
 is checkable. No ungrounded background is generated or returned.
+
+Two more entry points sit on top of that grounded call, for the
+Session-level Key Messages the setup screen shows before any run:
+
+- draft_from_inputs(): draft from User Inputs alone (documents, article
+  text, uploaded images). No transcripts.
+- reconcile(): reconcile an existing ordered Key Message list against
+  transcripts at run time, preserving stable ids and manual edits.
+
+Both return plain KeyMessage-shaped dicts (id, label, description,
+included, order, edited); DB storage is the caller's job.
 """
+
+import uuid
 
 from pipeline import llm
 from pipeline.config_types import PipelineConfig
@@ -140,3 +153,159 @@ def run(meta_df, cfg: PipelineConfig, context_map=None,
         grounded.append("\n".join(lines))
 
     return ("\n\n".join(grounded), points)
+
+
+# ---------------------------------------------------------------------------
+# Session-level Key Messages: draft from User Inputs, reconcile at run time
+# ---------------------------------------------------------------------------
+#
+# `run()` above produces (grounded_markdown, points) keyed by group/video_id,
+# for the per-comment classification step. The two entry points below
+# produce the separate KeyMessage shape the setup screen stores and edits:
+# {id, label, description, included, order, edited}. Neither touches the
+# DB; the caller (server.py, later) is responsible for storage.
+
+INPUTS_PROMPT = """Read the material a campaign owner supplied about their \
+own campaign (documents, article text, and any image observations below).
+
+MATERIAL:
+{material}
+
+Identify the key messages this material puts forward: the claims, \
+features, and positioning it wants an audience to take away. Use only \
+what is written or shown above; do not add anything from general \
+knowledge.
+
+Return JSON:
+{{
+  "summary": "one sentence on what this material is",
+  "points": [
+    {{
+      "label": "short name for the message, 3 to 6 words",
+      "video_id": "material",
+      "description": "one sentence on what the material says about it"
+    }}
+  ]
+}}
+
+Give 3 to 8 points, ordered by how central they are."""
+
+
+def _key_message(label, description, *, included=True, order=0, edited=False,
+                 id_factory=uuid.uuid4):
+    return {
+        "id": str(id_factory()),
+        "label": label,
+        "description": description,
+        "included": included,
+        "order": order,
+        "edited": edited,
+    }
+
+
+def draft_from_inputs(text, images, cfg: PipelineConfig, *, id_factory=uuid.uuid4):
+    """
+    Draft Key Messages from User Inputs alone: document/article text plus
+    uploaded images. No transcripts, no background or model-memory
+    grounding.
+
+    `text` is the combined document/article text (str, may be empty).
+    `images` is a list of (bytes, mime_type) tuples, as llm.ask_json
+    expects; may be empty.
+
+    Returns a list of KeyMessage dicts. Empty input (no text, no images)
+    returns [] without calling the model.
+    """
+    text = str(text or "").strip()
+    images = list(images or [])
+    if not text and not images:
+        return []
+
+    material_parts = [text] if text else []
+    images_submitted = bool(images)
+    try:
+        if images:
+            observations = llm.extract_image_context(images, cfg)
+            material_parts.append("IMAGE OBSERVATIONS:\n" + str(observations))
+    finally:
+        if images_submitted:
+            try:
+                llm.unload(cfg.VISION_MODEL, cfg)
+            except Exception:
+                pass
+
+    material = "\n\n".join(material_parts)
+    result = llm.ask_json(
+        INPUTS_PROMPT.format(material=material[:80000]),
+        cfg, schema=llm.BRIEF_SCHEMA, validation=llm.validate_brief,
+        num_predict=3072)
+
+    return [
+        _key_message(point["label"], point.get("description", ""),
+                     order=order, id_factory=id_factory)
+        for order, point in enumerate(result.get("points", []))
+    ]
+
+
+def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
+              images_map=None, *, id_factory=uuid.uuid4):
+    """
+    Reconcile an existing ordered Key Message list against transcripts at
+    run time.
+
+    `existing` is the current ordered list of KeyMessage dicts (possibly
+    empty, e.g. a Session with no User Inputs). Entries marked
+    `edited=True` are kept exactly as given. Unedited existing entries
+    that match a transcript-derived label (case-insensitively) keep their
+    stable id but take the freshly-grounded description. Transcript-only
+    labels are appended as new entries via `id_factory`. Existing entries
+    with no transcript match are kept as-is (nothing here re-grounds or
+    drops a message the model didn't happen to re-derive).
+
+    If `existing` is empty, the transcript-derived points become the
+    initial list. If there is neither an existing list nor any
+    transcript-derived points, returns [].
+
+    Returns a list of KeyMessage dicts in stable order: existing entries
+    first (in their given order), then new transcript-only additions.
+    """
+    existing = list(existing or [])
+    _, points = run(meta_df, cfg, context_map=context_map, images_map=images_map)
+
+    derived = []
+    seen_labels = set()
+    for point in points:
+        label = point["label"]
+        key = label.strip().lower()
+        if key in seen_labels:
+            continue
+        seen_labels.add(key)
+        derived.append({"label": label, "description": point.get("description", "")})
+
+    derived_by_key = {item["label"].strip().lower(): item for item in derived}
+    matched_keys = set()
+
+    reconciled = []
+    for entry in existing:
+        entry = dict(entry)
+        if not entry.get("edited"):
+            match = derived_by_key.get(str(entry.get("label", "")).strip().lower())
+            if match is not None:
+                entry["description"] = match["description"]
+                matched_keys.add(str(entry.get("label", "")).strip().lower())
+        reconciled.append(entry)
+
+    next_order = len(reconciled)
+    for item in derived:
+        key = item["label"].strip().lower()
+        if key in matched_keys or key in {
+            str(e.get("label", "")).strip().lower() for e in existing
+        }:
+            continue
+        reconciled.append(_key_message(item["label"], item["description"],
+                                       order=next_order, id_factory=id_factory))
+        next_order += 1
+
+    for order, entry in enumerate(reconciled):
+        entry["order"] = order
+    return reconciled

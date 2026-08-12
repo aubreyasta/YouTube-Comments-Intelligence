@@ -13,6 +13,11 @@ from urllib import error, parse, request
 
 from pipeline.config_types import PipelineConfig
 
+# Exported so tests/bench_qwen.py's text-only preflight doesn't duplicate
+# this floor; that script cannot call preflight() itself since it also
+# requires VISION_MODEL, which bench_qwen.py never loads.
+MIN_OLLAMA_VERSION = (0, 12, 7)
+
 
 class OllamaError(RuntimeError):
     """Base class for safe Ollama boundary errors."""
@@ -348,8 +353,8 @@ def preflight(cfg: PipelineConfig) -> None:
     match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", version)
     if not match:
         raise OllamaResponseError("Ollama version response is invalid.")
-    if tuple(map(int, match.groups())) < (0, 12, 7):
-        raise OllamaError(f"Ollama 0.12.7 or newer is required; found {version}.")
+    if tuple(map(int, match.groups())) < MIN_OLLAMA_VERSION:
+        raise OllamaError(f"Ollama {'.'.join(map(str, MIN_OLLAMA_VERSION))} or newer is required; found {version}.")
     models = _call(cfg, "GET", "/api/tags").get("models")
     if not isinstance(models, list):
         raise OllamaResponseError("Ollama tags response is invalid.")

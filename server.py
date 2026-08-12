@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ import assets
 import db
 import storage
 import adapter
+from pipeline import brief as pipeline_brief
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -517,6 +519,246 @@ def get_session(session_id: str):
 
 
 # ---------------------------------------------------------------------------
+# /api/sessions/{id}/key_messages/draft - concurrency control
+# ---------------------------------------------------------------------------
+#
+# At most one active draft per session. A request arriving while a draft
+# is in flight for the same session does not spawn a second model call:
+# it flags one coalesced rerun (covering every asset saved up to that
+# point) and waits for it, then returns that rerun's result. Any number
+# of concurrent latecomers share the same wait and the same rerun.
+#
+# Three dicts, one lock, keyed by session_id - same shape as adapter.py's
+# _queues/_proceed_events/_lock for per-run state. No thread is ever
+# spawned here: the thread that first acquires a session's lock (an
+# existing FastAPI threadpool thread, not a new one) runs the draft pass,
+# and loops to run one more pass in place if a rerun was requested while
+# it worked. Latecomer threads only ever wait; they never draft.
+
+_draft_locks: dict[str, threading.Lock] = {}
+_draft_rerun_requested: dict[str, bool] = {}
+_draft_done_events: dict[str, threading.Event] = {}
+_draft_state_lock = threading.Lock()
+
+
+def _get_draft_lock(session_id: str) -> threading.Lock:
+    with _draft_state_lock:
+        if session_id not in _draft_locks:
+            _draft_locks[session_id] = threading.Lock()
+        return _draft_locks[session_id]
+
+
+# ---------------------------------------------------------------------------
+# /api/sessions/{id}/key_messages/draft - input loading
+# ---------------------------------------------------------------------------
+
+def _load_draft_inputs(session_id: str, conn) -> tuple[str, list[tuple[bytes, str]], dict | None]:
+    """Return (text, images, campaign) from every persisted User Input on
+    this Session's campaign. A Session with no campaign yet (setup not
+    started) has no inputs: ("", [], None).
+
+    text concatenates every asset's extracted/fetched text (documents,
+    articles). images is capped at 6 and skips files over 5 MB, matching
+    adapter.py's run-time image collection (docs/architecture.md, User
+    Inputs section). campaign is returned alongside so the caller can
+    build a PipelineConfig without a second query.
+    """
+    camp = conn.execute(
+        "SELECT * FROM campaigns WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if camp is None:
+        return "", [], None
+    camp = dict(camp)
+
+    asset_rows = conn.execute(
+        "SELECT * FROM assets WHERE campaign_id = ?", (camp["id"],)
+    ).fetchall()
+
+    text_parts = []
+    images: list[tuple[bytes, str]] = []
+    for a in asset_rows:
+        if a["text"]:
+            text_parts.append(a["text"])
+        if a["kind"] == "image" and len(images) < 6:
+            fp = a["file_path"]
+            if fp and os.path.isfile(fp):
+                try:
+                    if os.path.getsize(fp) <= 5 * 1024 * 1024:
+                        with open(fp, "rb") as fh:
+                            images.append((fh.read(), _mime_from_kind("image", a["filename"])))
+                except OSError:
+                    pass  # unreadable file - skip silently, same as adapter.py
+
+    return "\n\n".join(text_parts), images, camp
+
+
+# ---------------------------------------------------------------------------
+# /api/sessions/{id}/key_messages/draft - proposal merge
+# ---------------------------------------------------------------------------
+
+def _merge_key_messages(existing: list[dict], proposals: list[dict]) -> list[dict]:
+    """Merge fresh model proposals into the current Key Message list.
+
+    Rules (CHANGELOG "Draft Key Messages"):
+    - A match is case-insensitive, whitespace-normalized label equality
+      between an existing row and a proposal.
+    - An edited existing row survives verbatim (label, description,
+      included, order) whether or not a proposal matches it.
+    - An unedited existing row is replaced by the matching proposal's
+      label/description if one matches (its included/order survive, per
+      "preserve manual included/order values"); it is dropped if no
+      proposal matches, since unedited rows are exactly the ones a fresh
+      draft is allowed to replace.
+    - A proposal that matches no existing row is appended as new,
+      unedited, included, ordered after everything kept.
+
+    Returns KeyMessage-shaped dicts (id, label, description, included,
+    order, edited), ready to persist as key_messages rows.
+    """
+    def norm(label: str) -> str:
+        return (label or "").strip().lower()
+
+    def as_key_message(row: dict) -> dict:
+        """Normalize a key_messages DB row (sort_order/int flags) to the
+        KeyMessage shape (order/bool flags) this function works in."""
+        return {
+            "id": row["id"],
+            "label": row["label"],
+            "description": row.get("description", ""),
+            "included": bool(row["included"]),
+            "order": row["sort_order"],
+            "edited": bool(row["edited"]),
+        }
+
+    proposals_by_key: dict[str, dict] = {}
+    for p in proposals:
+        key = norm(p["label"])
+        proposals_by_key.setdefault(key, p)  # first occurrence wins - most central
+
+    matched_keys = set()
+    kept = []
+    for row in existing:
+        entry = as_key_message(row)
+        key = norm(entry["label"])
+        if entry["edited"]:
+            kept.append(entry)
+            if key in proposals_by_key:
+                matched_keys.add(key)
+            continue
+        proposal = proposals_by_key.get(key)
+        if proposal is None:
+            continue  # unedited and not reconfirmed by the latest draft - drop
+        matched_keys.add(key)
+        kept.append({
+            **entry,
+            "label": proposal["label"],
+            "description": proposal.get("description", ""),
+        })
+
+    next_order = max((r["order"] for r in kept), default=-1) + 1
+    for p in proposals:
+        key = norm(p["label"])
+        if key in matched_keys:
+            continue
+        matched_keys.add(key)
+        kept.append({
+            "id": str(uuid.uuid4()),
+            "label": p["label"],
+            "description": p.get("description", ""),
+            "included": True,
+            "order": next_order,
+            "edited": False,
+        })
+        next_order += 1
+
+    return kept
+
+
+# ---------------------------------------------------------------------------
+# /api/sessions/{id}/key_messages/draft - one drafting pass
+# ---------------------------------------------------------------------------
+
+def _run_one_draft_pass(session_id: str) -> None:
+    """Draft once against the latest persisted assets and persist the
+    result atomically. Never raises: a model failure is recorded as a
+    status/error update, not an exception.
+
+    Guards every write with `WHERE key_messages_revision = expected`, so
+    a write from a superseded pass can never clobber a newer one - see
+    CHANGELOG "Increment/use session revision to prevent obsolete
+    results overwriting newer requests." Passes for one session are
+    already serialized by the caller's lock, so this is a defensive
+    no-op today, not a substitute for that lock.
+    """
+    conn = db.get_conn()
+    try:
+        session_row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if session_row is None:
+            return  # session deleted mid-flight; nothing to draft
+        expected_revision = session_row["key_messages_revision"]
+
+        existing = [dict(r) for r in conn.execute(
+            "SELECT * FROM key_messages WHERE session_id = ? ORDER BY sort_order",
+            (session_id,)
+        ).fetchall()]
+
+        text, images, camp = _load_draft_inputs(session_id, conn)
+    finally:
+        conn.close()
+
+    try:
+        cfg = adapter._build_config(
+            None, session_row, camp or {"name": session_row["name"]}, [], {})
+        proposals = pipeline_brief.draft_from_inputs(text, images, cfg)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        status = "stale" if existing else "failed"
+        conn = db.get_conn()
+        try:
+            conn.execute(
+                """UPDATE sessions
+                   SET key_messages_status = ?, key_messages_error = ?,
+                       key_messages_revision = key_messages_revision + 1, updated_at = ?
+                   WHERE id = ? AND key_messages_revision = ?""",
+                (status, error, _now(), session_id, expected_revision)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
+    merged = _merge_key_messages(existing, proposals)
+    status = "ready" if merged else "empty"
+    conn = db.get_conn()
+    try:
+        result = conn.execute(
+            "UPDATE sessions SET key_messages_revision = key_messages_revision + 1 "
+            "WHERE id = ? AND key_messages_revision = ?",
+            (session_id, expected_revision)
+        )
+        if result.rowcount == 0:
+            return  # superseded by a newer pass between our read and this write
+        conn.execute("DELETE FROM key_messages WHERE session_id = ?", (session_id,))
+        for m in merged:
+            conn.execute(
+                """INSERT INTO key_messages
+                   (id, session_id, label, description, included, sort_order, edited)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (m["id"], session_id, m["label"], m["description"],
+                 int(m["included"]), m["order"], int(m["edited"]))
+            )
+        conn.execute(
+            "UPDATE sessions SET key_messages_status = ?, key_messages_error = NULL, "
+            "updated_at = ? WHERE id = ?",
+            (status, _now(), session_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages
 # ---------------------------------------------------------------------------
 
@@ -524,33 +766,42 @@ def get_session(session_id: str):
 def draft_key_messages(session_id: str):
     conn = db.get_conn()
     try:
+        if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
+            _404("Session not found.")
+    finally:
+        conn.close()
+
+    lock = _get_draft_lock(session_id)
+    if lock.acquire(blocking=False):
+        try:
+            while True:
+                _run_one_draft_pass(session_id)
+                with _draft_state_lock:
+                    rerun = _draft_rerun_requested.get(session_id, False)
+                    _draft_rerun_requested[session_id] = False
+                if not rerun:
+                    break
+        finally:
+            lock.release()
+            with _draft_state_lock:
+                ev = _draft_done_events.get(session_id)
+                _draft_done_events[session_id] = threading.Event()  # fresh for the next cycle
+            if ev is not None:
+                ev.set()
+    else:
+        # A draft is already active for this session. Ask it to run one
+        # more pass against whatever is persisted by the time it gets to
+        # it, and wait for that pass rather than starting a second one.
+        with _draft_state_lock:
+            _draft_rerun_requested[session_id] = True
+            ev = _draft_done_events.setdefault(session_id, threading.Event())
+        ev.wait()
+
+    conn = db.get_conn()
+    try:
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if row is None:
             _404("Session not found.")
-
-        # ponytail: pipeline integration seam, not a permanent behavior.
-        # A real draft needs pipeline.collect.fetch() (video transcripts)
-        # and pipeline.brief.run() (the grounded-only Key Message call).
-        # Today only adapter.py's run thread calls into pipeline/ (see
-        # docs/architecture.md); there is no synchronous draft-only entry
-        # point for this route to call. Rather than fabricate messages,
-        # mark the draft failed with a message that names the gap, and
-        # leave whatever messages already existed untouched - "keeps the
-        # previous draft if generation fails" per CHANGELOG.
-        error = ("Key Message drafting is not wired to the pipeline yet. "
-                 "Needs a draft-only entry point into collect.fetch() + "
-                 "brief.run() that a request can call synchronously, "
-                 "outside adapter.py's run thread.")
-        now = _now()
-        conn.execute(
-            """UPDATE sessions
-               SET key_messages_status = 'failed', key_messages_error = ?,
-                   key_messages_revision = key_messages_revision + 1, updated_at = ?
-               WHERE id = ?""",
-            (error, now, session_id)
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return _ser_key_message_draft(row, conn)
     finally:
         conn.close()

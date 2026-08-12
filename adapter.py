@@ -247,9 +247,14 @@ def _insert_artifact(run_id: str, kind: str, file_path: str) -> None:
 # Config builder
 # ---------------------------------------------------------------------------
 
-def _build_config(run_id: str, session_row: dict, campaign: dict,
+def _build_config(run_id: str | None, session_row: dict, campaign: dict,
                   videos: list[dict], campaign_context: dict) -> PipelineConfig:
-    """Build a PipelineConfig from DB rows and environment variables."""
+    """Build a PipelineConfig from DB rows and environment variables.
+
+    run_id=None skips creating data/runs/{run_id}/ on disk. Used by the
+    Key Message draft route (server.py), which calls draft_from_inputs()
+    directly and never writes run output files.
+    """
     return PipelineConfig(
         YOUTUBE_API_KEY=os.environ.get("YOUTUBE_API_KEY", ""),
         OLLAMA_BASE_URL=os.environ.get(
@@ -270,7 +275,7 @@ def _build_config(run_id: str, session_row: dict, campaign: dict,
             for v in videos
         ],
         SESSION_NAME=session_row["name"],
-        OUTPUT_DIR=storage.run_dir(run_id),
+        OUTPUT_DIR=storage.run_dir(run_id) if run_id else "",
         # brief.run() reads context_map directly, not cfg.CAMPAIGN_CONTEXT,
         # so this flattened string is only a fallback for other readers.
         CAMPAIGN_CONTEXT="\n\n".join(campaign_context.values()) if campaign_context else "",
