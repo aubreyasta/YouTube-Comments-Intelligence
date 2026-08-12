@@ -54,7 +54,7 @@ NUMBERS
 Theme mix per group (% of that group's comments):
 {themes}
 
-Signal transfer, did each idea the video pushed appear in the comments:
+Key Message mentions, did each idea the video pushed appear in the comments:
 {transfer}
 
 Emotion distribution:
@@ -70,7 +70,7 @@ Sample sizes:
 CANDIDATE QUOTES - verbatim. Quote ONLY from this list.
 Each line: [group | theme | emotion | echoed: ideas | N likes] "text"
 Use the labels to pick quotes that illustrate specific verdicts and themes.
-Verdicts in the signal-transfer table and glosses under quotes must derive
+Verdicts in the Key Message table and glosses under quotes must derive
 from what these labeled comments show, not from assumptions.
 =====================================================================
 {quotes}
@@ -99,7 +99,7 @@ Write "unverified" beside anything from the BACKGROUND section.]
 | Decision | Travelled? | How the audience handled it |
 |---|---|---|
 
-[One row per idea in the signal transfer table for this group, plus one
+[One row per idea in the Key Message table for this group, plus one
 final row for anything the audience raised loudly that the brand did not.
 Verdict must be exactly one of: {verdicts}. Third column: under 15 words,
 derived from what the labeled comments above actually show.]
@@ -164,6 +164,18 @@ RULES
 - Write in {language}."""
 
 
+def _is_true(value) -> bool:
+    """
+    Exact True check for a pt__ echo flag.
+
+    pt__ columns hold Python bool, numpy.bool_, or pd.NA (rows whose video
+    is not associated with that Key Message). `if value:` crashes on pd.NA
+    ("boolean value of NA is ambiguous"); this reads NA/None/NaN as not
+    echoed instead.
+    """
+    return False if pd.isna(value) else bool(value)
+
+
 def _quotes(df, cap=120):
     """
     Build a labeled comment pool for the model.
@@ -185,7 +197,7 @@ def _quotes(df, cap=120):
             # Collect echoed point labels for this row.
             echoed = []
             for c in pt_cols:
-                if row.get(c):
+                if _is_true(row.get(c)):
                     echoed.append(c[4:].replace("_", " "))
             echoed_str = (", ".join(echoed)) if echoed else "none"
             emotion = row.get("emotion", "")
@@ -214,7 +226,7 @@ def write(brief, themes, transfer, affect_result, df, cfg: PipelineConfig):
         quotes=_quotes(df),
         verdicts=VERDICTS,
         language=cfg.REPORT_LANGUAGE),
-        cfg)
+        cfg, num_predict=4096)
 
 
 # ==================================================================
@@ -525,7 +537,8 @@ def export(df, themes, transfer, affect_result, meta_df, out_dir):
     if signals:
         labels = {c: c[4:].replace("_", " ") for c in signals}
         out["echoed_ideas"] = out[signals].apply(
-            lambda row: "; ".join(labels[c] for c in signals if row[c]),
+            lambda row: "; ".join(labels[c] for c in signals
+                                  if _is_true(row[c])),
             axis=1)
 
     keep = [c for c in COLUMNS if c in out.columns]

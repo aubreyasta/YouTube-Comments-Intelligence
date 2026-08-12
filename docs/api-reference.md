@@ -409,7 +409,7 @@ Stages, in order:
 | `emotion` | 67-75 | Emotion and sentiment analysis (both models run under this stage name). |
 | `report` | 77-88 | PDF render and CSV export. |
 | `complete` | 100 | Run finished. |
-| `error` | 0 | Run failed. `detail` contains the exception string. |
+| `error` | 0 | Run failed. `detail` contains the exception string, including local Ollama preflight or model errors. There is no cloud fallback. |
 
 One additional `classify` event may appear at `pct` 60 with message `"Refining themes - high uncategorised count"`. It fires when the theme top-up pass runs because the uncategorised share exceeded the limit.
 

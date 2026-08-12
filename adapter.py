@@ -52,7 +52,6 @@ except ImportError:
 
 import db
 import storage
-import assets as assets_mod
 from pipeline import collect, brief, analyze, report as pipeline_report
 from pipeline import llm as pipeline_llm
 from pipeline.config_types import PipelineConfig
@@ -204,18 +203,6 @@ def _load_assets(campaign_id: str) -> list[dict]:
         conn.close()
 
 
-def _update_asset(asset_id: str, **cols) -> None:
-    set_clause = ", ".join(f"{k} = ?" for k in cols)
-    conn = db.get_conn()
-    try:
-        conn.execute(
-            f"UPDATE assets SET {set_clause} WHERE id = ?",
-            (*cols.values(), asset_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def _insert_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> None:
     """Insert one row per point. video_id is the YouTube ID string."""
     conn = db.get_conn()
@@ -265,8 +252,18 @@ def _build_config(run_id: str, session_row: dict, campaign: dict,
     """Build a PipelineConfig from DB rows and environment variables."""
     return PipelineConfig(
         YOUTUBE_API_KEY=os.environ.get("YOUTUBE_API_KEY", ""),
-        GEMINI_API_KEY=os.environ.get("GEMINI_API_KEY", ""),
-        MODEL=os.environ.get("GEMINI_MODEL") or "gemini-3-pro",
+        OLLAMA_BASE_URL=os.environ.get(
+            "OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        TEXT_MODEL=os.environ.get("OLLAMA_TEXT_MODEL", "qwen3:14b-q4_K_M"),
+        VISION_MODEL=os.environ.get(
+            "OLLAMA_VISION_MODEL", "qwen3-vl:8b-instruct-q4_K_M"),
+        OLLAMA_TEXT_NUM_CTX=int(os.environ.get(
+            "OLLAMA_TEXT_NUM_CTX", "32768")),
+        OLLAMA_VISION_NUM_CTX=int(os.environ.get(
+            "OLLAMA_VISION_NUM_CTX", "8192")),
+        OLLAMA_TIMEOUT_SECONDS=int(os.environ.get(
+            "OLLAMA_TIMEOUT_SECONDS", "600")),
+        OLLAMA_KEEP_ALIVE=os.environ.get("OLLAMA_KEEP_ALIVE", "10m"),
         VIDEOS=[
             {"url": v["url"], "group": campaign["name"],
              "kind": v.get("kind", "auto")}
@@ -274,9 +271,8 @@ def _build_config(run_id: str, session_row: dict, campaign: dict,
         ],
         SESSION_NAME=session_row["name"],
         OUTPUT_DIR=storage.run_dir(run_id),
-        # CAMPAIGN_CONTEXT is stored as a dict in adapter but the dataclass
-        # field is typed str; keep the dict here - pipeline uses context_map
-        # param directly, not cfg.CAMPAIGN_CONTEXT, so the str cast is fine.
+        # brief.run() reads context_map directly, not cfg.CAMPAIGN_CONTEXT,
+        # so this flattened string is only a fallback for other readers.
         CAMPAIGN_CONTEXT="\n\n".join(campaign_context.values()) if campaign_context else "",
         KEEP_LANGUAGES={"id", "ms", "en", "tl"},
         MIN_COMMENT_LETTERS=8,
@@ -409,7 +405,7 @@ GROUNDED BRIEF (from video transcripts - rely on this):
 THEME MIX (% of comments per theme):
 {themes}
 
-SIGNAL TRANSFER (% of comments echoing each idea the campaign put forward):
+KEY MESSAGE MENTIONS (% of comments mentioning each idea the campaign put forward):
 {transfer}
 
 EMOTION SUMMARY:
@@ -429,11 +425,29 @@ Return STRICT JSON with exactly these keys (no extra keys, no markdown):
 Write in English. No em dashes. Short declarative sentences."""
 
 
+def _validate_prose_with_quote_grounding(candidates: list[str]):
+    """
+    Wrap llm.validate_results_prose with candidate-quote grounding.
+
+    validate_results_prose only checks shape (nonempty strings in the
+    right places). The prose prompt requires the quote be copied verbatim
+    from the candidate pool shown to the model; that grounding is specific
+    to this caller's prompt contract, so it lives here rather than in the
+    shared pipeline/llm.py validator.
+    """
+    def _validate(value: object) -> object:
+        result = pipeline_llm.validate_results_prose(value)
+        if result["quote"]["text"] not in candidates:
+            raise ValueError("quote must be verbatim from the candidate quote pool")
+        return result
+    return _validate
+
+
 def _build_prose(grounded: str, transfer_table, base_df,
                  affect_result: dict, themes_json: list,
                  cfg: "PipelineConfig") -> dict:
     """
-    One structured Gemini call -> {title, interpretation, quote, caveat}.
+    One structured Qwen call -> {title, interpretation, quote, caveat}.
 
     Deviation note: AGENTS.md originally specified regex-parsing the markdown
     report for the prose fields. This implementation uses a direct ask_json
@@ -473,10 +487,10 @@ def _build_prose(grounded: str, transfer_table, base_df,
     )
 
     try:
-        result = pipeline_llm.ask_json(prompt, cfg)
-        # Validate required keys are present.
-        if not all(k in result for k in ("title", "interpretation", "quote", "caveat")):
-            raise ValueError("prose JSON missing required keys")
+        result = pipeline_llm.ask_json(
+            prompt[:80000], cfg, schema=pipeline_llm.RESULTS_PROSE_SCHEMA,
+            validation=_validate_prose_with_quote_grounding(top_quotes),
+            num_predict=2048)
         return result
     except Exception as exc:
         logger.warning("prose LLM call failed (%s), using deterministic fallback", exc)
@@ -491,9 +505,9 @@ def _prose_fallback(base_df, transfer_table, themes_json: list,
 
     if not transfer_table.empty:
         best = transfer_table.loc[transfer_table["echoed_pct"].idxmax()]
-        xfer_line = f"{best['point']}: {best['echoed_pct']:.0f}% of comments echoed it."
+        xfer_line = f"{best['point']}: {best['echoed_pct']:.0f}% of comments mentioned it."
     else:
-        xfer_line = "No transfer points measured."
+        xfer_line = "No Key Message mentions measured."
 
     # Pick the highest-liked comment as the quote.
     if n > 0:
@@ -509,11 +523,11 @@ def _prose_fallback(base_df, transfer_table, themes_json: list,
         f"The analysis base is {n:,} comments. "
         f"The dominant theme is {top_theme}.\n\n"
         f"{xfer_line}\n\n"
-        "Review the transfer and theme tables for the full breakdown."
+        "Review the Key Message and theme tables for the full breakdown."
     )
     caveat = (
         f"Results are based on {n:,} comments.\n"
-        "Low transfer means an idea did not arrive, not that it was rejected.\n"
+        "Few mentions mean an idea did not arrive, not that it was rejected.\n"
         f"{emotion_caveat}"
     )
 
@@ -647,6 +661,7 @@ def _execute(run_id: str) -> None:
     All exceptions are caught; the run always ends in 'complete' or 'failed'.
     """
     out_dir = storage.run_dir(run_id)
+    cfg = None
 
     try:
         # --- 1. Mark running ------------------------------------------------
@@ -661,29 +676,15 @@ def _execute(run_id: str) -> None:
         if not videos:
             raise ValueError("No videos in this campaign - cannot run.")
 
-        # --- 2. Asset extraction --------------------------------------------
-        _push(run_id, "collect", "Extracting assets", 2)
+        # --- 2. Asset context assembly ---------------------------------------
+        # Text extraction and article fetching happen at asset-creation time
+        # (server.py's upload/article routes), not here. This stage only
+        # assembles what was already extracted into the run's context.
+        _push(run_id, "collect", "Assembling asset context", 2)
         campaign_context_parts = []
         images_by_group: dict[str, list[tuple[bytes, str]]] = {}
 
         for asset in asset_rows:
-            if asset["kind"] != "article" and not asset.get("text"):
-                fp = asset.get("file_path", "")
-                if fp and os.path.isfile(fp):
-                    text = assets_mod.extract_upload(fp)
-                    if text:
-                        _update_asset(asset["id"], text=text)
-                        asset["text"] = text
-            elif asset["kind"] == "article" and not asset.get("text"):
-                url = asset.get("url", "")
-                if url:
-                    result = assets_mod.fetch_article(url)
-                    _update_asset(asset["id"],
-                                  text=result["text"],
-                                  title=result["title"],
-                                  retrieved_at=result["retrieved_at"])
-                    asset["text"] = result["text"]
-
             if asset.get("text"):
                 campaign_context_parts.append(asset["text"])
 
@@ -720,6 +721,7 @@ def _execute(run_id: str) -> None:
                             campaign_context)
 
         # --- 4. Collect -----------------------------------------------------
+        pipeline_llm.preflight(cfg)
         _push(run_id, "collect", "Fetching comments and transcripts", 5)
         comments_df, meta_df = collect.fetch(cfg)
         comments_df = collect.clean(comments_df, cfg)
@@ -772,7 +774,15 @@ def _execute(run_id: str) -> None:
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
               detail=f"{len(themes)} themes")
-        base_df, columns = analyze.classify(base_df, themes, classifier_points, cfg)
+        def classify_progress(completed, total):
+            pct = 50 + int(completed / max(total, 1) * 9)
+            _push(run_id, "classify",
+                  f"Classified batch {completed} of {total}", pct,
+                  detail=f"completed_batches={completed};total_batches={total}")
+
+        base_df, columns = analyze.classify(
+            base_df, themes, classifier_points, cfg,
+            on_progress=classify_progress)
         base_df, themes, other_share = analyze.extend(
             base_df, themes, classifier_points, summary_str, cfg,
             on_progress=lambda msg: _push(run_id, "classify", msg, 60))
@@ -781,10 +791,18 @@ def _execute(run_id: str) -> None:
               f"Classification complete - {other_share:.0f}% Other", 65,
               detail=f"other_share={other_share:.1f}")
 
-        # --- 9. Affect (emotion + sentiment) --------------------------------
+        # --- 9. Emotion and sentiment ---------------------------------------
+        # Best-effort: free VRAM before the HuggingFace models load. A
+        # failure here must not abort the run; final cleanup below still
+        # retries the unload.
+        try:
+            pipeline_llm.unload(cfg.TEXT_MODEL, cfg)
+        except Exception:
+            logger.warning("could not unload Ollama model %s before "
+                           "emotion/sentiment", cfg.TEXT_MODEL, exc_info=True)
         _push(run_id, "emotion", "Running emotion and sentiment analysis", 67)
         base_df, affect_result = analyze.affect(base_df, cfg)
-        _push(run_id, "emotion", "Affect analysis complete", 75,
+        _push(run_id, "emotion", "Emotion and sentiment analysis complete", 75,
               detail=affect_result.get("emotion", {}).get("caveat", ""))
 
         # --- 10. Report -----------------------------------------------------
@@ -841,3 +859,11 @@ def _execute(run_id: str) -> None:
         except Exception:
             pass
         _push(run_id, "error", "Run failed", 0, detail=err_str)
+    finally:
+        if cfg is not None:
+            for model in (cfg.VISION_MODEL, cfg.TEXT_MODEL):
+                try:
+                    pipeline_llm.unload(model, cfg)
+                except Exception:
+                    logger.warning("could not unload Ollama model %s", model,
+                                   exc_info=True)

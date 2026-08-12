@@ -1,203 +1,428 @@
-"""
-All model access, in one place.
-
-Swapping provider means editing this file and nothing else. Anything with
-an OpenAI-compatible endpoint drops in here.
-"""
+"""Local Ollama model boundary and strict structured-output contracts."""
 
 from __future__ import annotations
 
+import base64
+import ipaddress
 import json
 import re
+import socket
 import time
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from urllib import error, parse, request
 
-if TYPE_CHECKING:
-    from pipeline.config_types import PipelineConfig
-
-# ponytail: per-call client construction is fine for most workloads; this
-# dict cache avoids rebuilding the client on every call. Remove if profiling
-# shows no overhead, or replace with an LRU if multiple keys rotate.
-_clients: dict[str, object] = {}
+from pipeline.config_types import PipelineConfig
 
 
-def _get_client(cfg: PipelineConfig):
-    from google import genai
-    key = cfg.GEMINI_API_KEY
-    if key not in _clients:
-        _clients[key] = genai.Client(api_key=key)
-    return _clients[key]
+class OllamaError(RuntimeError):
+    """Base class for safe Ollama boundary errors."""
 
 
-def ask(prompt, cfg: PipelineConfig, grounded=False, retries=4, images=None):
-    """
-    Send a prompt, return the text.
-
-    grounded=True switches on Google Search so the model can look things
-    up and return sources. Grounding is metered separately and is not on
-    every tier, so it degrades to a plain call rather than failing.
-
-    images, if provided, is a list[tuple[bytes, str]] of (data, mime_type).
-    """
-    model = cfg.MODEL
-    client = _get_client(cfg)
-    settings = None
-
-    if grounded:
-        try:
-            from google.genai import types
-            settings = types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())])
-        except Exception:
-            grounded = False
-
-    if images:
-        from google.genai import types
-        contents = [prompt] + [
-            types.Part.from_bytes(data=b, mime_type=m) for b, m in images
-        ]
-    else:
-        contents = prompt
-
-    for attempt in range(retries):
-        try:
-            response = client.models.generate_content(
-                model=model, contents=contents, config=settings)
-            return response.text + _sources(response)
-        except Exception as error:
-            message = str(error)
-            if grounded and ("tool" in message.lower()
-                             or "search" in message.lower()):
-                print("      grounding unavailable, retrying without it")
-                grounded, settings = False, None
-                continue
-            # 429: rate limit. Back off rather than crashing.
-            if "429" in message or "RESOURCE_EXHAUSTED" in message:
-                wait = 2 ** attempt * 5
-                print(f"      rate limited, waiting {wait}s")
-                time.sleep(wait)
-                continue
-            raise
-    raise RuntimeError("Gave up after repeated rate limits")
+class OllamaConnectionError(OllamaError):
+    """Ollama could not be reached or returned a retryable HTTP error."""
 
 
-def _sources(response):
-    """Append any URLs the grounding metadata carried."""
-    urls = []
-    for candidate in getattr(response, "candidates", []) or []:
-        meta = getattr(candidate, "grounding_metadata", None)
-        for chunk in getattr(meta, "grounding_chunks", []) or []:
-            web = getattr(chunk, "web", None)
-            if web is not None and getattr(web, "uri", None):
-                urls.append(f"- {web.title or web.uri}: {web.uri}")
-    if not urls:
-        return ""
-    return "\n\n**Sources consulted:**\n" + "\n".join(dict.fromkeys(urls))
+class OllamaModelError(OllamaError):
+    """A configured model is missing or rejected the request."""
 
 
-def _repair(text):
-    """Fix the three ways models usually break JSON."""
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(),
-                  flags=re.MULTILINE).strip()
-    text = re.sub(r",\s*([}\]])", r"\1", text)          # trailing commas
-    # Literal newlines inside string values, the usual culprit.
-    text = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"',
-                  lambda m: m.group(0).replace("\n", "\\n").replace("\r", ""),
-                  text, flags=re.DOTALL)
-    return text
+class OllamaResponseError(OllamaError):
+    """Ollama returned an invalid, incomplete, or schema-invalid response."""
 
 
-def ask_json(prompt, cfg: PipelineConfig, retries=3, grounded=False,
-             images=None):
-    """
-    Ask for JSON and parse it. On a parse failure the broken output goes
-    back to the model to be fixed, which succeeds far more often than
-    re-asking from scratch.
+_STRING = {"type": "string", "minLength": 1}
+_THEME = {
+    "type": "object",
+    "properties": {"name": _STRING, "definition": _STRING},
+    "required": ["name", "definition"],
+    "additionalProperties": False,
+}
 
-    grounded=True is forwarded to ask() to enable Google Search on the call.
-    Degrades gracefully to a plain call if the tier does not support it.
-    """
-    raw = ask(prompt + "\n\nReturn ONLY valid JSON. No markdown fences, no "
-                       "commentary. Keep every string on a single line.",
-              cfg, grounded=grounded, images=images)
+IMAGE_OBSERVATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": _STRING,
+        "visible_text": {"type": "array", "items": {"type": "string"}},
+        "observations": {"type": "array", "items": _STRING, "minItems": 1},
+    },
+    "required": ["summary", "visible_text", "observations"],
+    "additionalProperties": False,
+}
 
-    for attempt in range(retries):
-        text = _repair(raw)
-        for candidate in (text, _outermost(text)):
-            if candidate:
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    pass
-        if attempt == retries - 1:
-            raise ValueError(f"Could not parse JSON.\nGot: {raw[:400]}")
-        print(f"      JSON parse failed, asking model to fix it")
-        raw = ask("This should be valid JSON but is not. Return only the "
-                  "corrected JSON.\n\n" + raw[:6000], cfg)
-
-
-def _outermost(text):
-    match = re.search(r"[\{\[].*[\}\]]", text, re.DOTALL)
-    return match.group(0) if match else None
-
-
-def classify_batch(prompt, theme_names, point_labels, cfg: PipelineConfig):
-    """
-    Classify a batch of comments against a fixed theme enum and a set of
-    brief points (signal transfer).
-
-    Returns a list of dicts:
-        [{"index": int, "theme": str, "echoed": [str, ...]}, ...]
-
-    "theme" is one of theme_names or "Other".
-    "echoed" is a subset of point_labels (may be empty).
-
-    Tries enum-constrained structured output first. On any exception
-    mentioning schema/response_schema/tool, degrades to ask_json so the
-    prompt text itself constrains the labels.
-    """
-    model = cfg.MODEL
-    client = _get_client(cfg)
-    all_themes = list(theme_names) + ["Other"]
-
-    # Build the response schema: array of {index, theme, echoed}.
-    schema = {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "index": {"type": "INTEGER"},
-                "theme": {"type": "STRING", "enum": all_themes},
-                "echoed": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING", "enum": list(point_labels)}
-                    if point_labels else {"type": "STRING"},
+BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": _STRING,
+        "points": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": _STRING,
+                    "video_id": _STRING,
+                    "description": _STRING,
                 },
+                "required": ["label", "video_id", "description"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "points"],
+    "additionalProperties": False,
+}
+
+THEME_DISCOVERY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "themes": {"type": "array", "items": _THEME, "minItems": 5, "maxItems": 8}
+    },
+    "required": ["themes"],
+    "additionalProperties": False,
+}
+
+EXTEND_THEME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "themes": {"type": "array", "items": _THEME, "maxItems": 4}
+    },
+    "required": ["themes"],
+    "additionalProperties": False,
+}
+
+RESULTS_PROSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": _STRING,
+        "interpretation": _STRING,
+        "quote": {
+            "type": "object",
+            "properties": {"text": _STRING, "attr": {"type": "string"}},
+            "required": ["text", "attr"],
+            "additionalProperties": False,
+        },
+        "caveat": _STRING,
+    },
+    "required": ["title", "interpretation", "quote", "caveat"],
+    "additionalProperties": False,
+}
+
+
+def classification_schema(theme_names: list[str], point_labels: list[str]) -> dict:
+    """Build the strict per-batch classification schema."""
+    themes = list(dict.fromkeys([*theme_names, "Other"]))
+    if point_labels:
+        echoed_schema = {"type": "array",
+                         "items": {"type": "string", "enum": list(point_labels)},
+                         "uniqueItems": True}
+    else:
+        # No Key Messages for this video: only the empty array is valid.
+        # `enum: []` on items would be impossible to satisfy for any
+        # non-empty array, which some structured-output engines reject or
+        # mishandle; maxItems: 0 says the same thing unambiguously.
+        echoed_schema = {"type": "array", "maxItems": 0}
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer"},
+                "theme": {"type": "string", "enum": themes},
+                "echoed": echoed_schema,
             },
             "required": ["index", "theme", "echoed"],
+            "additionalProperties": False,
         },
     }
 
-    for attempt in range(4):
-        try:
-            from google.genai import types
-            gcfg = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=schema)
-            response = client.models.generate_content(
-                model=model, contents=prompt, config=gcfg)
-            return json.loads(response.text)
-        except Exception as error:
-            message = str(error).lower()
-            if "429" in message or "resource_exhausted" in message:
-                wait = 2 ** attempt * 5
-                print(f"      rate limited, waiting {wait}s")
-                time.sleep(wait)
-                continue
-            # Schema not supported on this endpoint/tier - degrade gracefully.
-            if any(k in message for k in ("schema", "response_schema", "tool")):
-                print("      structured output unavailable, falling back to ask_json")
-                return ask_json(prompt, cfg)
-            raise
 
-    raise RuntimeError("Gave up after repeated rate limits")
+def _object(value: object, keys: set[str], name: str) -> dict:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError(f"{name} must contain exactly: {', '.join(sorted(keys))}")
+    return value
+
+
+def _text(value: object, name: str, *, empty: bool = False) -> str:
+    if not isinstance(value, str) or (not empty and not value.strip()):
+        raise ValueError(f"{name} must be a nonempty string")
+    return value
+
+
+def validate_image_observation(value: object) -> object:
+    item = _object(value, {"summary", "visible_text", "observations"}, "image observation")
+    _text(item["summary"], "summary")
+    for key, allow_empty in (("visible_text", True), ("observations", False)):
+        rows = item[key]
+        if not isinstance(rows, list) or (not allow_empty and not rows):
+            raise ValueError(f"{key} must be a {'nonempty ' if not allow_empty else ''}list")
+        for row in rows:
+            _text(row, key)
+    return item
+
+
+def validate_brief(value: object) -> object:
+    result = _object(value, {"summary", "points"}, "brief")
+    _text(result["summary"], "summary")
+    if not isinstance(result["points"], list):
+        raise ValueError("points must be a list")
+    for point in result["points"]:
+        point = _object(point, {"label", "video_id", "description"}, "brief point")
+        for key in point:
+            _text(point[key], key)
+    return result
+
+
+def _validate_themes(value: object, minimum: int, maximum: int) -> object:
+    result = _object(value, {"themes"}, "theme result")
+    themes = result["themes"]
+    if not isinstance(themes, list) or not minimum <= len(themes) <= maximum:
+        raise ValueError(f"themes must contain {minimum} to {maximum} entries")
+    names = []
+    for theme in themes:
+        theme = _object(theme, {"name", "definition"}, "theme")
+        names.append(_text(theme["name"], "theme name"))
+        _text(theme["definition"], "theme definition")
+    if len(names) != len(set(names)):
+        raise ValueError("theme names must be unique")
+    return result
+
+
+def validate_theme_discovery(value: object) -> object:
+    return _validate_themes(value, 5, 8)
+
+
+def validate_extend_themes(value: object) -> object:
+    return _validate_themes(value, 0, 4)
+
+
+def validate_results_prose(value: object) -> object:
+    result = _object(value, {"title", "interpretation", "quote", "caveat"}, "results prose")
+    for key in ("title", "interpretation", "caveat"):
+        _text(result[key], key)
+    quote = _object(result["quote"], {"text", "attr"}, "quote")
+    _text(quote["text"], "quote text")
+    _text(quote["attr"], "quote attribution", empty=True)
+    return result
+
+
+def validate_classification(value: object, expected_indices: list[int],
+                            theme_names: list[str], point_labels: list[str]) -> object:
+    if not isinstance(value, list):
+        raise ValueError("classification must be a list")
+    if any(isinstance(index, bool) or not isinstance(index, int) for index in expected_indices):
+        raise ValueError("expected indices must be integers, not booleans")
+    allowed_themes = {*theme_names, "Other"}
+    allowed_points = set(point_labels)
+    seen = []
+    for row in value:
+        row = _object(row, {"index", "theme", "echoed"}, "classification row")
+        index = row["index"]
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError("classification index must be an integer, not a boolean")
+        if not isinstance(row["theme"], str) or row["theme"] not in allowed_themes:
+            raise ValueError("classification contains an unknown theme")
+        echoed = row["echoed"]
+        if not isinstance(echoed, list) or any(not isinstance(label, str) for label in echoed):
+            raise ValueError("echoed must be a list of strings")
+        if len(echoed) != len(set(echoed)) or not set(echoed) <= allowed_points:
+            raise ValueError("echoed must contain unique allowed Key Message labels")
+        seen.append(index)
+    if len(seen) != len(set(seen)) or set(seen) != set(expected_indices) or len(seen) != len(expected_indices):
+        raise ValueError("classification indices must exactly cover the requested indices once")
+    return value
+
+
+def _validated_base_url(cfg: PipelineConfig) -> str:
+    if not isinstance(cfg.OLLAMA_BASE_URL, str):
+        raise ValueError("OLLAMA_BASE_URL must be a string")
+    url = parse.urlsplit(cfg.OLLAMA_BASE_URL)
+    if url.scheme != "http" or not url.hostname or url.username or url.password:
+        raise ValueError("OLLAMA_BASE_URL must be an HTTP loopback URL without credentials")
+    if url.query or url.fragment or url.path not in ("", "/"):
+        raise ValueError("OLLAMA_BASE_URL must not contain a path, query, or fragment")
+    try:
+        loopback = ipaddress.ip_address(url.hostname).is_loopback
+    except ValueError:
+        loopback = url.hostname.lower() == "localhost"
+    if not loopback:
+        raise ValueError("OLLAMA_BASE_URL host must be loopback")
+    try:
+        url.port
+    except ValueError as exc:
+        raise ValueError("OLLAMA_BASE_URL has an invalid port") from exc
+    return cfg.OLLAMA_BASE_URL.rstrip("/")
+
+
+def _validate_config(cfg: PipelineConfig) -> str:
+    base_url = _validated_base_url(cfg)
+    for name in ("TEXT_MODEL", "VISION_MODEL"):
+        model = getattr(cfg, name)
+        if not isinstance(model, str) or not model.strip() or model.lower().endswith("-cloud"):
+            raise ValueError(f"{name} must be a nonempty local model tag and must not end in -cloud")
+    for name in ("OLLAMA_TEXT_NUM_CTX", "OLLAMA_VISION_NUM_CTX", "OLLAMA_TIMEOUT_SECONDS"):
+        value = getattr(cfg, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if not isinstance(cfg.OLLAMA_KEEP_ALIVE, str) or not cfg.OLLAMA_KEEP_ALIVE.strip():
+        raise ValueError("OLLAMA_KEEP_ALIVE must be nonempty")
+    return base_url
+
+
+def _call(cfg: PipelineConfig, method: str, path: str, payload: dict | None = None) -> dict:
+    base_url = _validate_config(cfg)
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    retry_statuses = {429, 500, 502, 503, 504}
+    for attempt in range(3):
+        try:
+            req = request.Request(base_url + path, data=data, headers=headers, method=method)
+            with request.urlopen(req, timeout=cfg.OLLAMA_TIMEOUT_SECONDS) as response:
+                raw = response.read()
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise OllamaResponseError("Ollama returned a non-object response.")
+            return parsed
+        except error.HTTPError as exc:
+            if exc.code in (400, 404):
+                raise OllamaModelError(f"Ollama rejected the model request (HTTP {exc.code}).") from None
+            if exc.code not in retry_statuses:
+                raise OllamaConnectionError(f"Ollama request failed (HTTP {exc.code}).") from None
+            last = f"HTTP {exc.code}"
+        except (error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError):
+            last = "connection failure"
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise OllamaResponseError("Ollama returned invalid JSON.") from None
+        if attempt < 2:
+            time.sleep((2, 5)[attempt])
+    raise OllamaConnectionError(f"Ollama request failed after 3 attempts ({last}).")
+
+
+def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predict: int,
+              schema: dict | None = None, images: list[tuple[bytes, str]] | None = None,
+              keep_alive: str | int | None = None) -> str:
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt must be a nonempty string")
+    if isinstance(num_predict, bool) or not isinstance(num_predict, int) or num_predict <= 0:
+        raise ValueError("num_predict must be a positive integer")
+    chosen_model = model or (cfg.VISION_MODEL if images else cfg.TEXT_MODEL)
+    if not isinstance(chosen_model, str) or not chosen_model.strip() or chosen_model.lower().endswith("-cloud"):
+        raise ValueError("model must be a nonempty local tag and must not end in -cloud")
+    encoded_images = []
+    for image in images or []:
+        if (not isinstance(image, tuple) or len(image) != 2
+                or not isinstance(image[0], bytes) or not image[0]
+                or not isinstance(image[1], str) or not image[1].strip()):
+            raise ValueError("images must contain (bytes, MIME type) tuples")
+        encoded_images.append(base64.b64encode(image[0]).decode("ascii"))
+    payload = {
+        "model": chosen_model,
+        "prompt": prompt,
+        "stream": False,
+        "think": False,
+        "keep_alive": cfg.OLLAMA_KEEP_ALIVE if keep_alive is None else keep_alive,
+        "options": {
+            "temperature": 0,
+            "seed": 0,
+            "num_ctx": cfg.OLLAMA_VISION_NUM_CTX if images or chosen_model == cfg.VISION_MODEL else cfg.OLLAMA_TEXT_NUM_CTX,
+            "num_predict": num_predict,
+        },
+    }
+    if schema is not None:
+        payload["format"] = schema
+    if encoded_images:
+        payload["images"] = encoded_images
+    response = _call(cfg, "POST", "/api/generate", payload)
+    if response.get("error"):
+        raise OllamaResponseError("Ollama reported a generation error.")
+    if response.get("done") is not True or response.get("done_reason") in {"length", "max_tokens"}:
+        raise OllamaResponseError("Ollama returned an incomplete or truncated response.")
+    text = response.get("response")
+    if not isinstance(text, str) or not text.strip():
+        raise OllamaResponseError("Ollama returned an empty response.")
+    return text
+
+
+def preflight(cfg: PipelineConfig) -> None:
+    version = _call(cfg, "GET", "/api/version").get("version")
+    if not isinstance(version, str):
+        raise OllamaResponseError("Ollama version response is invalid.")
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", version)
+    if not match:
+        raise OllamaResponseError("Ollama version response is invalid.")
+    if tuple(map(int, match.groups())) < (0, 12, 7):
+        raise OllamaError(f"Ollama 0.12.7 or newer is required; found {version}.")
+    models = _call(cfg, "GET", "/api/tags").get("models")
+    if not isinstance(models, list):
+        raise OllamaResponseError("Ollama tags response is invalid.")
+    local = {
+        item.get("name", item.get("model")): item.get("size")
+        for item in models if isinstance(item, dict)
+    }
+    missing = [tag for tag in (cfg.TEXT_MODEL, cfg.VISION_MODEL)
+               if tag not in local or isinstance(local[tag], bool)
+               or not isinstance(local[tag], (int, float)) or local[tag] <= 0]
+    if missing:
+        commands = "\n".join(f"ollama pull {tag}" for tag in missing)
+        raise OllamaModelError(f"Required local Ollama model tag(s) missing:\n{commands}")
+
+
+def ask(prompt: str, cfg: PipelineConfig, *, model: str | None = None,
+        num_predict: int = 2048) -> str:
+    return _generate(prompt, cfg, model=model, num_predict=num_predict)
+
+
+def ask_json(prompt: str, cfg: PipelineConfig, *, schema: dict,
+             model: str | None = None, images: list[tuple[bytes, str]] | None = None,
+             num_predict: int = 2048, validation: Callable[[object], object] | None = None,
+             retries: int = 3) -> object:
+    if isinstance(retries, bool) or not isinstance(retries, int) or retries <= 0:
+        raise ValueError("retries must be a positive integer")
+    last_error = "invalid structured response"
+    for _ in range(retries):
+        raw = _generate(prompt, cfg, model=model, num_predict=num_predict,
+                        schema=schema, images=images)
+        try:
+            value = json.loads(raw)
+            return validation(value) if validation else value
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            last_error = exc.__class__.__name__
+    raise OllamaResponseError(
+        f"Ollama failed to return a valid structured response after {retries} attempts ({last_error}).")
+
+
+def classify_batch(prompt: str, expected_indices: list[int], theme_names: list[str],
+                   point_labels: list[str], cfg: PipelineConfig) -> list[dict]:
+    result = ask_json(
+        prompt, cfg, schema=classification_schema(theme_names, point_labels),
+        validation=lambda value: validate_classification(
+            value, expected_indices, theme_names, point_labels))
+    return result  # type: ignore[return-value]
+
+
+def extract_image_context(images: list[tuple[bytes, str]], cfg: PipelineConfig) -> str:
+    blocks = []
+    prompt = ("Describe only visible evidence useful as campaign context. "
+              "Transcribe visible text exactly. Do not infer identity or intent.")
+    for index, image in enumerate(images, 1):
+        result = ask_json(prompt, cfg, schema=IMAGE_OBSERVATION_SCHEMA,
+                          images=[image], validation=validate_image_observation)
+        blocks.extend([
+            f"Image {index}:",
+            f"Summary: {result['summary']}",
+            "Visible text: " + (" | ".join(result["visible_text"]) or "(none)"),
+            "Observations:",
+            *(f"- {row}" for row in result["observations"]),
+        ])
+    return "\n".join(blocks)
+
+
+def unload(model: str, cfg: PipelineConfig) -> None:
+    _validate_config(cfg)
+    if not isinstance(model, str) or not model.strip() or model.lower().endswith("-cloud"):
+        raise ValueError("model must be a nonempty local tag and must not end in -cloud")
+    response = _call(cfg, "POST", "/api/generate", {
+        "model": model,
+        "stream": False,
+        "keep_alive": 0,
+    })
+    if response.get("error") or response.get("done") is not True:
+        raise OllamaResponseError("Ollama did not confirm model unload.")

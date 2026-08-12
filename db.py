@@ -5,10 +5,20 @@ _DB_PATH = Path("data/app.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    id                   TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    -- Session-level Key Messages draft state. One draft per session; the
+    -- messages themselves live in key_messages below. status matches the
+    -- KeyMessageDraft contract (empty|drafting|ready|stale|failed).
+    -- revision increments on every POST .../key_messages/draft call, so a
+    -- future background drafting worker can detect and discard a stale
+    -- in-flight generation superseded by a newer request.
+    key_messages_status   TEXT NOT NULL DEFAULT 'empty'
+        CHECK (key_messages_status IN ('empty', 'drafting', 'ready', 'stale', 'failed')),
+    key_messages_error    TEXT,
+    key_messages_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -64,6 +74,20 @@ CREATE TABLE IF NOT EXISTS run_artifacts (
     run_id    TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     kind      TEXT NOT NULL,
     file_path TEXT NOT NULL
+);
+
+-- Session-level Key Messages (product term). Stable once created; a
+-- PATCH replaces the whole ordered list in one transaction but keeps
+-- existing ids that are resubmitted, so "manual-edit" state on an id a
+-- user has already touched survives a later redraft that preserves it.
+CREATE TABLE IF NOT EXISTS key_messages (
+    id         TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    label      TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    included  INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    edited    INTEGER NOT NULL DEFAULT 0
 );
 """
 

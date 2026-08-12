@@ -1,7 +1,7 @@
 """
 The only file you normally need to edit.
 
-Put your links in VIDEOS, set the two API keys, run `python run.py`.
+Put your links in VIDEOS, set the YouTube API key, run `python run.py`.
 """
 
 # ---------------------------------------------------------------- inputs
@@ -16,32 +16,37 @@ Put your links in VIDEOS, set the two API keys, run `python run.py`.
 # If you are not sure, use "auto" and the pipeline will decide from the
 # transcript.
 
-# Videos are currently set to Nike and Adidas World Cup Ad
+# Videos are currently set to one World Cup ads campaign.
 VIDEOS = [
     {"url": "https://www.youtube.com/watch?v=IyZ1WIua_1s",
-     "group": "Nike - Rip the Script", "kind": "brand_ad"},
+     "group": "World Cup Ads", "kind": "brand_ad"},
     {"url": "https://www.youtube.com/watch?v=yu4XecZWFuE",
-        "group": "Nike - Rip the Script", "kind": "review"},
+     "group": "World Cup Ads", "kind": "review"},
     {"url": "https://www.youtube.com/watch?v=mJJY53qhJe0",
-    "group": "Adidas - Backyard Legends", "kind": "brand_ad"},
+     "group": "World Cup Ads", "kind": "brand_ad"},
     {"url": "https://www.youtube.com/watch?v=lRzZe8S3tww",
-    "group": "Adidas - Backyard Legends", "kind": "review"},    
+     "group": "World Cup Ads", "kind": "review"},
 ]
 
 # Name for this run's output folder. Leave blank to derive it from the
-# group names above, e.g. "honda-toyota-mitsubishi".
+# Campaign name above, e.g. "world-cup-ads".
 SESSION_NAME = ""
 
 # ---------------------------------------------------------------- keys
 YOUTUBE_API_KEY = "ENTER YOUTUBE DATA API KEY"
-GEMINI_API_KEY = "ENTER GEMINI API KEY"
 
-# ---------------------------------------------------------------- models
-# Model IDs change every few months. If you get a 404, open
-# https://ai.google.dev/gemini-api/docs/models and copy the current Pro-class
-# model ID here (a model name, not a billing tier - this project runs on the
-# free API tier; see README.md#cost). Do not assume the name below still exists.
-MODEL = "gemini-3-pro"
+# ---------------------------------------------------------- local Ollama/Qwen
+# Ollama must be running locally with both exact tags installed. The pipeline
+# never pulls models automatically:
+#   ollama pull qwen3:14b-q4_K_M
+#   ollama pull qwen3-vl:8b-instruct-q4_K_M
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+TEXT_MODEL = "qwen3:14b-q4_K_M"
+VISION_MODEL = "qwen3-vl:8b-instruct-q4_K_M"
+OLLAMA_TEXT_NUM_CTX = 32768
+OLLAMA_VISION_NUM_CTX = 8192
+OLLAMA_TIMEOUT_SECONDS = 600
+OLLAMA_KEEP_ALIVE = "10m"
 
 # ---------------------------------------------------------------- filters
 # Languages to keep. Add codes as needed: id=Indonesian, ms=Malay,
@@ -98,7 +103,7 @@ OUTPUT_DIR = "output"
 # Keys must match the "group" value in VIDEOS exactly.
 # Missing files are silently skipped.
 KEY_VISUALS = {
-    # "Nike - Rip the Script": "assets/nike.jpg",
+    # "World Cup Ads": "assets/world-cup-ads.jpg",
 }
 
 # By default the run produces five files: report.pdf, comments.csv,

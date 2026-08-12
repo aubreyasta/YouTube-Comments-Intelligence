@@ -6,14 +6,15 @@ a fixed theme set (discovered from a sample), and the code counts the
 labels to produce percentages.
 
   build()     one model call reads a stratified sample and writes a
-              codebook: themes + definitions. No keywords.
-  classify()  LLM labels every comment; pt__ columns track signal transfer.
+              theme book: themes + definitions. No keywords.
+  classify()  LLM labels every comment; pt__ columns track Key Message mentions.
   extend()    if "Other" is too large, one top-up pass over that subset.
   summarise() count labels -> the two tables the report reasons over.
   affect()    local HuggingFace, runs both emotion and sentiment models.
 """
 
 import re
+from collections.abc import Callable
 
 import pandas as pd
 
@@ -68,6 +69,15 @@ Valid theme names: {theme_names}
 Valid point labels: {point_labels}"""
 
 
+def _bounded_sample_prompt(template, *, sample, **values):
+    prompt = template.format(sample=sample, **values)
+    if len(prompt) <= 80000:
+        return prompt
+    fixed = template.format(sample="", **values)
+    return template.format(sample=sample[:max(0, 80000 - len(fixed))],
+                           **values)
+
+
 # ------------------------------------------------------------- sampling
 
 def _sample(df, size):
@@ -107,7 +117,7 @@ def _sample(df, size):
     return pd.concat(picks).drop_duplicates(subset=["comment"])
 
 
-# ------------------------------------------------------------- codebook
+# ------------------------------------------------------------- theme book
 
 def build(df, summary, cfg: "PipelineConfig"):
     """One model call. Returns the theme list (name + definition only)."""
@@ -116,21 +126,23 @@ def build(df, summary, cfg: "PipelineConfig"):
     # Cap at 800 per spec (500-800 target on Pro tier).
     size = min(size, 800)
     sample = _sample(df, size)
-    print(f"    codebook sample: {len(sample)} of {len(df)}, "
+    print(f"    theme discovery sample: {len(sample)} of {len(df)}, "
           f"stratified by video and engagement")
 
-    result = llm.ask_json(CODEBOOK_PROMPT.format(
-        n=len(sample), summary=summary,
+    result = llm.ask_json(_bounded_sample_prompt(
+        CODEBOOK_PROMPT, n=len(sample), summary=summary,
         sample="\n".join(f"- {c[:220]}" for c in sample["comment"])),
-        cfg)
+        cfg, schema=llm.THEME_DISCOVERY_SCHEMA,
+        validation=llm.validate_theme_discovery, num_predict=2048)
     return result.get("themes", [])
 
 
 # ------------------------------------------------------------- classification
 
-def classify(df, themes, points, cfg: "PipelineConfig" = None):
+def classify(df, themes, points, cfg: "PipelineConfig" = None,
+             on_progress: Callable[[int, int], None] | None = None):
     """
-    LLM labels every comment with a theme and echoed brief points.
+    LLM labels every comment with a theme and mentioned Key Messages.
 
     Returns (df_with_new_cols, columns) where columns maps
     pt__slug -> original label string.
@@ -173,63 +185,85 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None):
     themes_text = "\n".join(
         f"- {t['name']}: {t['definition']}" for t in themes)
 
-    for vid, group_df in df.groupby("video_id"):
+    batches = []
+    for vid, group_df in df.groupby("video_id", sort=False):
+        vid_points = points_by_video.get(vid, [])
+        point_labels = [p["label"] for p in vid_points]
+        points_text = "\n".join(
+            f"- {p['label']}: {p['description']}" for p in vid_points
+        ) if vid_points else "(none)"
+        indices = group_df.index.tolist()
+        start = 0
+        while start < len(indices):
+            end = min(start + batch_size, len(indices))
+            while True:
+                chunk_idx = indices[start:end]
+                comments_text = "\n".join(
+                    f"{i}: {str(df.at[i, 'comment'])[:300]}" for i in chunk_idx)
+                prompt = CLASSIFY_PROMPT.format(
+                    themes=themes_text, points=points_text,
+                    comments=comments_text,
+                    theme_names=", ".join(
+                        f'"{n}"' for n in theme_names + ["Other"]),
+                    point_labels=", ".join(
+                        f'"{label}"' for label in point_labels) or "(none)",
+                )
+                if len(prompt) <= 80000 or len(chunk_idx) == 1:
+                    break
+                end = start + max(1, len(chunk_idx) // 2)
+            if len(prompt) > 80000:
+                raise ValueError("A single comment classification prompt exceeds 80000 characters")
+            batches.append((vid, group_df.index, chunk_idx, prompt))
+            start = end
+
+    total_batches = len(batches)
+    completed_batches = 0
+    activated_videos = set()
+
+    for vid, group_index, chunk_idx, prompt in batches:
         vid_points = points_by_video.get(vid, [])
         point_labels = [p["label"] for p in vid_points]
 
         # Activate (False) only the columns that belong to this video.
         # Rows for other videos stay NA and are excluded from summarise.
-        for vp in vid_points:
-            col = label_to_col[vp["label"]]
-            df.loc[group_df.index, col] = False
+        if vid not in activated_videos:
+            for vp in vid_points:
+                col = label_to_col[vp["label"]]
+                df.loc[group_index, col] = False
+            activated_videos.add(vid)
 
-        points_text = "\n".join(
-            f"- {p['label']}: {p['description']}" for p in vid_points
-        ) if vid_points else "(none)"
+        results = llm.classify_batch(
+            prompt, chunk_idx, theme_names, point_labels, cfg)
 
-        indices = group_df.index.tolist()
+        # llm.classify_batch already enforces exact index coverage, theme
+        # membership, and Key Message subset via validate_classification
+        # before it returns - these checks are not needed against the real
+        # boundary. They stay here because tests replace llm.classify_batch
+        # wholesale (bypassing that validation) to exercise the atomic-apply
+        # contract of this function specifically; removing them would make
+        # analyze.classify() trust unvalidated input from any future caller
+        # that stubs classify_batch, which is a correctness regression, not
+        # just a test break.
+        expected = set(chunk_idx)
+        returned = [row.get("index") for row in results]
+        if len(returned) != len(expected) or set(returned) != expected:
+            raise ValueError("Classification batch did not return every index exactly once")
+        if any(row.get("theme") not in theme_names + ["Other"]
+               or not isinstance(row.get("echoed"), list)
+               or not set(row["echoed"]).issubset(point_labels)
+               for row in results):
+            raise ValueError("Classification batch returned invalid labels")
 
-        for chunk_start in range(0, len(indices), batch_size):
-            chunk_idx = indices[chunk_start: chunk_start + batch_size]
-            comments_text = "\n".join(
-                f"{i}: {df.at[i, 'comment'][:300]}"
-                for i in chunk_idx)
+        # Apply only after the complete batch has passed every check.
+        for row in results:
+            idx = row["index"]
+            df.at[idx, "theme"] = row["theme"]
+            for label in row["echoed"]:
+                df.at[idx, label_to_col[label]] = True
 
-            prompt = CLASSIFY_PROMPT.format(
-                themes=themes_text,
-                points=points_text,
-                comments=comments_text,
-                theme_names=", ".join(f'"{n}"' for n in theme_names + ["Other"]),
-                point_labels=", ".join(f'"{l}"' for l in point_labels) or "(none)",
-            )
-
-            try:
-                results = llm.classify_batch(
-                    prompt, theme_names, point_labels, cfg)
-            except Exception as exc:
-                print(f"    ! classify_batch failed for {vid} "
-                      f"chunk {chunk_start}: {exc}. Marking Other.")
-                results = []
-
-            seen = set()
-            for row in results:
-                idx = row.get("index")
-                if idx not in chunk_idx:
-                    continue
-                seen.add(idx)
-                theme_val = row.get("theme", "Other")
-                if theme_val not in theme_names:
-                    theme_val = "Other"
-                df.at[idx, "theme"] = theme_val
-
-                for label in row.get("echoed", []):
-                    # Use label_to_col to avoid re-slugging and prevent
-                    # collision-induced writes to the wrong column.
-                    col = label_to_col.get(label)
-                    if col and col in columns:
-                        df.at[idx, col] = True
-
-            # Indices the model omitted stay "Other" (already initialised).
+        completed_batches += 1
+        if on_progress:
+            on_progress(completed_batches, total_batches)
 
     return df, columns
 
@@ -255,11 +289,12 @@ def extend(df, themes, points, summary, cfg: "PipelineConfig",
     print(f"    {leftover_pct:.0f}% Other, one top-up pass")
     sample = _sample(leftover, min(cfg.CODEBOOK_SAMPLE_MAX,
                                    max(60, len(leftover) // 4)))
-    result = llm.ask_json(TOPUP_PROMPT.format(
-        summary=summary,
+    result = llm.ask_json(_bounded_sample_prompt(
+        TOPUP_PROMPT, summary=summary,
         existing=", ".join(t["name"] for t in themes),
         sample="\n".join(f"- {c[:220]}" for c in sample["comment"])),
-        cfg)
+        cfg, schema=llm.EXTEND_THEME_SCHEMA,
+        validation=llm.validate_extend_themes, num_predict=1536)
     new_themes = result.get("themes", [])
     if not new_themes:
         other_share = float((df["theme"] == "Other").mean() * 100)

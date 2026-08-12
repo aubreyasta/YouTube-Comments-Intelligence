@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import assets
 import db
 import storage
 import adapter
@@ -34,7 +35,7 @@ app = FastAPI(title="YouTube Comment Intelligence")
 @app.on_event("startup")
 def _startup():
     db.init()
-    for key in ("YOUTUBE_API_KEY", "GEMINI_API_KEY"):
+    for key in ("YOUTUBE_API_KEY",):
         if not os.environ.get(key):
             logger.warning("%s is not set - runs will fail without it", key)
 
@@ -218,6 +219,7 @@ def _ser_session(row, conn) -> dict:
         "updatedAt": row["updated_at"],
         "createdAt": row["created_at"],
         "latestRun": latest_run,
+        "keyMessages": _ser_key_message_draft(row, conn),
     }
 
 
@@ -352,6 +354,29 @@ def _ser_brief_point(row) -> dict:
     }
 
 
+def _ser_key_message(row) -> dict:
+    return {
+        "id": row["id"],
+        "label": row["label"],
+        "description": row["description"],
+        "included": bool(row["included"]),
+        "order": row["sort_order"],
+    }
+
+
+def _ser_key_message_draft(session_row, conn) -> dict:
+    """KeyMessageDraft shape: {status, messages, error}. See CHANGELOG."""
+    rows = conn.execute(
+        "SELECT * FROM key_messages WHERE session_id = ? ORDER BY sort_order",
+        (session_row["id"],)
+    ).fetchall()
+    return {
+        "status": session_row["key_messages_status"],
+        "messages": [_ser_key_message(r) for r in rows],
+        "error": session_row["key_messages_error"],
+    }
+
+
 _ARTIFACT_TIER = {
     "report_pdf": "primary",
     "summary_csv": "primary",
@@ -414,6 +439,18 @@ class BriefPointUpdate(BaseModel):
 class BriefPointsBody(BaseModel):
     points: list[BriefPointUpdate]
 
+class KeyMessageIn(BaseModel):
+    """Matches the KeyMessage type in CHANGELOG.md exactly - no optional
+    fields, since the client always resends the full row it received."""
+    id: str
+    label: str
+    description: str
+    included: bool
+    order: int
+
+class SaveKeyMessagesBody(BaseModel):
+    messages: list[KeyMessageIn]
+
 
 # ---------------------------------------------------------------------------
 # /api/sessions
@@ -475,6 +512,96 @@ def get_session(session_id: str):
         ).fetchall()
         s["runs"] = [_ser_run(r, conn) for r in runs]
         return s
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# /api/sessions/{id}/key_messages
+# ---------------------------------------------------------------------------
+
+@app.post("/api/sessions/{session_id}/key_messages/draft")
+def draft_key_messages(session_id: str):
+    conn = db.get_conn()
+    try:
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            _404("Session not found.")
+
+        # ponytail: pipeline integration seam, not a permanent behavior.
+        # A real draft needs pipeline.collect.fetch() (video transcripts)
+        # and pipeline.brief.run() (the grounded-only Key Message call).
+        # Today only adapter.py's run thread calls into pipeline/ (see
+        # docs/architecture.md); there is no synchronous draft-only entry
+        # point for this route to call. Rather than fabricate messages,
+        # mark the draft failed with a message that names the gap, and
+        # leave whatever messages already existed untouched - "keeps the
+        # previous draft if generation fails" per CHANGELOG.
+        error = ("Key Message drafting is not wired to the pipeline yet. "
+                 "Needs a draft-only entry point into collect.fetch() + "
+                 "brief.run() that a request can call synchronously, "
+                 "outside adapter.py's run thread.")
+        now = _now()
+        conn.execute(
+            """UPDATE sessions
+               SET key_messages_status = 'failed', key_messages_error = ?,
+                   key_messages_revision = key_messages_revision + 1, updated_at = ?
+               WHERE id = ?""",
+            (error, now, session_id)
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return _ser_key_message_draft(row, conn)
+    finally:
+        conn.close()
+
+
+@app.patch("/api/sessions/{session_id}/key_messages")
+def save_key_messages(session_id: str, body: SaveKeyMessagesBody):
+    conn = db.get_conn()
+    try:
+        if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
+            _404("Session not found.")
+
+        messages = body.messages
+        ids = [m.id for m in messages]
+
+        seen = set()
+        for i in ids:
+            if i in seen:
+                _422(f"Duplicate Key Message id: {i}.", "messages")
+            seen.add(i)
+
+        # Stable ids come from the draft that created them; this route
+        # cannot invent new ones.
+        existing_ids = {r["id"] for r in conn.execute(
+            "SELECT id FROM key_messages WHERE session_id = ?", (session_id,)
+        ).fetchall()}
+        for i in ids:
+            if i not in existing_ids:
+                _422(f"Unknown Key Message id: {i}.", "messages")
+
+        for m in messages:
+            if not (m.label or "").strip():
+                _422("Every Key Message needs a label.", "label")
+
+        # Complete ordered replacement in one transaction: delete then
+        # reinsert with the same client-supplied ids, so ids stay stable
+        # from the caller's point of view.
+        conn.execute("DELETE FROM key_messages WHERE session_id = ?", (session_id,))
+        for m in messages:
+            conn.execute(
+                """INSERT INTO key_messages
+                   (id, session_id, label, description, included, sort_order, edited)
+                   VALUES (?,?,?,?,?,?,1)""",
+                (m.id, session_id, m.label.strip(), (m.description or "").strip(),
+                 int(m.included), m.order)
+            )
+        conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (_now(), session_id))
+        conn.commit()
+
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return _ser_key_message_draft(row, conn)
     finally:
         conn.close()
 
@@ -613,12 +740,17 @@ async def upload_asset(campaign_id: str, file: UploadFile = File(...)):
         file_path = storage.save_upload(unique_name, data)
 
         kind = _asset_kind_from_ext(ext)
+        # Extraction runs on successful save, not deferred to run start.
+        # assets.extract_upload() never raises and returns "" for images
+        # and for any extraction failure (encrypted/scanned PDF, etc.) -
+        # that empty text is stored as-is; it does not corrupt the row.
+        text = assets.extract_upload(file_path)
         aid = str(uuid.uuid4())
         now = _now()
         conn.execute(
             """INSERT INTO assets (id, campaign_id, kind, filename, url, title, text, retrieved_at, file_path)
-               VALUES (?,?,?,?,NULL,NULL,NULL,?,?)""",
-            (aid, campaign_id, kind, filename, now, file_path)
+               VALUES (?,?,?,?,NULL,NULL,?,?,?)""",
+            (aid, campaign_id, kind, filename, text or None, now, file_path)
         )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, camp["session_id"])
@@ -646,13 +778,19 @@ def add_article(campaign_id: str, body: ArticleBody):
         if not re.match(r"^https?://", url, re.I):
             _422("Articles need a full http:// or https:// link.", "url")
 
+        # Fetch runs on successful save, not deferred to run start.
+        # assets.fetch_article() never raises; a failed fetch returns
+        # empty text and the asset is still saved (see Risks table).
+        fetched = assets.fetch_article(url)
+
         aid = str(uuid.uuid4())
-        now = _now()
         conn.execute(
             """INSERT INTO assets (id, campaign_id, kind, filename, url, title, text, retrieved_at, file_path)
-               VALUES (?,?,?,NULL,?,NULL,NULL,?,NULL)""",
-            (aid, campaign_id, "article", url, now)
+               VALUES (?,?,?,NULL,?,?,?,?,NULL)""",
+            (aid, campaign_id, "article", url,
+             fetched["title"] or None, fetched["text"] or None, fetched["retrieved_at"])
         )
+        now = fetched["retrieved_at"]
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, camp["session_id"])
         )

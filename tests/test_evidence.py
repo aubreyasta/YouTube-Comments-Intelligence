@@ -138,7 +138,10 @@ def test_idea_sentiment_zero_echo():
     # Minimal PipelineConfig (only fields _build_report_json touches via _build_prose).
     from pipeline.config_types import PipelineConfig
     cfg = PipelineConfig(
-        YOUTUBE_API_KEY="", GEMINI_API_KEY="", MODEL="stub",
+        YOUTUBE_API_KEY="", OLLAMA_BASE_URL="http://127.0.0.1:11434",
+        TEXT_MODEL="qwen3:8b", VISION_MODEL="qwen3-vl:8b",
+        OLLAMA_TEXT_NUM_CTX=32768, OLLAMA_VISION_NUM_CTX=16384,
+        OLLAMA_TIMEOUT_SECONDS=2, OLLAMA_KEEP_ALIVE="5m",
         VIDEOS=[], SESSION_NAME="test", OUTPUT_DIR="/tmp",
         KEEP_LANGUAGES={"id"}, MIN_COMMENT_LETTERS=4,
         MAX_COMMENTS_PER_VIDEO=100, CODEBOOK_SAMPLE_SIZE=10,

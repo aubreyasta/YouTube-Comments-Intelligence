@@ -53,11 +53,49 @@ Return JSON:
 Give 4 to 8 points per video, ordered by how central they are."""
 
 
+def _bounded_prompt(group, lens, context, blocks):
+    """Keep the fixed section headers while trimming the largest sections."""
+    context = str(context or "(none supplied)")
+    videos = "\n\n".join(blocks)
+    prompt = PROMPT.format(group=group, lens=lens, context=context,
+                           videos=videos)
+    if len(prompt) <= 80000:
+        return prompt
+    fixed = PROMPT.format(group=group, lens=lens, context="", videos="")
+    available = max(0, 80000 - len(fixed))
+    context_budget = min(len(context), available // 4)
+    return PROMPT.format(group=group, lens=lens,
+                         context=context[:context_budget],
+                         videos=videos[:available - context_budget])
+
+
 def run(meta_df, cfg: PipelineConfig, context_map=None,
         images_map=None):
     """Return (grounded_markdown, points)."""
     grounded, points = [], []
-    context_map = context_map or {}
+    context_map = dict(context_map or {})
+
+    images_submitted = any(images for images in (images_map or {}).values())
+    try:
+        for group, images in (images_map or {}).items():
+            if not images:
+                continue
+            observations = llm.extract_image_context(images, cfg)
+            if isinstance(observations, (list, tuple)):
+                observations = "\n".join(str(item) for item in observations)
+            existing = context_map.get(group, "")
+            context_map[group] = "\n\n".join(part for part in (
+                existing, "IMAGE OBSERVATIONS:\n" + str(observations)
+            ) if part)
+    finally:
+        # Best-effort: only unload the vision model if it was actually
+        # loaded (i.e. at least one image was submitted), and never let
+        # an unload failure mask the original extraction error.
+        if images_submitted:
+            try:
+                llm.unload(cfg.VISION_MODEL, cfg)
+            except Exception:
+                pass
 
     for group, sub in meta_df.groupby("group", sort=False):
         kinds = [k for k in sub["kind"].unique() if k in LENS]
@@ -75,15 +113,11 @@ def run(meta_df, cfg: PipelineConfig, context_map=None,
 
         print(f"    briefing {group} ({len(sub)} video"
               f"{'s' if len(sub) > 1 else ''})")
-        images = images_map.get(group) if images_map else None
         result = llm.ask_json(
-            PROMPT.format(
-                group=group, lens=lens,
-                context=context_map.get(group, "(none supplied)"),
-                videos="\n\n".join(blocks)),
-            cfg,
-            grounded=False,
-            images=images)
+            _bounded_prompt(group, lens,
+                            context_map.get(group, "(none supplied)"), blocks),
+            cfg, schema=llm.BRIEF_SCHEMA, validation=llm.validate_brief,
+            num_predict=3072)
 
         known = set(sub["video_id"])
         for point in result.get("points", []):
