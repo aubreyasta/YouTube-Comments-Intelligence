@@ -97,6 +97,7 @@ Both share the same analysis engine in `pipeline/`.
 - [docs/setup.md](docs/setup.md) - install, configure, run, troubleshoot.
 - [docs/architecture.md](docs/architecture.md) - how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) - HTTP contract for the backend.
+- [CHANGELOG.md](CHANGELOG.md) - notable changes and planned work.
 
 For contributors and agents: [AGENTS.md](AGENTS.md) covers code style and repo conventions.
 
