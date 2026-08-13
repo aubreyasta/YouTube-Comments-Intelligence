@@ -74,6 +74,13 @@ def test_key_messages_csv_rows_and_math():
     assert header == HEADER, f"header mismatch: {header}"
     assert len(rows) == 3, f"expected 3 (group, key_message) rows, got {len(rows)}"
 
+    # Group-first (by first appearance), then count descending, then
+    # case-insensitive label. G1's two rows tie on count (2), so
+    # "Speed" sorts before "Value For Money" alphabetically.
+    assert [(r["group"], r["key_message"]) for r in rows] == [
+        ("G1", "Speed"), ("G1", "Value For Money"), ("G2", "Speed")], (
+        f"row order mismatch: {[(r['group'], r['key_message']) for r in rows]}")
+
     by_key = {(r["group"], r["key_message"]): r for r in rows}
 
     g1_value = by_key[("G1", "Value For Money")]

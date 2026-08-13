@@ -57,6 +57,17 @@ def test_sentiment_and_emotions_csv_rows_and_math():
         "group", "emotion", "count", "percent", "base_n"}, (
         f"emotion header mismatch: {emotion_rows[0].keys()}")
 
+    # Group-first (by first appearance), then count descending, then
+    # case-insensitive label, per the CSV contract's ordering rule.
+    assert [(r["group"], r["sentiment"]) for r in sentiment_rows] == [
+        ("G1", "Positive"), ("G1", "Negative"), ("G2", "Positive")], (
+        f"sentiment row order mismatch: "
+        f"{[(r['group'], r['sentiment']) for r in sentiment_rows]}")
+    assert [(r["group"], r["emotion"]) for r in emotion_rows] == [
+        ("G1", "Joy"), ("G2", "Anger")], (
+        f"emotion row order mismatch: "
+        f"{[(r['group'], r['emotion']) for r in emotion_rows]}")
+
     # Sentiment: G1 has 3 labeled rows (base_n=3), G2 has 1 (base_n=1).
     by_key = {(r["group"], r["sentiment"]): r for r in sentiment_rows}
     g1_pos = by_key[("G1", "Positive")]

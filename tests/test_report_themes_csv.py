@@ -50,6 +50,12 @@ def test_themes_csv_rows_and_math():
         f"header mismatch: {rows[0].keys() if rows else 'no rows'}")
     assert len(rows) == 3, f"expected 3 group/theme rows, got {len(rows)}"
 
+    # Group-first (by first appearance), then count descending, then
+    # case-insensitive label, per the CSV contract's ordering rule.
+    assert [(r["group"], r["theme"]) for r in rows] == [
+        ("G1", "Quality"), ("G1", "Price"), ("G2", "Quality")], (
+        f"row order mismatch: {[(r['group'], r['theme']) for r in rows]}")
+
     by_key = {(r["group"], r["theme"]): r for r in rows}
     g1_quality = by_key[("G1", "Quality")]
     assert g1_quality["count"] == "2"

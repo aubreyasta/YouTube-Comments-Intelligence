@@ -176,17 +176,25 @@ def test_report_quotes_and_export_survive_pdna_pt_columns():
 
     with tempfile.TemporaryDirectory() as out_dir:
         report.export(out, themes, transfer, affect_result, meta_df, out_dir)
-        # keep_default_na=False: an empty echoed_ideas cell is a real "no
-        # echo" empty string, not a missing value, so it must not round
-        # -trip through CSV as NaN.
+        # keep_default_na=False: an empty key_message_* cell is a real
+        # "not applicable" pd.NA, not a missing value, so it must not
+        # round-trip through CSV as NaN.
         comments = pd.read_csv(os.path.join(out_dir, "comments.csv"),
                                keep_default_na=False)
         assert len(comments) == len(out)
-        by_comment = comments.set_index("comment")["echoed_ideas"]
-        assert by_comment["Great build quality"] == ""
-        assert by_comment["Worth the price"] == "value for money"
-        assert by_comment["Built to last"] == "durability"
-        assert by_comment["Too expensive"] == ""
+        by_comment = comments.set_index("comment")
+        # video_1's batch only carries "value for money"; durability is
+        # not applicable there, so that column stays blank (NA).
+        assert by_comment.loc["Great build quality", "key_message_value_for_money"] == "False"
+        assert by_comment.loc["Great build quality", "key_message_durability"] == ""
+        assert by_comment.loc["Worth the price", "key_message_value_for_money"] == "True"
+        assert by_comment.loc["Worth the price", "key_message_durability"] == ""
+        # video_2's batch only carries "durability"; value for money is
+        # not applicable there.
+        assert by_comment.loc["Built to last", "key_message_durability"] == "True"
+        assert by_comment.loc["Built to last", "key_message_value_for_money"] == ""
+        assert by_comment.loc["Too expensive", "key_message_durability"] == "False"
+        assert by_comment.loc["Too expensive", "key_message_value_for_money"] == ""
 
 
 def test_classification_schema_empty_points_forbids_enum():

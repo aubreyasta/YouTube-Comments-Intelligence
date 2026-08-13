@@ -1,13 +1,12 @@
 """
-Produce the three deliverables.
+Produce the deliverables.
 
-    report.pdf          the debrief
-    comments.csv        every comment, labelled, for digging through by hand
-    summary.csv         every number in tidy long format, for building charts
-    key-messages.csv     per-(group, Key Message) mentions and sentiment split
-    themes.csv           per-(group, theme) counts from raw comments
-    sentiment.csv        per-(group, sentiment) counts from raw comments
-    emotions.csv         per-(group, emotion) counts from raw comments
+    report.pdf         the debrief
+    comments.csv       every comment, labelled, for digging through by hand
+    key-messages.csv   per-(group, Key Message) mentions and sentiment split
+    themes.csv         per-(group, theme) counts from raw comments
+    sentiment.csv       per-(group, sentiment) counts from raw comments
+    emotions.csv        per-(group, emotion) counts from raw comments
 
 The model that writes the report reads real labeled comments alongside the
 deterministic tables. Numbers in the report still come only from those tables;
@@ -517,36 +516,99 @@ def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None
 # 3. EXPORT
 # ==================================================================
 
-COLUMNS = ["group", "kind", "video_id", "comment", "theme", "echoed_ideas",
-           "emotion", "emotion_confidence",
-           "sentiment", "sentiment_confidence",
-           "likes", "is_reply", "lang",
-           "n_words", "is_question", "mentions_price", "mentions_competitor",
-           "published_at"]
+# comments.csv header, fixed order. key_message_<slug> columns are
+# appended after this, one per pt__ column, in Key Message order.
+COMMENTS_HEADER = ["video_id", "group", "comment", "likes", "language",
+                   "theme", "sentiment", "sentiment_confidence",
+                   "emotion", "emotion_confidence"]
+
+# lang is the code identifier for the language column; see AGENTS.md
+# terminology mapping.
+_SOURCE_COL = {"language": "lang"}
+
+
+def _group_order(df):
+    """Groups in first-appearance order, for deterministic sort keys."""
+    return df["group"].drop_duplicates().tolist() if "group" in df.columns else []
+
+
+def _sort_group_first(frame, group_order, label_col, count_col):
+    """
+    Sort a rows DataFrame group-first (by first appearance), then by
+    count descending, then by case-insensitive label. Shared ordering
+    rule for every aggregate CSV in the contract.
+    """
+    rank = pd.Categorical(frame["group"], categories=group_order, ordered=True)
+    label_lower = frame[label_col].astype(str).str.lower()
+    order = pd.DataFrame({"rank": rank, "count": frame[count_col],
+                          "label_lower": label_lower}, index=frame.index)
+    order = order.sort_values(["rank", "count", "label_lower"],
+                              ascending=[True, False, True], kind="stable")
+    return frame.loc[order.index]
+
+
+def _comments_csv(df, out_path):
+    """
+    Write comments.csv: one row per comment, the fixed header columns,
+    plus one boolean key_message_<slug> column per pt__ column (Key
+    Message order = df's pt__ column order, set by analyze.classify()'s
+    point iteration). Missing source values are empty; NA pt__ cells
+    (video not associated with that Key Message) are empty too - pandas
+    writes both blank by default.
+
+    Groups follow first appearance; within a group, likes descending.
+    """
+    out = pd.DataFrame(index=df.index)
+    for col in COMMENTS_HEADER:
+        source = _SOURCE_COL.get(col, col)
+        out[col] = df[source] if source in df.columns else ""
+
+    for col in [c for c in df.columns if c.startswith("pt__")]:
+        out["key_message_" + col[4:]] = df[col]
+
+    if not df.empty:
+        group_order = _group_order(df)
+        rank = pd.Categorical(out["group"], categories=group_order, ordered=True)
+        likes = pd.to_numeric(out["likes"], errors="coerce")
+        order = pd.DataFrame({"rank": rank, "likes": likes}).sort_values(
+            ["rank", "likes"], ascending=[True, False], kind="stable")
+        out = out.loc[order.index]
+
+    out.to_csv(out_path, index=False, encoding="utf-8-sig",
+               lineterminator="\n")
+    print(f"    comments.csv: {len(out)} rows")
 
 
 def _label_counts_csv(df, label_col, out_path):
     """
     Write group/label/count/percent/base_n csv from raw comment-level df.
 
-    One row per observed non-null label per group. base_n is the count of
-    non-null labels for that column within the group. Same rounding style
-    as themes.csv. Empty/missing input still writes a header-only file.
+    One row per observed non-null, non-empty label per group. base_n is
+    the count of eligible labels for that column within the group.
+    Groups follow first appearance; within a group, rows sort by count
+    descending, then case-insensitive label. Empty/missing input still
+    writes a header-only file.
     """
     cols = ["group", label_col, "count", "percent", "base_n"]
-    labeled = df.dropna(subset=[label_col]) if label_col in df.columns \
-        else df.iloc[0:0]
+    if label_col not in df.columns:
+        labeled = df.iloc[0:0]
+    else:
+        text = df[label_col].astype(str).str.strip()
+        labeled = df[df[label_col].notna() & (text != "")]
+
     if labeled.empty:
         rows = pd.DataFrame(columns=cols)
     else:
         base_n = labeled.groupby("group")[label_col].transform("size")
         counted = (labeled.assign(base_n=base_n)
-                   .groupby(["group", label_col, "base_n"])
+                   .groupby(["group", label_col, "base_n"], sort=False)
                    .size().reset_index(name="count"))
         counted["percent"] = (counted["count"] / counted["base_n"]
                               * 100).round(1)
+        counted = _sort_group_first(counted, _group_order(df), label_col, "count")
         rows = counted[cols]
-    rows.to_csv(out_path, index=False, encoding="utf-8-sig")
+    rows.to_csv(out_path, index=False, encoding="utf-8-sig",
+               lineterminator="\n")
     print(f"    {os.path.basename(out_path)}: {len(rows)} rows")
 
 
@@ -578,19 +640,21 @@ def _key_messages_csv(df, transfer, out_path):
     sentiment split, recomputed from raw comment-level pt__ columns.
 
     transfer (analyze.summarise()'s second table) supplies the set of
-    applicable (group, point) pairs, in stable order - a pair appears
-    there only when that group's video was shown the Key Message, which
-    is exactly "applicable" here, zero-mention pairs included. Every
-    number in the output is recounted from df rather than trusting
-    transfer's already-rounded echoed_pct/n, per the counting-happens-
-    in-Python rule.
+    applicable (group, point) pairs - a pair appears there only when that
+    group's video was shown the Key Message, which is exactly
+    "applicable" here, zero-mention pairs included. Every number in the
+    output is recounted from df rather than trusting transfer's already-
+    rounded echoed_pct/n, per the counting-happens-in-Python rule. Rows
+    are then sorted group-first (by first appearance in df), then by
+    count descending, then case-insensitive key_message.
     """
     cols = ["group", "key_message", "count", "percent", "base_n",
             "positive_count", "positive_percent",
             "negative_count", "negative_percent", "sentiment_base_n"]
     if transfer.empty:
         pd.DataFrame(columns=cols).to_csv(out_path, index=False,
-                                          encoding="utf-8-sig")
+                                          encoding="utf-8-sig",
+                                          lineterminator="\n")
         print(f"    {os.path.basename(out_path)}: 0 rows")
         return
 
@@ -627,75 +691,29 @@ def _key_messages_csv(df, transfer, out_path):
         })
 
     out = pd.DataFrame(rows, columns=cols)
-    out.to_csv(out_path, index=False, encoding="utf-8-sig")
+    out = _sort_group_first(out, _group_order(df), "key_message", "count")
+    out.to_csv(out_path, index=False, encoding="utf-8-sig",
+              lineterminator="\n")
     print(f"    {os.path.basename(out_path)}: {len(out)} rows")
 
 
 def export(df, themes, transfer, affect_result, meta_df, out_dir):
     """
-    comments.csv      for reading
-    summary.csv       tidy long format for charting
+    Write the five CSVs in the CSV contract (CHANGELOG.md, Shared
+    contracts > CSVs). report.pdf remains render()'s output.
+
+    comments.csv      every comment, exact schema, for reading
     key-messages.csv  (group, key_message, count, percent, base_n,
                        positive/negative count+percent, sentiment_base_n)
     themes.csv     (group, theme, count, percent, base_n) from raw comments
     sentiment.csv  (group, sentiment, count, percent, base_n) from raw comments
     emotions.csv   (group, emotion, count, percent, base_n) from raw comments
+
+    themes and meta_df are accepted for call-site stability (run.py,
+    adapter.py) but are not read here: themes.csv is recomputed from raw
+    comments, not from the crosstab summary.
     """
-    out = df.copy()
-
-    # Collapse the sparse pt__ booleans into one readable column.
-    signals = [c for c in out.columns if c.startswith("pt__")]
-    if signals:
-        labels = {c: c[4:].replace("_", " ") for c in signals}
-        out["echoed_ideas"] = out[signals].apply(
-            lambda row: "; ".join(labels[c] for c in signals
-                                  if _is_true(row[c])),
-            axis=1)
-
-    keep = [c for c in COLUMNS if c in out.columns]
-    comments_path = os.path.join(out_dir, "comments.csv")
-    (out[keep].sort_values(["group", "likes"], ascending=[True, False])
-     .to_csv(comments_path, index=False, encoding="utf-8-sig"))
-    print(f"    comments.csv: {len(out)} rows")
-
-    # Tidy long format: one row per number.
-    sizes = df.groupby("group").size().to_dict()
-    rows = [{"group": g, "metric": "base", "label": "comments analysed",
-             "value": n, "unit": "count", "n": n} for g, n in sizes.items()]
-
-    counts = df.groupby("video_id").size().to_dict()
-    rows += [{"group": r["group"], "metric": "video",
-              "label": f"https://www.youtube.com/watch?v={r['video_id']}",
-              "value": counts.get(r["video_id"], 0), "unit": "count",
-              "n": counts.get(r["video_id"], 0)}
-             for _, r in meta_df.iterrows()]
-
-    for table, metric in ((themes, "theme"),
-                          (affect_result["emotion"]["table"], "emotion"),
-                          (affect_result["sentiment"]["table"], "sentiment")):
-        if table.empty:
-            continue
-        for group in table.index:
-            for label in table.columns:
-                pct = float(table.loc[group, label])
-                rows.append({"group": group, "metric": metric,
-                             "label": label, "value": round(pct, 1),
-                             "unit": "percent",
-                             "n": int(round(pct / 100 * sizes.get(group, 0)))})
-
-    if not transfer.empty:
-        rows += [{"group": r.group, "metric": "signal_transfer",
-                  "label": r.point, "value": r.echoed_pct,
-                  "unit": "percent", "n": r.n}
-                 for r in transfer.itertuples()]
-
-    summary_path = os.path.join(out_dir, "summary.csv")
-    frame = pd.DataFrame(rows, columns=["group", "metric", "label", "value",
-                                        "unit", "n"])
-    frame.to_csv(summary_path, index=False, encoding="utf-8-sig")
-    print(f"    summary.csv: {len(frame)} rows "
-          f"{frame['metric'].value_counts().to_dict()}")
-
+    _comments_csv(df, os.path.join(out_dir, "comments.csv"))
     _key_messages_csv(df, transfer, os.path.join(out_dir, "key-messages.csv"))
 
     # themes.csv, sentiment.csv, emotions.csv: one row per observed
