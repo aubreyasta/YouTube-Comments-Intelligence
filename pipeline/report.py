@@ -4,8 +4,10 @@ Produce the three deliverables.
     report.pdf          the debrief
     comments.csv        every comment, labelled, for digging through by hand
     summary.csv         every number in tidy long format, for building charts
-    chart_transfer.csv  signal-transfer bars, for Google Slides
-    chart_themes.csv    theme-frequency bars, for Google Slides
+    key-messages.csv     per-(group, Key Message) mentions and sentiment split
+    themes.csv           per-(group, theme) counts from raw comments
+    sentiment.csv        per-(group, sentiment) counts from raw comments
+    emotions.csv         per-(group, emotion) counts from raw comments
 
 The model that writes the report reads real labeled comments alongside the
 deterministic tables. Numbers in the report still come only from those tables;
@@ -523,12 +525,121 @@ COLUMNS = ["group", "kind", "video_id", "comment", "theme", "echoed_ideas",
            "published_at"]
 
 
+def _label_counts_csv(df, label_col, out_path):
+    """
+    Write group/label/count/percent/base_n csv from raw comment-level df.
+
+    One row per observed non-null label per group. base_n is the count of
+    non-null labels for that column within the group. Same rounding style
+    as themes.csv. Empty/missing input still writes a header-only file.
+    """
+    cols = ["group", label_col, "count", "percent", "base_n"]
+    labeled = df.dropna(subset=[label_col]) if label_col in df.columns \
+        else df.iloc[0:0]
+    if labeled.empty:
+        rows = pd.DataFrame(columns=cols)
+    else:
+        base_n = labeled.groupby("group")[label_col].transform("size")
+        counted = (labeled.assign(base_n=base_n)
+                   .groupby(["group", label_col, "base_n"])
+                   .size().reset_index(name="count"))
+        counted["percent"] = (counted["count"] / counted["base_n"]
+                              * 100).round(1)
+        rows = counted[cols]
+    rows.to_csv(out_path, index=False, encoding="utf-8-sig")
+    print(f"    {os.path.basename(out_path)}: {len(rows)} rows")
+
+
+def _label_to_pt_col(df, label):
+    """
+    Recover the pt__ column analyze.classify() built for a Key Message
+    label, from its slug convention (same lower/non-word-strip/40-char
+    rule). Exact whenever the label did not collide with another label's
+    truncated slug - the common case, since analyze.classify() only
+    appends a numeric suffix on collision.
+
+    # ponytail: report.export() is not handed analyze.classify()'s exact
+    # columns dict, so a genuine truncation collision (two labels sharing
+    # the same 40-char slug) can misroute one of them here. Upgrade: pass
+    # columns through run.py's report.export() call if that ever bites.
+    """
+    base = "pt__" + re.sub(r"\W+", "_", label.lower())[:40]
+    if base in df.columns:
+        return base
+    i = 2
+    while f"{base}_{i}" in df.columns:
+        return f"{base}_{i}"
+    return None
+
+
+def _key_messages_csv(df, transfer, out_path):
+    """
+    Write key-messages.csv: per (group, Key Message) mention count and
+    sentiment split, recomputed from raw comment-level pt__ columns.
+
+    transfer (analyze.summarise()'s second table) supplies the set of
+    applicable (group, point) pairs, in stable order - a pair appears
+    there only when that group's video was shown the Key Message, which
+    is exactly "applicable" here, zero-mention pairs included. Every
+    number in the output is recounted from df rather than trusting
+    transfer's already-rounded echoed_pct/n, per the counting-happens-
+    in-Python rule.
+    """
+    cols = ["group", "key_message", "count", "percent", "base_n",
+            "positive_count", "positive_percent",
+            "negative_count", "negative_percent", "sentiment_base_n"]
+    if transfer.empty:
+        pd.DataFrame(columns=cols).to_csv(out_path, index=False,
+                                          encoding="utf-8-sig")
+        print(f"    {os.path.basename(out_path)}: 0 rows")
+        return
+
+    has_sentiment = "sentiment" in df.columns
+    rows = []
+    for r in transfer.itertuples():
+        group, label = r.group, r.point
+        col = _label_to_pt_col(df, label)
+        sub = df[df["group"] == group]
+        active = sub[sub[col].notna()] if col else sub.iloc[0:0]
+        base_n = len(active)
+        mentioned = active[active[col]] if col and base_n else active.iloc[0:0]
+        count = len(mentioned)
+
+        sent = (mentioned["sentiment"].dropna().str.strip().str.lower()
+                if has_sentiment and count else pd.Series(dtype=object))
+        sentiment_base_n = len(sent)
+        positive_count = int((sent == "positive").sum())
+        negative_count = int((sent == "negative").sum())
+
+        rows.append({
+            "group": group,
+            "key_message": label,
+            "count": count,
+            "percent": round(count / base_n * 100, 1) if base_n else 0.0,
+            "base_n": base_n,
+            "positive_count": positive_count,
+            "positive_percent": (round(positive_count / sentiment_base_n * 100, 1)
+                                 if sentiment_base_n else 0.0),
+            "negative_count": negative_count,
+            "negative_percent": (round(negative_count / sentiment_base_n * 100, 1)
+                                 if sentiment_base_n else 0.0),
+            "sentiment_base_n": sentiment_base_n,
+        })
+
+    out = pd.DataFrame(rows, columns=cols)
+    out.to_csv(out_path, index=False, encoding="utf-8-sig")
+    print(f"    {os.path.basename(out_path)}: {len(out)} rows")
+
+
 def export(df, themes, transfer, affect_result, meta_df, out_dir):
     """
-    comments.csv   for reading
-    summary.csv    tidy long format for charting
-    chart_transfer.csv  (idea, group, percent, n) sorted desc - Google Slides
-    chart_themes.csv    (theme, percent, n) sorted desc - Google Slides
+    comments.csv      for reading
+    summary.csv       tidy long format for charting
+    key-messages.csv  (group, key_message, count, percent, base_n,
+                       positive/negative count+percent, sentiment_base_n)
+    themes.csv     (group, theme, count, percent, base_n) from raw comments
+    sentiment.csv  (group, sentiment, count, percent, base_n) from raw comments
+    emotions.csv   (group, emotion, count, percent, base_n) from raw comments
     """
     out = df.copy()
 
@@ -585,27 +696,10 @@ def export(df, themes, transfer, affect_result, meta_df, out_dir):
     print(f"    summary.csv: {len(frame)} rows "
           f"{frame['metric'].value_counts().to_dict()}")
 
-    # chart_transfer.csv: one row per (group, point), sorted by percent desc.
-    if not transfer.empty:
-        ct = transfer[["point", "group", "echoed_pct", "n"]].copy()
-        ct.columns = ["idea", "group", "percent", "n"]
-        ct = ct.sort_values("percent", ascending=False)
-        ct.to_csv(os.path.join(out_dir, "chart_transfer.csv"),
-                  index=False, encoding="utf-8-sig")
-        print(f"    chart_transfer.csv: {len(ct)} rows")
-    else:
-        pd.DataFrame(columns=["idea", "group", "percent", "n"]).to_csv(
-            os.path.join(out_dir, "chart_transfer.csv"),
-            index=False, encoding="utf-8-sig")
+    _key_messages_csv(df, transfer, os.path.join(out_dir, "key-messages.csv"))
 
-    # chart_themes.csv: one row per theme, sorted by percent desc.
-    total = len(df)
-    theme_vc = df["theme"].value_counts()
-    ct2 = pd.DataFrame({
-        "theme": theme_vc.index,
-        "percent": (theme_vc.values / total * 100).round(1),
-        "n": theme_vc.values,
-    }).sort_values("percent", ascending=False)
-    ct2.to_csv(os.path.join(out_dir, "chart_themes.csv"),
-               index=False, encoding="utf-8-sig")
-    print(f"    chart_themes.csv: {len(ct2)} rows")
+    # themes.csv, sentiment.csv, emotions.csv: one row per observed
+    # (group, label), from raw comments.
+    _label_counts_csv(df, "theme", os.path.join(out_dir, "themes.csv"))
+    _label_counts_csv(df, "sentiment", os.path.join(out_dir, "sentiment.csv"))
+    _label_counts_csv(df, "emotion", os.path.join(out_dir, "emotions.csv"))

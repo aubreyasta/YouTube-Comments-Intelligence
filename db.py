@@ -48,19 +48,28 @@ CREATE TABLE IF NOT EXISTS assets (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-    id         TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    state      TEXT NOT NULL DEFAULT 'queued',
-    started_at TEXT,
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    state       TEXT NOT NULL DEFAULT 'queued',
+    -- Fine-grained progress stage, same vocabulary as the SSE stream
+    -- (collect|brief|brief_pause|classify|emotion|report|complete|error).
+    -- adapter.py persists this on every _push() so GET /runs/{id} can
+    -- report brief_pause after a tab reopen with no SSE connection to
+    -- replay from.
+    stage       TEXT NOT NULL DEFAULT 'queued',
+    started_at  TEXT,
     finished_at TEXT,
-    error      TEXT
+    error       TEXT
 );
 
+-- video_id is NULL for a Session-level Key Message: it applies to every
+-- video in the campaign, not one. analyze.classify() broadcasts a NULL-
+-- video_id point to every video's batch instead of scoping it to one.
 CREATE TABLE IF NOT EXISTS brief_points (
     id          TEXT PRIMARY KEY,
     run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     campaign_id TEXT NOT NULL,
-    video_id    TEXT NOT NULL,
+    video_id    TEXT,
     label       TEXT NOT NULL,
     description TEXT NOT NULL,
     approved    INTEGER NOT NULL DEFAULT 0,

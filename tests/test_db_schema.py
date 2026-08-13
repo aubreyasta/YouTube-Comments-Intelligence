@@ -35,6 +35,40 @@ def _make_session(conn, session_id):
     conn.commit()
 
 
+def _make_run(conn, run_id, session_id):
+    conn.execute(
+        "INSERT INTO runs (id, session_id) VALUES (?, ?)",
+        (run_id, session_id),
+    )
+    conn.commit()
+
+
+def test_runs_stage_default_and_brief_pause_persistence():
+    conn = _fresh_db()
+    session_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    _make_session(conn, session_id)
+    _make_run(conn, run_id, session_id)
+
+    row = conn.execute(
+        "SELECT stage FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row["stage"] == "queued", row["stage"]
+
+    conn.execute("UPDATE runs SET stage = 'brief_pause' WHERE id = ?", (run_id,))
+    conn.commit()
+    conn.close()
+
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT stage FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row["stage"] == "brief_pause", row["stage"]
+    conn.close()
+    print("  ok  runs.stage defaults to 'queued' and persists 'brief_pause' "
+          "across a reopened connection")
+
+
 def test_key_messages_status_default_and_check():
     conn = _fresh_db()
     session_id = str(uuid.uuid4())
@@ -121,6 +155,7 @@ def test_key_messages_orphan_session_rejected():
 
 if __name__ == "__main__":
     tests = [
+        test_runs_stage_default_and_brief_pause_persistence,
         test_key_messages_status_default_and_check,
         test_key_messages_row_defaults_and_fk_cascade,
         test_key_messages_orphan_session_rejected,

@@ -176,9 +176,16 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
         label_to_col[point["label"]] = col
 
     # Group points by video so each batch only sees its own video's points.
+    # A point with video_id None is a Session-level Key Message: it was
+    # never scoped to one video, so it is broadcast into every video's
+    # batch rather than excluded from all but one.
+    all_video_ids = df["video_id"].unique().tolist()
     points_by_video = {}
     for point in points:
-        points_by_video.setdefault(point["video_id"], []).append(point)
+        vid = point.get("video_id")
+        targets = all_video_ids if vid is None else [vid]
+        for t in targets:
+            points_by_video.setdefault(t, []).append(point)
 
     batch_size = cfg.CLASSIFY_BATCH_SIZE if cfg is not None else 25
 

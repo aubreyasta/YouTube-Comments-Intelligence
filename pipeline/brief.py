@@ -248,7 +248,7 @@ def draft_from_inputs(text, images, cfg: PipelineConfig, *, id_factory=uuid.uuid
 
 
 def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
-              images_map=None, *, id_factory=uuid.uuid4):
+              images_map=None, *, id_factory=uuid.uuid4, include_grounded=False):
     """
     Reconcile an existing ordered Key Message list against transcripts at
     run time.
@@ -268,9 +268,16 @@ def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
 
     Returns a list of KeyMessage dicts in stable order: existing entries
     first (in their given order), then new transcript-only additions.
+
+    `include_grounded=True` returns `(grounded_markdown, reconciled)`
+    instead - adapter.py needs that markdown for report.json and the
+    report body, and reconcile() already makes the one `run()` call that
+    produces it; a second call would double the model cost for the same
+    transcripts. Defaults False so existing callers keep getting the
+    plain list.
     """
     existing = list(existing or [])
-    _, points = run(meta_df, cfg, context_map=context_map, images_map=images_map)
+    grounded, points = run(meta_df, cfg, context_map=context_map, images_map=images_map)
 
     derived = []
     seen_labels = set()
@@ -308,4 +315,4 @@ def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
 
     for order, entry in enumerate(reconciled):
         entry["order"] = order
-    return reconciled
+    return (grounded, reconciled) if include_grounded else reconciled

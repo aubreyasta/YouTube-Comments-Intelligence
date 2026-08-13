@@ -121,6 +121,11 @@ def _push(run_id: str, stage: str, message: str, pct: int,
         "pct": pct,
         "detail": detail,
     })
+    # Persisted alongside the queue event (not instead of it) so GET
+    # /runs/{id} can report brief_pause after a tab reopens with no SSE
+    # connection to replay from - the queue is per-process and empties
+    # once drained, but this column survives.
+    _set_run_stage(run_id, stage)
     if stage in ("complete", "error"):
         with _lock:
             _terminal[run_id] = True
@@ -142,6 +147,18 @@ def _set_run_state(run_id: str, state: str, **extra_cols) -> None:
         conn.execute(
             f"UPDATE runs SET {set_clause} WHERE id = ?",
             (*cols.values(), run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_run_stage(run_id: str, stage: str) -> None:
+    """Persist the fine-grained SSE stage onto the run row. Best-effort:
+    a run that vanished mid-flight (deleted by a later overwrite) is not
+    an error worth surfacing from inside a progress callback."""
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE runs SET stage = ? WHERE id = ?", (stage, run_id))
         conn.commit()
     finally:
         conn.close()
@@ -203,18 +220,53 @@ def _load_assets(campaign_id: str) -> list[dict]:
         conn.close()
 
 
-def _insert_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> None:
-    """Insert one row per point. video_id is the YouTube ID string."""
+def _load_session_key_messages(session_id: str) -> list[dict]:
+    """Return the Session's key_messages rows as KeyMessage dicts (id,
+    label, description, included, order, edited), in sort_order. This is
+    the immutable read side of the run snapshot: adapter.py never writes
+    back to this table."""
     conn = db.get_conn()
     try:
-        for i, pt in enumerate(points):
+        rows = conn.execute(
+            "SELECT * FROM key_messages WHERE session_id = ? ORDER BY sort_order",
+            (session_id,)).fetchall()
+        return [
+            {
+                "id": r["id"], "label": r["label"], "description": r["description"],
+                "included": bool(r["included"]), "order": r["sort_order"],
+                "edited": bool(r["edited"]),
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def _replace_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> None:
+    """Replace this run's brief_points with `points` (KeyMessage-shaped
+    dicts: id, label, description, included, order, edited). video_id is
+    always NULL here - these are Session-level Key Messages, not the old
+    per-video brief() points - so analyze.classify() broadcasts each one
+    to every video's batch (see pipeline/analyze.py).
+
+    Called twice per run: once with the raw Session snapshot before
+    collect (so a crash before brief_pause still leaves an auditable
+    starting point), once with the transcript-reconciled list right
+    before brief_pause. Both calls delete-then-reinsert under this run's
+    id, never touching key_messages.
+    """
+    conn = db.get_conn()
+    try:
+        conn.execute("DELETE FROM brief_points WHERE run_id = ?", (run_id,))
+        for pt in points:
             conn.execute(
                 """INSERT INTO brief_points
                    (id, run_id, campaign_id, video_id, label, description,
                     approved, edited, included, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, ?)""",
-                (str(uuid.uuid4()), run_id, campaign_id,
-                 pt["video_id"], pt["label"], pt["description"], i))
+                   VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?, ?)""",
+                (pt["id"], run_id, campaign_id, pt["label"], pt.get("description", ""),
+                 int(pt.get("edited", False)), int(pt.get("included", True)),
+                 pt.get("order", 0)))
         conn.commit()
     finally:
         conn.close()
@@ -725,7 +777,15 @@ def _execute(run_id: str) -> None:
         cfg = _build_config(run_id, session_row, campaign, videos,
                             campaign_context)
 
-        # --- 4. Collect -----------------------------------------------------
+        # --- 4. Snapshot Session Key Messages into this run -----------------
+        # Immutable from here: this run never writes back to key_messages
+        # (see _load_session_key_messages docstring). Snapshotting before
+        # collect means a crash mid-collect still leaves an auditable
+        # brief_points row set rather than none at all.
+        session_key_messages = _load_session_key_messages(run_row["session_id"])
+        _replace_brief_points(run_id, campaign["id"], session_key_messages)
+
+        # --- 5. Collect -------------------------------------------------------
         pipeline_llm.preflight(cfg)
         _push(run_id, "collect", "Fetching comments and transcripts", 5)
         comments_df, meta_df = collect.fetch(cfg)
@@ -735,27 +795,36 @@ def _execute(run_id: str) -> None:
               f"Collected {len(base_df)} comments in analysis base", 20,
               detail=f"total fetched: {len(comments_df)}")
 
-        # --- 5. Brief -------------------------------------------------------
+        # --- 6. Brief: reconcile the snapshot against transcripts -----------
+        # brief.reconcile() keeps edited entries and stable ids verbatim,
+        # refreshes unedited matches with the transcript-grounded
+        # description, and appends transcript-only messages a Session
+        # with no User Inputs would otherwise have none of (CHANGELOG
+        # "No-input Sessions draft from transcripts").
         _push(run_id, "brief", "Reading the videos", 22)
         summary_str = "; ".join(
             meta_df["title"].fillna("").astype(str).head(6))
-        grounded, points = brief.run(meta_df, cfg,
-                                     context_map=campaign_context,
-                                     images_map=images_map)
+        grounded, reconciled = brief.reconcile(
+            session_key_messages, meta_df, cfg,
+            context_map=campaign_context, images_map=images_map,
+            include_grounded=True)
         _push(run_id, "brief",
-              f"Brief complete - {len(points)} points discovered", 38,
-              detail=str(len(points)))
+              f"Brief complete - {len(reconciled)} points discovered", 38,
+              detail=str(len(reconciled)))
 
-        # --- 6. Insert brief points; brief pause ----------------------------
-        _insert_brief_points(run_id, campaign["id"], points)
+        # --- 7. Replace brief points with the reconciled list; brief pause --
+        _replace_brief_points(run_id, campaign["id"], reconciled)
         _push(run_id, "brief_pause",
               "Brief ready for review. Waiting for approval.", 40,
-              detail=str(len(points)))
+              detail=str(len(reconciled)))
 
         # Block until server.py calls proceed (sets the event).
         get_proceed_event(run_id).wait()
 
-        # --- 7. Re-read approved / edited brief points ----------------------
+        # --- 8. Re-read included brief points ---------------------------------
+        # video_id is always NULL on these rows (Session-level Key
+        # Messages, not the old per-video brief() points); analyze.classify()
+        # broadcasts a None video_id to every video's batch.
         db_points = _load_brief_points(run_id)
 
         classifier_points = [
@@ -773,7 +842,7 @@ def _execute(run_id: str) -> None:
             raise ValueError(
                 "All brief points were excluded. At least one must be included.")
 
-        # --- 8. Classify ----------------------------------------------------
+        # --- 9. Classify ----------------------------------------------------
         _push(run_id, "classify", "Discovering themes", 42)
         themes = analyze.build(base_df, summary_str, cfg)
         _push(run_id, "classify",
@@ -796,7 +865,7 @@ def _execute(run_id: str) -> None:
               f"Classification complete - {other_share:.0f}% Other", 65,
               detail=f"other_share={other_share:.1f}")
 
-        # --- 9. Emotion and sentiment ---------------------------------------
+        # --- 10. Emotion and sentiment ---------------------------------------
         # Best-effort: free VRAM before the HuggingFace models load. A
         # failure here must not abort the run; final cleanup below still
         # retries the unload.
@@ -810,7 +879,7 @@ def _execute(run_id: str) -> None:
         _push(run_id, "emotion", "Emotion and sentiment analysis complete", 75,
               detail=affect_result.get("emotion", {}).get("caveat", ""))
 
-        # --- 10. Report -----------------------------------------------------
+        # --- 11. Report -----------------------------------------------------
         _push(run_id, "report", "Writing report", 77)
         markdown = pipeline_report.write(
             grounded, theme_table, transfer_table,
@@ -823,7 +892,7 @@ def _execute(run_id: str) -> None:
             meta_df, out_dir)
         _push(run_id, "report", "Report written", 88)
 
-        # --- 11. Build report.json ------------------------------------------
+        # --- 12. Build report.json ------------------------------------------
         report_data = _build_report_json(
             run_id, session_row, videos, base_df, transfer_table,
             theme_table, themes, columns, grounded, affect_result, cfg)
@@ -832,7 +901,7 @@ def _execute(run_id: str) -> None:
         with open(report_json_path, "w", encoding="utf-8") as fh:
             json.dump(report_data, fh, ensure_ascii=False, indent=2)
 
-        # --- 12. Copy artifacts to artifacts_dir and register in DB --------
+        # --- 13. Copy artifacts to artifacts_dir and register in DB --------
         art_dir = storage.artifacts_dir(run_id)
         artifact_files = [
             ("report_pdf",         "report.pdf"),
@@ -851,7 +920,7 @@ def _execute(run_id: str) -> None:
             shutil.copy2(src, dst)
             _insert_artifact(run_id, kind, dst)
 
-        # --- 13. Mark complete ----------------------------------------------
+        # --- 14. Mark complete ----------------------------------------------
         _set_run_state(run_id, "complete", finished_at=_now_iso())
         _push(run_id, "complete", "Run complete", 100,
               detail=f"artifacts: {art_dir}")

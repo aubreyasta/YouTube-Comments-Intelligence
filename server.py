@@ -315,9 +315,17 @@ def _ser_run(row, conn) -> dict:
     # DB states: queued | running | complete | failed
     # Frontend status: queued | running | complete | failed
     state = row["state"]
-    # stage is not stored in DB; when running we report "running" as a generic stage.
-    # The SSE stream carries real stage updates; getRun is a snapshot.
-    stage = state if state in ("complete", "failed") else ("connecting" if state == "queued" else "running")
+    # stage: terminal states always win. Otherwise use the persisted
+    # fine-grained stage adapter.py writes on every progress push (see
+    # adapter._set_run_stage) so a tab reopened with no SSE connection to
+    # replay from can still tell brief_pause apart from plain "running".
+    # "queued" is the DB default before the adapter thread's first push.
+    if state in ("complete", "failed"):
+        stage = state
+    elif row["stage"] and row["stage"] != "queued":
+        stage = row["stage"]
+    else:
+        stage = "connecting" if state == "queued" else "running"
 
     result = {
         "id": rid,
@@ -1117,6 +1125,17 @@ def start_run(session_id: str):
         if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
             _404("Session not found.")
 
+        # Reject a second concurrent run BEFORE deleting anything: overwrite
+        # (below) is only safe once we know no run is currently in flight,
+        # otherwise this would nuke a running adapter thread's brief_points
+        # and artifacts out from under it.
+        active = conn.execute(
+            "SELECT id FROM runs WHERE session_id = ? AND state IN ('queued', 'running')",
+            (session_id,)
+        ).fetchone()
+        if active:
+            _409("This session already has a run in progress.")
+
         # Overwrite: clear prior runs for this session before inserting the new one.
         # ponytail: hard overwrite, no run history; if history is wanted later, keep rows
         # and add a `latest` flag instead of deleting.
@@ -1184,20 +1203,14 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         if run is None:
             _404("Run not found.")
 
-        # 409 if past brief phase: the run must currently be paused at brief_pause.
-        # We detect this by checking that:
-        # (a) the run is still running (not complete/failed), AND
-        # (b) brief_points exist (adapter inserted them at brief_pause), AND
-        # (c) the proceed event has NOT been set yet (run still blocked).
-        # Simplest reliable check: run state == running, brief_points exist,
-        # proceed event not set.
-        if run["state"] not in ("running", "queued"):
-            _409("Brief review is only open while the run is paused at the brief stage.")
-
-        existing = conn.execute(
-            "SELECT id FROM brief_points WHERE run_id = ?", (run_id,)
-        ).fetchall()
-        if not existing:
+        # 409 if past brief phase: the run must currently be paused at
+        # brief_pause. Checked against the persisted stage column
+        # (adapter._set_run_stage), not "brief_points exist" - a Session
+        # with no Key Messages and no transcript-derived ones reconciles
+        # to an empty list, and that empty list is still a legitimate
+        # brief_pause the user must be able to edit (see the insert path
+        # below), not an "already moved on" state.
+        if run["state"] not in ("running", "queued") or run["stage"] != "brief_pause":
             _409("Brief review is only open while the run is paused at the brief stage.")
 
         proceed_event = adapter.get_proceed_event(run_id)
@@ -1210,21 +1223,41 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         if not any(p.included for p in points):
             _422("Keep at least one idea included.", "points")
 
-        # Bulk update: only update rows that belong to this run.
+        existing = conn.execute(
+            "SELECT id, campaign_id FROM brief_points WHERE run_id = ?", (run_id,)
+        ).fetchall()
         existing_ids = {r["id"] for r in existing}
+        campaign_id = existing[0]["campaign_id"] if existing else conn.execute(
+            "SELECT id FROM campaigns WHERE session_id = ?", (run["session_id"],)
+        ).fetchone()["id"]
+
         for p in points:
             label = (p.label or "").strip()
             if not label:
                 _422("Every idea needs a label.", "label")
-            if p.id not in existing_ids:
-                continue  # silently skip unknown IDs; they may be new additions in future
-            conn.execute(
-                """UPDATE brief_points
-                   SET label = ?, description = ?, approved = ?, included = ?, sort_order = ?, edited = 1
-                   WHERE id = ? AND run_id = ?""",
-                (label, (p.description or "").strip(), int(p.approved),
-                 int(p.included), p.order, p.id, run_id)
-            )
+            if p.id in existing_ids:
+                conn.execute(
+                    """UPDATE brief_points
+                       SET label = ?, description = ?, approved = ?, included = ?, sort_order = ?, edited = 1
+                       WHERE id = ? AND run_id = ?""",
+                    (label, (p.description or "").strip(), int(p.approved),
+                     int(p.included), p.order, p.id, run_id)
+                )
+            else:
+                # Unknown id: this is a new idea added client-side (the
+                # empty-list-at-pause case above, or any manual addition).
+                # Never trust a client-supplied id for a new row - mint
+                # one server-side so it can never collide with a row from
+                # another run or session.
+                conn.execute(
+                    """INSERT INTO brief_points
+                       (id, run_id, campaign_id, video_id, label, description,
+                        approved, edited, included, sort_order)
+                       VALUES (?, ?, ?, NULL, ?, ?, ?, 1, ?, ?)""",
+                    (str(uuid.uuid4()), run_id, campaign_id, label,
+                     (p.description or "").strip(), int(p.approved),
+                     int(p.included), p.order)
+                )
         conn.commit()
 
         saved = conn.execute(
@@ -1247,15 +1280,16 @@ def proceed_run(run_id: str):
         if run is None:
             _404("Run not found.")
 
-        if run["state"] not in ("running", "queued"):
+        # Checked against the persisted stage, not "brief_points exist" -
+        # brief_points now exist from the pre-collect snapshot onward
+        # (see adapter._replace_brief_points), so their mere presence no
+        # longer means the run has reached the review pause.
+        if run["state"] not in ("running", "queued") or run["stage"] != "brief_pause":
             _409("This run is not waiting for review.")
 
-        # brief_points must exist (inserted at brief_pause).
         bp = conn.execute(
             "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (run_id,)
         ).fetchall()
-        if not bp:
-            _409("This run is not waiting for review.")
 
         proceed_event = adapter.get_proceed_event(run_id)
         if proceed_event.is_set():
