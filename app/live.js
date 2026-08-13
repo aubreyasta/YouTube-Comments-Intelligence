@@ -16,7 +16,8 @@ function normError(body, status) {
   const message = inner.message || (typeof body.detail === "string" ? body.detail : null)
     || "Request failed (" + status + ")";
   const e = new Error(message);
-  e.code  = inner.error || "error";
+  e.error = inner.error || "error";
+  e.code  = e.error; // back-compat for existing callers
   e.field = inner.field || null;
   return e;
 }
@@ -41,6 +42,28 @@ async function apiFetch(path, opts) {
 async function apiJson(path, opts) {
   const resp = await apiFetch(path, opts);
   return resp.json();
+}
+
+/* Parses filename from a Content-Disposition header, quoted or unquoted.
+   Matches filename="x.csv" or filename=x.csv; ignores filename*= (RFC 5987)
+   since backend always sends plain filename for these artifacts. */
+function parseContentDispositionFilename(header) {
+  const m = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i.exec(header);
+  if (!m) return null;
+  return (m[1] || m[2] || "").trim();
+}
+
+/* The six public artifact kinds, in contract order. Mirrors demoApi's
+   PUBLIC_ARTIFACTS in app.js; kept independent since live.js loads first
+   and must not depend on app.js internals. */
+const PUBLIC_ARTIFACT_ORDER = {
+  report_pdf: 0, comments_csv: 1, key_messages_csv: 2,
+  themes_csv: 3, sentiment_csv: 4, emotions_csv: 5,
+};
+function filterPublicArtifacts(list) {
+  return (list || [])
+    .filter((a) => a.kind in PUBLIC_ARTIFACT_ORDER)
+    .sort((a, b) => PUBLIC_ARTIFACT_ORDER[a.kind] - PUBLIC_ARTIFACT_ORDER[b.kind]);
 }
 
 /* ---- helpers ---- */
@@ -140,6 +163,19 @@ const liveApi = {
     return apiJson("/api/sessions/" + id);
   },
 
+  async getKeyMessages(sessionId) {
+    const sess = await apiJson("/api/sessions/" + sessionId);
+    return sess.keyMessages;
+  },
+
+  async draftKeyMessages(sessionId) {
+    return apiJson("/api/sessions/" + sessionId + "/key_messages/draft", { method: "POST" });
+  },
+
+  async updateKeyMessages(sessionId, messages) {
+    return apiJson("/api/sessions/" + sessionId + "/key_messages", patch({ messages }));
+  },
+
   /* getRunningRun: return latestRun from session when status is queued/running. */
   async getRunningRun(sessionId) {
     const sess = await apiJson("/api/sessions/" + sessionId);
@@ -156,8 +192,8 @@ const liveApi = {
     return apiJson("/api/sessions/" + sessionId + "/runs", { method: "POST" });
   },
 
-  async updateBriefPoints(runId, points) {
-    return apiJson("/api/runs/" + runId + "/brief_points", patch({ points }));
+  async updateBriefPoints(runId, messages) {
+    return apiJson("/api/runs/" + runId + "/brief_points", patch({ messages }));
   },
 
   async proceedRun(runId) {
@@ -228,8 +264,12 @@ const liveApi = {
           const resp = await apiFetch(
             "/api/runs/" + run.id + "/artifacts/" + artifactId);
           const blob = await resp.blob();
-          return { id: artifactId, runId: run.id, name: artifact.name,
-                   kind: artifact.kind, content: blob };
+          const disposition = resp.headers.get("Content-Disposition") || "";
+          const filename = parseContentDispositionFilename(disposition) || artifact.filename;
+          return {
+            id: artifactId, runId: run.id, kind: artifact.kind,
+            filename, contentType: artifact.contentType, content: blob,
+          };
         }
       }
     }
@@ -272,7 +312,7 @@ const liveApi = {
       for (const runSummary of (full.runs || [])) {
         if (runSummary.status !== "complete") continue;
         const run = await apiJson("/api/runs/" + runSummary.id);
-        for (const art of (run.artifacts || [])) {
+        for (const art of filterPublicArtifacts(run.artifacts)) {
           files.push({
             ...art, _file: "artifact",
             campaignId: campaignId, campaignName,
@@ -287,16 +327,20 @@ const liveApi = {
   async listArtifacts(runId) {
     const run = await this.getRun(runId);
     if (run.status !== "complete") return [];
-    return run.artifacts || [];
+    return filterPublicArtifacts(run.artifacts);
   },
 
-  /* These three are demo-only; live mode never calls them but the signatures
-     must exist so mode-switched code paths don't throw on property access. */
-  async setKeyVisual() {
-    const e = new Error("Not available in live mode");
-    e.code = "conflict"; e.field = null;
-    throw e;
+  /** @param {string} campaignId @param {string} assetId @returns {Promise<never>} */
+  setKeyVisual(campaignId, assetId) {
+    return Promise.reject({
+      error: "FEATURE_UNAVAILABLE",
+      message: "Key visuals are not supported.",
+      field: null,
+    });
   },
+
+  /* These two are demo-only; live mode never calls them but the signatures
+     must exist so mode-switched code paths don't throw on property access. */
   async simulateDisconnect() {
     const e = new Error("Not available in live mode");
     e.code = "conflict"; e.field = null;

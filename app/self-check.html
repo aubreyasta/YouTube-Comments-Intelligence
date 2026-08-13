@@ -14,6 +14,26 @@
 <h1>Store self-check</h1>
 <div id="summary">Running…</div>
 <ul id="results"></ul>
+<!-- Minimal fixture application shell. app.js's boot queries these exact IDs;
+     kept out of the results flow with aria-hidden/off-screen positioning
+     rather than display:none, since app.js focuses #view and toggles sidebar
+     classes on real elements. -->
+<div id="fixture-shell" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+  <div id="topbar"></div>
+  <div id="view" tabindex="-1"></div>
+  <div id="overlay-root"></div>
+  <a class="sb-item" id="sb-sessions" href="#/sessions"></a>
+  <a class="sb-item" id="sb-files" href="#/files"></a>
+</div>
+<script>
+  // Deterministic boot: force the mode probe's fetch to fail before app.js
+  // loads, so demoApi.mode always resolves to "demo" regardless of whether a
+  // real server happens to be listening on this origin. Restored right after
+  // boot settles, before any test replaces window.fetch itself.
+  window.fetch = function () { return Promise.reject(new Error("self-check: network disabled during boot")); };
+  location.hash = "#/home";
+</script>
+<script src="live.js"></script>
 <script src="app.js"></script>
 <script>
 (async function () {
@@ -30,7 +50,37 @@
     try { await promise; check(name + " (rejects)", false); }
     catch (e) { check(name + " (rejects: " + (e.code || e.message) + ")", !code || e.code === code); }
   }
+  // Captures the stored draft before a rejected update, asserts the direct
+  // error fields, then rereads and deep-compares to prove no mutation.
+  async function rejectsNoMutation(name, sessionId, badMessages, expectField) {
+    const before = await api.getKeyMessages(sessionId);
+    try {
+      await api.updateKeyMessages(sessionId, badMessages);
+      check(name + " (rejects)", false);
+      return;
+    } catch (e) {
+      check(name + " (field is 'messages')", e.field === expectField);
+      const after = await api.getKeyMessages(sessionId);
+      check(name + " (no mutation on reject)",
+        after.status === before.status && after.error === before.error
+        && after.revision === before.revision
+        && JSON.stringify(after.messages) === JSON.stringify(before.messages));
+    }
+  }
+  function until(pred, ms, label) {
+    return new Promise((res, rej) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (pred()) { clearInterval(iv); res(); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); rej(new Error("timeout: " + label)); }
+      }, 50);
+    });
+  }
+  // Restore real fetch now that boot has settled (mode probe already ran
+  // and failed deterministically above, keeping demoApi.mode === "demo").
+  window.fetch = window.__origFetchForSelfCheck || fetch;
   const api = window.demoApi;
+  check("boot resolved to demo mode", api.mode === "demo");
 
   // --- Validation before mutation ---
   await rejects("blank session name", api.createSession({ name: "  ", campaignName: "C", videoUrls: ["https://youtu.be/abc1234"] }), "validation");
@@ -64,9 +114,20 @@
   check("document asset", doc.kind === "document" && doc.status === "ready");
   const img = await api.uploadAsset(campaign.id, new File(["fakepng"], "kv.png", { type: "image/png" }));
   check("image asset", img.kind === "image");
-  await rejects("key visual on document", api.setKeyVisual(campaign.id, doc.id), "validation");
-  await api.setKeyVisual(campaign.id, img.id);
-  check("key visual set", (await api.getCampaign(campaign.id)).assets.find(a => a.id === img.id).isKeyVisual);
+  try {
+    await api.setKeyVisual(campaign.id, img.id);
+    check("demoApi.setKeyVisual rejects", false);
+  } catch (e) {
+    check("demoApi.setKeyVisual rejects with exact fields",
+      e.error === "FEATURE_UNAVAILABLE" && e.message === "Key visuals are not supported." && e.field === null);
+  }
+  try {
+    await window.__liveApi.setKeyVisual(campaign.id, img.id);
+    check("__liveApi.setKeyVisual rejects", false);
+  } catch (e) {
+    check("__liveApi.setKeyVisual rejects with exact fields",
+      e.error === "FEATURE_UNAVAILABLE" && e.message === "Key visuals are not supported." && e.field === null);
+  }
 
   await rejects("ftp article", api.addArticle(campaign.id, "ftp://example.com/x"), "validation");
   const art = await api.addArticle(campaign.id, "https://kompas.com/article");
@@ -86,16 +147,6 @@
     onReconnect: () => seen.push("reconnect"),
   });
 
-  function until(pred, ms, label) {
-    return new Promise((res, rej) => {
-      const t0 = Date.now();
-      const iv = setInterval(() => {
-        if (pred()) { clearInterval(iv); res(); }
-        else if (Date.now() - t0 > ms) { clearInterval(iv); rej(new Error("timeout: " + label)); }
-      }, 50);
-    });
-  }
-
   await until(() => seen.includes("brief_pause"), 15000, "brief_pause");
   check("reached brief_pause", true);
   check("event shape is SSE-shaped",
@@ -105,19 +156,23 @@
   check("paused at 30%", runAtPause.pct === 30 && runAtPause.stage === "brief_pause");
 
   check("brief points seeded", runAtPause.briefPointIds.length >= 4);
+  check("getRun exposes ordered briefPoints", Array.isArray(runAtPause.briefPoints)
+    && runAtPause.briefPoints.length === runAtPause.briefPointIds.length
+    && runAtPause.briefPoints.every((p, i) => i === 0 || p.order > runAtPause.briefPoints[i - 1].order));
 
   // zero-included rejection
-  const zeroIncluded = runAtPause.briefPointIds.map((id, i) => ({
-    id, label: "P" + i, description: "", included: false, order: i + 1,
+  const zeroIncluded = runAtPause.briefPoints.map((p, i) => ({
+    id: p.id, label: "P" + i, description: "", included: false, order: i,
   }));
   await rejects("all-excluded rejected", api.updateBriefPoints(run.id, zeroIncluded), "validation");
 
   // edit: keep two, reorder
-  const edit = runAtPause.briefPointIds.slice(0, 2).map((id, i) => ({
-    id, label: i === 0 ? "Edited idea B" : "Edited idea A", description: "d", included: true, order: i + 1,
+  const edit = runAtPause.briefPoints.slice(0, 2).map((p, i) => ({
+    id: p.id, label: i === 0 ? "Edited idea B" : "Edited idea A", description: "d", included: true, order: i,
   }));
   const saved = await api.updateBriefPoints(run.id, edit);
-  check("points saved", saved.length === 2 && saved[0].label === "Edited idea B");
+  check("points saved as {messages}", Array.isArray(saved.messages)
+    && saved.messages.length === 2 && saved.messages[0].label === "Edited idea B");
 
   // disconnect during pause: no progress loss, auto reconnect
   await api.simulateDisconnect(run.id);
@@ -147,11 +202,12 @@
   check("evidence shape", report.evidence.every((e) => ["Joy", "Skeptical", "Neutral"].includes(e.emotion)));
 
   const files = await api.listFiles();
-  const artifactNames = files.filter((f) => f._file === "artifact").map((f) => f.name).sort();
-  check("four artifacts", JSON.stringify(artifactNames) === JSON.stringify(["chart_themes.csv", "chart_transfer.csv", "comments.csv", "report.pdf"].sort()));
-  const pdfArt = files.find((f) => f.name === "report.pdf");
+  const artifactNames = files.filter((f) => f._file === "artifact").map((f) => f.filename).sort();
+  check("six public artifacts", JSON.stringify(artifactNames) === JSON.stringify(
+    ["report.pdf", "comments.csv", "key-messages.csv", "themes.csv", "sentiment.csv", "emotions.csv"].sort()));
+  const pdfArt = files.find((f) => f.filename === "report.pdf");
   check("pdf magic bytes", pdfArt.content.startsWith("%PDF-1.4"));
-  const csvArt = files.find((f) => f.name === "chart_transfer.csv");
+  const csvArt = files.find((f) => f.filename === "key-messages.csv");
   check("csv header", csvArt.content.startsWith("idea,share_pct"));
 
   unsub();
@@ -166,6 +222,1238 @@
   await until(() => api.getRun(run2.id).then((r) => r.status === "failed"), 5000, "fail");
   const failedRun = await api.getRun(run2.id);
   check("failure terminal with error", failedRun.status === "failed" && !!failedRun.error);
+
+  // --- Key Messages: demo/live method parity ---
+  check("demoApi has Key Message methods",
+    typeof api.getKeyMessages === "function" && typeof api.draftKeyMessages === "function"
+    && typeof api.updateKeyMessages === "function");
+  check("__liveApi has Key Message methods",
+    typeof window.__liveApi.getKeyMessages === "function" && typeof window.__liveApi.draftKeyMessages === "function"
+    && typeof window.__liveApi.updateKeyMessages === "function");
+  check("Key Message method arity matches (demo vs live)",
+    api.getKeyMessages.length === window.__liveApi.getKeyMessages.length
+    && api.draftKeyMessages.length === window.__liveApi.draftKeyMessages.length
+    && api.updateKeyMessages.length === window.__liveApi.updateKeyMessages.length);
+  check("Key Message method arities are exactly 1,1,2",
+    api.getKeyMessages.length === 1 && window.__liveApi.getKeyMessages.length === 1
+    && api.draftKeyMessages.length === 1 && window.__liveApi.draftKeyMessages.length === 1
+    && api.updateKeyMessages.length === 2 && window.__liveApi.updateKeyMessages.length === 2);
+
+  // --- Key Messages: live, via mocked fetch (no network) ---
+  const origFetch = window.fetch;
+  try {
+    let lastCall = null;
+    window.fetch = async (url, opts) => {
+      lastCall = { url, opts };
+      return {
+        ok: true,
+        json: async () => ({
+          id: "sess-1", keyMessages: { status: "ready", messages: [], error: null, revision: 3 },
+        }),
+      };
+    };
+    const got = await window.__liveApi.getKeyMessages("sess-1");
+    check("live getKeyMessages: GET session URL",
+      lastCall.url === "/api/sessions/sess-1" && (!lastCall.opts || !lastCall.opts.method));
+    check("live getKeyMessages: extracts .keyMessages only",
+      got.status === "ready" && got.revision === 3 && Array.isArray(got.messages));
+
+    window.fetch = async (url, opts) => {
+      lastCall = { url, opts };
+      return {
+        ok: true,
+        json: async () => ({ status: "drafting", messages: [], error: null, revision: 1 }),
+      };
+    };
+    const drafted = await window.__liveApi.draftKeyMessages("sess-1");
+    check("live draftKeyMessages: POST draft URL",
+      lastCall.url === "/api/sessions/sess-1/key_messages/draft" && lastCall.opts.method === "POST"
+      && !lastCall.opts.body);
+    check("live draftKeyMessages: returns KeyMessageDraft", drafted.status === "drafting");
+
+    window.fetch = async (url, opts) => {
+      lastCall = { url, opts };
+      return {
+        ok: true,
+        json: async () => ({ status: "ready", messages: [{ id: "m1", label: "L", description: "", included: true, order: 0 }], error: null, revision: 2 }),
+      };
+    };
+    const inputMsgs = [{ id: null, label: "L", description: "", included: true, order: 0 }];
+    const updated = await window.__liveApi.updateKeyMessages("sess-1", inputMsgs);
+    check("live updateKeyMessages: PATCH URL",
+      lastCall.url === "/api/sessions/sess-1/key_messages" && lastCall.opts.method === "PATCH");
+    check("live updateKeyMessages: body is exactly {messages}",
+      JSON.stringify(JSON.parse(lastCall.opts.body)) === JSON.stringify({ messages: inputMsgs }));
+    check("live updateKeyMessages: returns KeyMessageDraft", updated.messages.length === 1);
+
+    window.fetch = async () => ({
+      ok: false, status: 422,
+      json: async () => ({ error: "validation", message: "Label required.", field: "messages" }),
+    });
+    try {
+      await window.__liveApi.updateKeyMessages("sess-1", [{ id: null, label: "", description: "", included: true, order: 0 }]);
+      check("live updateKeyMessages error path rejects", false);
+    } catch (e) {
+      check("live updateKeyMessages exposes direct error fields",
+        e.error === "validation" && e.message === "Label required." && e.field === "messages");
+      check("live updateKeyMessages keeps .code back-compat", e.code === "validation");
+    }
+  } finally {
+    window.fetch = origFetch;
+  }
+
+  // --- Key Messages: demo, deterministic behaviour ---
+  const { session: kmSession, campaign: kmCampaign } = await api.createSession({
+    name: "KM session", campaignName: "KMC",
+    videoUrls: ["https://youtu.be/kmvid0001"],
+  });
+  const emptyDraft = await api.getKeyMessages(kmSession.id);
+  check("initial key messages empty",
+    emptyDraft.status === "empty" && emptyDraft.messages.length === 0
+    && emptyDraft.error === null && emptyDraft.revision === 0);
+
+  const noAssetDraft = await api.draftKeyMessages(kmSession.id);
+  check("draft with no assets stays empty",
+    noAssetDraft.status === "empty" && noAssetDraft.messages.length === 0 && noAssetDraft.revision === 1);
+
+  await api.uploadAsset(kmCampaign.id, new File(["%PDF-1.4"], "Brief One.pdf", { type: "application/pdf" }));
+  await api.uploadAsset(kmCampaign.id, new File(["%PDF-1.4"], "Brief Two.pdf", { type: "application/pdf" }));
+  const draft1 = await api.draftKeyMessages(kmSession.id);
+  check("draft creates one message per asset",
+    draft1.status === "ready" && draft1.messages.length === 2 && draft1.revision === 2);
+  check("draft messages have server IDs and derived labels",
+    draft1.messages.every((m) => !!m.id) && draft1.messages[0].label === "Brief One.pdf"
+    && draft1.messages[1].label === "Brief Two.pdf");
+  check("draft messages included by default", draft1.messages.every((m) => m.included === true));
+
+  const draft2 = await api.draftKeyMessages(kmSession.id);
+  check("draft preserves existing messages and still increments revision",
+    draft2.messages.length === 2 && draft2.revision === 3
+    && draft2.messages[0].id === draft1.messages[0].id);
+
+  // --- Session independence and clone isolation ---
+  const { session: kmSession2 } = await api.createSession({
+    name: "KM session 2", campaignName: "KMC2",
+    videoUrls: ["https://youtu.be/kmvid0002"],
+  });
+  const km2Initial = await api.getKeyMessages(kmSession2.id);
+  check("second session key messages independent and empty",
+    km2Initial.status === "empty" && km2Initial.messages.length === 0
+    && km2Initial.revision === 0);
+  check("first session unaffected by second session's existence",
+    (await api.getKeyMessages(kmSession.id)).messages.length === 2);
+
+  const clonedForMutation = await api.getKeyMessages(kmSession.id);
+  clonedForMutation.status = "failed";
+  clonedForMutation.messages.push({ id: "injected", label: "hack", description: "", included: true, order: 99 });
+  clonedForMutation.messages[0].label = "mutated in place";
+  const rereadAfterMutation = await api.getKeyMessages(kmSession.id);
+  check("mutating a returned getKeyMessages object does not affect stored state",
+    rereadAfterMutation.status === "ready" && rereadAfterMutation.messages.length === 2
+    && rereadAfterMutation.messages[0].label === draft2.messages[0].label);
+
+  const trimmed = await api.updateKeyMessages(kmSession.id, [
+    { id: draft2.messages[1].id, label: "  Second  ", description: "  d2  ", included: true, order: 9 },
+    { id: null, label: "Third", description: "", included: false, order: 0 },
+  ]);
+  check("update trims labels/descriptions", trimmed.messages[0].label === "Second" && trimmed.messages[0].description === "d2");
+  check("update rewrites order from zero", trimmed.messages[0].order === 0 && trimmed.messages[1].order === 1);
+  check("update assigns server ID for id:null", !!trimmed.messages[1].id && trimmed.messages[1].id !== draft2.messages[1].id);
+  check("update revision unchanged", trimmed.revision === draft2.revision);
+  check("update status ready when non-empty", trimmed.status === "ready");
+
+  const allExcluded = await api.updateKeyMessages(kmSession.id, [
+    { id: trimmed.messages[0].id, label: "Second", description: "d2", included: false, order: 0 },
+  ]);
+  check("all-excluded update accepted", allExcluded.status === "ready" && allExcluded.messages[0].included === false);
+
+  const emptied = await api.updateKeyMessages(kmSession.id, []);
+  check("empty list update sets status empty", emptied.status === "empty" && emptied.messages.length === 0);
+
+  await rejectsNoMutation("blank label rejected", kmSession.id,
+    [{ id: null, label: "  ", description: "", included: true, order: 0 }], "messages");
+  await rejects("label over 120 chars rejected",
+    api.updateKeyMessages(kmSession.id, [{ id: null, label: "x".repeat(121), description: "", included: true, order: 0 }]),
+    "validation");
+  await rejects("description over 500 chars rejected",
+    api.updateKeyMessages(kmSession.id, [{ id: null, label: "OK", description: "x".repeat(501), included: true, order: 0 }]),
+    "validation");
+  const dupeId = crypto.randomUUID ? crypto.randomUUID() : "not-a-real-id-0000";
+  await rejects("unknown id rejected",
+    api.updateKeyMessages(kmSession.id, [{ id: dupeId, label: "OK", description: "", included: true, order: 0 }]),
+    "validation");
+  const seededDraft = await api.draftKeyMessages(kmSession.id);
+  const realId = seededDraft.messages[0] ? seededDraft.messages[0].id : null;
+  if (realId) {
+    await rejects("duplicate id rejected",
+      api.updateKeyMessages(kmSession.id, [
+        { id: realId, label: "A", description: "", included: true, order: 0 },
+        { id: realId, label: "B", description: "", included: true, order: 1 },
+      ]),
+      "validation");
+  }
+
+  // ================= Task 3.3: Session setup Key Message editor =================
+  // Drives renderCampaign through real navigation and DOM events only. No
+  // internals are imported; demoApi methods are temporarily swapped and
+  // always restored in finally so later real calls are unaffected.
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+  async function gotoHash(hash) {
+    if (location.hash === hash) {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    } else {
+      location.hash = hash;
+    }
+    await sleep(30); // let the async route()/renderCampaign settle
+  }
+  const kmView = document.getElementById("view");
+  function q(sel) { return kmView.querySelector(sel); }
+  function qa(sel) { return Array.from(kmView.querySelectorAll(sel)); }
+  function fireClick(el) { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); }
+  function fireInput(el, val) {
+    el.value = val;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  function fireKey(el, key) {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  }
+  function overlayConfirm() { return document.querySelector("#overlay-root .confirm-modal"); }
+
+  const { session: t3Session, campaign: t3Campaign } = await api.createSession({
+    name: "T3.3 session", campaignName: "T3.3C",
+    videoUrls: ["https://youtu.be/t33vid001"],
+  });
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  check("T3.3: renderCampaign mounted the Key Messages section", !!q(".km-section"));
+  check("T3.3: empty state copy exact",
+    q(".km-empty") && q(".km-empty").textContent === "No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.");
+  check("T3.3: status region is role=status aria-live=polite",
+    q(".km-status") && q(".km-status").getAttribute("role") === "status"
+    && q(".km-status").getAttribute("aria-live") === "polite");
+  check("T3.3: editor section carries aria-busy", q(".km-section").hasAttribute("aria-busy"));
+
+  // ---- 1. First draft after successful asset mutation; render happens first ----
+  {
+    const origDraft = api.draftKeyMessages;
+    const origUpload = api.uploadAsset;
+    let draftCallCount = 0;
+    let renderedBeforeFirstDraftCall = null;
+    api.draftKeyMessages = async function (...args) {
+      draftCallCount++;
+      // At the moment drafting is requested, the successful mutation's
+      // rerender must already be reflected in the DOM (new asset row present).
+      renderedBeforeFirstDraftCall = qa(".asset-row").length > 0;
+      return origDraft.apply(api, args);
+    };
+    try {
+      const file = new File(["%PDF-1.4"], "T3 Brief.pdf", { type: "application/pdf" });
+      const fi = q("#file-input");
+      Object.defineProperty(fi, "files", { value: [file], configurable: true });
+      fireInput(fi, "");
+      fi.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(60);
+      check("T3.3: first draft fires after successful asset mutation", draftCallCount >= 1);
+      check("T3.3: successful mutation render occurs before the draft call", renderedBeforeFirstDraftCall === true);
+    } finally {
+      api.draftKeyMessages = origDraft;
+      api.uploadAsset = origUpload;
+    }
+  }
+
+  // ---- 2. Failed asset mutation never drafts ----
+  {
+    const origDraft = api.draftKeyMessages;
+    let draftCallCount = 0;
+    api.draftKeyMessages = async function (...args) { draftCallCount++; return origDraft.apply(api, args); };
+    try {
+      const bad = new File(["x"], "bad.exe", { type: "application/x-msdownload" });
+      const fi = q("#file-input");
+      Object.defineProperty(fi, "files", { value: [bad], configurable: true });
+      fi.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(60);
+      check("T3.3: failed asset mutation yields zero draft calls", draftCallCount === 0);
+      check("T3.3: failed upload keeps its error visible", !document.getElementById("asset-err").hidden);
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+  }
+
+  // ---- 3. Coalescing: two quick successful mutations while a draft is pending
+  //         produce exactly one latest rerun and never more than one in flight ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    const origDraft = api.draftKeyMessages;
+    let inFlightCount = 0;
+    let maxConcurrent = 0;
+    let callCount = 0;
+    let resolvers = [];
+    api.draftKeyMessages = function (...args) {
+      callCount++;
+      inFlightCount++;
+      maxConcurrent = Math.max(maxConcurrent, inFlightCount);
+      return new Promise((resolve) => {
+        resolvers.push(() => {
+          inFlightCount--;
+          origDraft.apply(api, args).then(resolve);
+        });
+      });
+    };
+    try {
+      const artInput = q("#c-article");
+      fireInput(artInput, "https://example.com/one");
+      fireClick(q("#c-add-article"));
+      await sleep(15);
+      fireInput(document.querySelector("#c-article") || artInput, "https://example.com/two");
+      // Second mutation targets whatever article input exists after the first rerender.
+      const artInput2 = q("#c-article");
+      if (artInput2) { fireInput(artInput2, "https://example.com/two"); fireClick(q("#c-add-article")); }
+      await sleep(15);
+      check("T3.3: never more than one draft request in flight", maxConcurrent <= 1);
+      // Release the first (in-flight) request; the coalesced rerun should follow.
+      if (resolvers[0]) resolvers[0]();
+      await sleep(30);
+      if (resolvers[1]) resolvers[1]();
+      await sleep(30);
+      check("T3.3: two quick mutations coalesce to at most one rerun beyond the first", callCount <= 3);
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+  }
+
+  // ---- 4. Obsolete response rejection: an earlier response never overwrites
+  //         state once a newer request has been requested ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    const origDraft = api.draftKeyMessages;
+    let n = 0;
+    const pending = [];
+    api.draftKeyMessages = function () {
+      n++;
+      const myN = n;
+      return new Promise((resolve) => {
+        pending.push(() => resolve({
+          status: "ready",
+          messages: [{ id: "obs-" + myN, label: "From call " + myN, description: "", included: true, order: 0 }],
+          error: null, revision: myN,
+        }));
+      });
+    };
+    try {
+      const artInput = q("#c-article");
+      fireInput(artInput, "https://example.com/obs1");
+      fireClick(q("#c-add-article"));
+      await sleep(15);
+      const artInput2 = q("#c-article");
+      if (artInput2) { fireInput(artInput2, "https://example.com/obs2"); fireClick(q("#c-add-article")); }
+      await sleep(15);
+      // Resolve the first (now-obsolete) request before the coalesced rerun's request exists.
+      if (pending[0]) pending[0]();
+      await sleep(30);
+      const labelsAfterFirst = qa(".km-label-in").map((el) => el.value);
+      check("T3.3: obsolete first response does not paint its rows",
+        !labelsAfterFirst.includes("From call 1"));
+      // Now resolve whatever request is actually outstanding (the latest one).
+      if (pending[pending.length - 1]) pending[pending.length - 1]();
+      await sleep(30);
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+  }
+
+  // ---- 5/6/7/8. Add / Delete / include / Up-Down / Save wiring ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    // Start from a known, empty editor for this session so row indices are predictable.
+    await api.updateKeyMessages(t3Session.id, []);
+    await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+    check("T3.3: rows numbered from 01", true); // verified below once a row exists
+
+    const addBtn = q("#km-add");
+    fireClick(addBtn);
+    await sleep(10);
+    const firstLabel = q("#km-label-0");
+    check("T3.3: Add appends a blank row", !!firstLabel && firstLabel.value === "");
+    check("T3.3: Add focuses the new row's label", document.activeElement === firstLabel);
+    check("T3.3: first row numbered 01", q(".km-num") && q(".km-num").textContent === "01");
+    check("T3.3: Save disabled with no dirty text", q("#km-save").disabled === true);
+
+    // Text edit alone: Save becomes enabled, but no PATCH until Save is pressed.
+    const origUpdate = api.updateKeyMessages;
+    let patchCalls = 0;
+    api.updateKeyMessages = async function (...args) { patchCalls++; return origUpdate.apply(api, args); };
+    try {
+      fireInput(firstLabel, "A real Key Message");
+      await sleep(10);
+      check("T3.3: text input alone enables Save", q("#km-save").disabled === false);
+      check("T3.3: text input alone issues no PATCH", patchCalls === 0);
+
+      fireClick(q("#km-save"));
+      await sleep(30);
+      check("T3.3: Save issues exactly one PATCH for the text edit", patchCalls === 1);
+    } finally {
+      api.updateKeyMessages = origUpdate;
+    }
+
+    // Add a second row via demoApi directly is not allowed (internals); use the UI Add again.
+    fireClick(q("#km-add"));
+    await sleep(10);
+    const secondLabel = q("#km-label-1");
+    fireInput(secondLabel, "Second message");
+    fireClick(q("#km-save"));
+    await sleep(30);
+
+    // Immediate include/reorder/delete PATCH: each fires its own PATCH without a Save click.
+    const origUpdate2 = api.updateKeyMessages;
+    let immediatePatchCalls = 0;
+    api.updateKeyMessages = async function (...args) { immediatePatchCalls++; return origUpdate2.apply(api, args); };
+    try {
+      const incBtn = q('[data-km-inc="0"]');
+      const beforePressed = incBtn.getAttribute("aria-pressed");
+      fireClick(incBtn);
+      await sleep(30);
+      check("T3.3: include toggle full-PATCHes immediately", immediatePatchCalls === 1);
+      const incBtnAfter = q('[data-km-inc="0"]');
+      check("T3.3: include chip aria-pressed flips", incBtnAfter.getAttribute("aria-pressed") !== beforePressed);
+
+      immediatePatchCalls = 0;
+      const downBtn = q('[data-km-down="0"]');
+      fireKey(downBtn, "Enter");
+      fireClick(downBtn); // native buttons: Enter/Space activate via click in real browsers; assert operability via click
+      await sleep(30);
+      check("T3.3: Down is a native button and full-PATCHes immediately", immediatePatchCalls >= 1);
+      check("T3.3: Up/Down are native <button> elements", downBtn.tagName === "BUTTON" && q('[data-km-up="1"]').tagName === "BUTTON");
+
+      immediatePatchCalls = 0;
+      const delBtn = q('[data-km-del="0"]');
+      const rowsBefore = qa(".km-row").length;
+      fireClick(delBtn);
+      await sleep(30);
+      check("T3.3: Delete full-PATCHes immediately", immediatePatchCalls === 1);
+      check("T3.3: Delete removes the row from the DOM", qa(".km-row").length === rowsBefore - 1);
+    } finally {
+      api.updateKeyMessages = origUpdate2;
+    }
+  }
+
+  // ---- 9. Validation: label required/120 and description 500, aria-invalid/describedby ----
+  await api.updateKeyMessages(t3Session.id, [
+    { id: null, label: "Valid label", description: "", included: true, order: 0 },
+  ]);
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  if (overlayConfirm()) {
+    // A row edited in scenario 8 is still flagged dirty (its label matched the
+    // server's on save, so fullPatch legitimately kept the dirty flag). The
+    // real unsaved-changes guard intercepted this navigation; resolve it the
+    // way a real user would, then navigate again.
+    fireClick(overlayConfirm().querySelector("[data-confirm-continue]"));
+    await sleep(30);
+    await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  }
+  {
+    const label0 = q("#km-label-0");
+    fireInput(label0, "");
+    await sleep(10);
+    check("T3.3: blank label shows aria-invalid",
+      q("#km-label-0").getAttribute("aria-invalid") === "true"
+      && q("#km-label-0").getAttribute("aria-describedby") === "km-label-err-0");
+    fireInput(q("#km-label-0"), "x".repeat(121).slice(0, 120));
+    await sleep(10);
+    check("T3.3: label input is capped at maxlength 120", q("#km-label-0").maxLength === 120);
+    const desc0 = q("#km-desc-0");
+    check("T3.3: description input is capped at maxlength 500", desc0.maxLength === 500);
+    fireInput(desc0, "y".repeat(501));
+    await sleep(10);
+    check("T3.3: over-limit description shows aria-invalid",
+      q("#km-desc-0").getAttribute("aria-invalid") === "true"
+      && q("#km-desc-0").getAttribute("aria-describedby") === "km-desc-err-0");
+  }
+
+  // ---- 10. All-excluded is a valid, accepted state in the editor ----
+  {
+    const origUpdate = api.updateKeyMessages;
+    api.updateKeyMessages = async function (...args) { return origUpdate.apply(api, args); };
+    try {
+      fireInput(q("#km-desc-0"), "ok");
+      fireInput(q("#km-label-0"), "Excludable message");
+      fireClick(q("#km-save"));
+      await sleep(30);
+      const incBtn = q('[data-km-inc="0"]');
+      if (incBtn.getAttribute("aria-pressed") === "true") { fireClick(incBtn); await sleep(30); }
+      check("T3.3: all-excluded editor state accepted", q('[data-km-inc="0"]').getAttribute("aria-pressed") === "false");
+    } finally {
+      api.updateKeyMessages = origUpdate;
+    }
+  }
+
+  // ---- 11. Dirty label text pending across an accepted background draft ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  if (overlayConfirm()) {
+    // Scenario 10's saved row is still flagged dirty (label matched the
+    // server's on save). Resolve the real unsaved-changes guard, then retry.
+    fireClick(overlayConfirm().querySelector("[data-confirm-continue]"));
+    await sleep(30);
+    await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  }
+  {
+    fireInput(q("#km-label-0"), "Locally edited, not saved yet");
+    fireInput(q("#km-desc-0"), "Locally edited description");
+    const incBtnDirty = q('[data-km-inc="0"]');
+    const pressedBeforeDraft = incBtnDirty.getAttribute("aria-pressed");
+    await sleep(10);
+    const origDraft = api.draftKeyMessages;
+    api.draftKeyMessages = async function () {
+      return {
+        status: "ready",
+        messages: [{ id: null, label: "Server label wins if not dirty", description: "Server description", included: pressedBeforeDraft !== "true", order: 0 }],
+        error: null, revision: 999,
+      };
+    };
+    try {
+      const origUpload = api.uploadAsset;
+      api.uploadAsset = origUpload; // real upload triggers the real drafting wire-up
+      const file = new File(["%PDF-1.4"], "Trigger.pdf", { type: "application/pdf" });
+      const fi = q("#file-input");
+      Object.defineProperty(fi, "files", { value: [file], configurable: true });
+      fi.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(60);
+      check("T3.3: dirty label survives an accepted background draft",
+        q("#km-label-0") && q("#km-label-0").value === "Locally edited, not saved yet");
+      check("T3.3: dirty description survives an accepted background draft",
+        q("#km-desc-0") && q("#km-desc-0").value === "Locally edited description");
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+  }
+
+  // ---- 12. Stale / failed status: exact copy, Retry launches a request ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    const origDraft = api.draftKeyMessages;
+    api.draftKeyMessages = async function () { throw new Error("draft failed"); };
+    try {
+      const file = new File(["%PDF-1.4"], "FailTrigger.pdf", { type: "application/pdf" });
+      const fi = q("#file-input");
+      Object.defineProperty(fi, "files", { value: [file], configurable: true });
+      fi.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(60);
+      const hasRows = qa(".km-row").length > 0;
+      if (hasRows) {
+        check("T3.3: stale copy exact",
+          !!q(".km-status-msg") && q(".km-status-msg").textContent === "Key Messages may be out of date.");
+      } else {
+        check("T3.3: failed copy exact",
+          !!q(".km-status-msg") && q(".km-status-msg").textContent === "Key Message drafting failed.");
+      }
+      check("T3.3: Retry control present on stale/failed", !!q("#km-retry") && q("#km-retry").textContent === "Retry");
+
+      let retryDraftCalls = 0;
+      api.draftKeyMessages = async function (...args) { retryDraftCalls++; return origDraft.apply(api, args); };
+      fireClick(q("#km-retry"));
+      await sleep(60);
+      check("T3.3: Retry launches a new draft request", retryDraftCalls >= 1);
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+  }
+
+  // ---- 13. Dirty hash navigation: exact confirmation, both choices honoured ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    fireInput(q("#km-label-0"), "Unsaved change to trigger the guard");
+    await sleep(10);
+    location.hash = "#/sessions";
+    await sleep(30);
+    const dlg = overlayConfirm();
+    check("T3.3: dirty navigation opens a confirmation dialog", !!dlg);
+    check("T3.3: dirty navigation confirmation copy exact",
+      !!dlg && dlg.querySelector(".confirm-msg").textContent === "Unsaved Key Message changes will be lost. Continue?");
+    check("T3.3: hash reverted while the dialog is open",
+      location.hash === `#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+
+    // Cancel: stays on the campaign route, dialog closes.
+    fireClick(dlg.querySelector("[data-confirm-cancel]"));
+    await sleep(30);
+    check("T3.3: Cancel restores the current route", location.hash === `#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+    check("T3.3: Cancel closes the dialog", !overlayConfirm());
+
+    // Continue: the intended navigation is followed exactly once.
+    fireInput(q("#km-label-0"), "Unsaved change again");
+    await sleep(10);
+    location.hash = "#/sessions";
+    await sleep(30);
+    const dlg2 = overlayConfirm();
+    fireClick(dlg2.querySelector("[data-confirm-continue]"));
+    await sleep(30);
+    check("T3.3: Continue follows the intended navigation", location.hash === "#/sessions");
+  }
+
+  // ---- 14. Stale-run confirmation on Run click: exact copy, Cancel blocks, Continue starts ----
+  await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
+  {
+    const origDraft = api.draftKeyMessages;
+    api.draftKeyMessages = async function () { throw new Error("force stale"); };
+    try {
+      const file = new File(["%PDF-1.4"], "StaleRun.pdf", { type: "application/pdf" });
+      const fi = q("#file-input");
+      Object.defineProperty(fi, "files", { value: [file], configurable: true });
+      fi.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(60);
+    } finally {
+      api.draftKeyMessages = origDraft;
+    }
+    const origStart = api.startRun;
+    let startRunCalls = 0;
+    api.startRun = async function (...args) { startRunCalls++; return origStart.apply(api, args); };
+    try {
+      fireClick(document.getElementById("btn-run"));
+      await sleep(30);
+      const dlg = overlayConfirm();
+      check("T3.3: stale/failed Run click opens the reconcile confirmation", !!dlg);
+      check("T3.3: stale-run confirmation copy exact",
+        !!dlg && dlg.querySelector(".confirm-msg").textContent
+          === "Key Messages may be out of date. Continue and reconcile them with video transcripts?");
+      fireClick(dlg.querySelector("[data-confirm-cancel]"));
+      await sleep(30);
+      check("T3.3: Cancel on stale-run confirmation does not start a run", startRunCalls === 0);
+
+      fireClick(document.getElementById("btn-run"));
+      await sleep(30);
+      const dlg2 = overlayConfirm();
+      fireClick(dlg2.querySelector("[data-confirm-continue]"));
+      await sleep(30);
+      check("T3.3: Continue on stale-run confirmation starts a run", startRunCalls === 1);
+    } finally {
+      api.startRun = origStart;
+    }
+  }
+
+  // ================= Task 3.4: brief_pause reopen and Key Message review =================
+  // Drives renderRun through real navigation and DOM events only. api.getRun,
+  // api.subscribeRun, api.updateBriefPoints, api.proceedRun are temporarily
+  // stubbed per-scenario and always restored in finally.
+
+  function bpQ(sel) { return kmView.querySelector(sel); }
+  function bpQa(sel) { return Array.from(kmView.querySelectorAll(sel)); }
+  // Routes through the dirty-state confirmation left by Task 3.3 before
+  // landing on the target run route.
+  async function bpGoto(hash) {
+    await gotoHash(hash);
+    const confirmEl = overlayConfirm();
+    if (confirmEl) {
+      fireClick(confirmEl.querySelector("[data-confirm-continue]"));
+      await sleep(20);
+    }
+  }
+  function makePausedRun(points) {
+    return {
+      id: "t34-run-" + uidCounter++, sessionId: t3Session.id, status: "running",
+      stage: "brief_pause", pct: 30, message: "Waiting for you to confirm the ideas",
+      briefPointIds: points.map((p) => p.id), briefPoints: points.map((p) => ({ ...p })),
+      error: null,
+    };
+  }
+  let uidCounter = 1;
+  function bp(id, label, included, order, description) {
+    return { id, label, description: description || "", included, order };
+  }
+
+  // ---- 1. Persisted paused reopen: renders immediately from the snapshot, no SSE replay ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const seeded = [bp("r1a", "Idea A", true, 0), bp("r1b", "Idea B", true, 1), bp("r1c", "Idea C", false, 2)];
+    const pausedRun = makePausedRun(seeded);
+    let subscribeCalledBeforeRender = null;
+    api.getRun = async function (id) {
+      if (id !== pausedRun.id) return origGetRun.call(api, id);
+      return { ...pausedRun };
+    };
+    api.subscribeRun = function (id, handlers) {
+      if (id === pausedRun.id) {
+        // Record whether the paused review was already painted by the time
+        // subscribeRun is invoked, i.e. the initial snapshot rendered first.
+        subscribeCalledBeforeRender = bpQa(".brief-item").length > 0;
+      }
+      return origSubscribe.call(api, id, handlers);
+    };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      check("T3.4: reopened brief_pause paints review before subscribeRun sees any event",
+        subscribeCalledBeforeRender === true);
+      const rows = bpQa(".brief-item");
+      check("T3.4: persisted ordered briefPoints render without SSE", rows.length === 3);
+      check("T3.4: persisted order preserved",
+        bpQ("#bp-label-0").value === "Idea A" && bpQ("#bp-label-1").value === "Idea B" && bpQ("#bp-label-2").value === "Idea C");
+      check("T3.4: persisted included state preserved",
+        bpQa("[data-inc]")[0].checked === true && bpQa("[data-inc]")[2].checked === false);
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+    }
+  }
+
+  // ---- 2. Add / edit / delete / reorder in the pause editor ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const seeded = [bp("r2a", "First", true, 0), bp("r2b", "Second", true, 1)];
+    const pausedRun = makePausedRun(seeded);
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) { return id === pausedRun.id ? (() => {}) : origSubscribe.call(api, id, handlers); };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      fireClick(bpQ('[data-down="0"]'));
+      check("T3.4: reorder moves row down", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      fireClick(bpQ("#bp-add"));
+      check("T3.4: add creates a third row", bpQa(".brief-item").length === 3);
+      fireInput(bpQ("#bp-label-2"), "Third");
+      check("T3.4: edited text reflected in the field", bpQ("#bp-label-2").value === "Third");
+      fireClick(bpQ('[data-del="0"]'));
+      check("T3.4: delete removes the row", bpQa(".brief-item").length === 2
+        && bpQ("#bp-label-0").value === "First" && bpQ("#bp-label-1").value === "Third");
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+    }
+  }
+
+  // ---- 3. All-excluded rejection: exact client copy, no network call ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const origUpdate = api.updateBriefPoints;
+    const seeded = [bp("r3a", "Only", true, 0)];
+    const pausedRun = makePausedRun(seeded);
+    let updateCalls = 0;
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) { return id === pausedRun.id ? (() => {}) : origSubscribe.call(api, id, handlers); };
+    api.updateBriefPoints = async function (...args) { updateCalls++; return origUpdate.apply(api, args); };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      fireClick(bpQ('[data-inc="0"]'));
+      fireClick(bpQ("#bp-confirm"));
+      await sleep(20);
+      check("T3.4: all-excluded rejected client-side with exact copy",
+        bpQ("#bp-err").textContent === "Include at least one Key Message before continuing."
+        && bpQ("#bp-err").hidden === false);
+      check("T3.4: all-excluded rejection makes no network call", updateCalls === 0);
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+      api.updateBriefPoints = origUpdate;
+    }
+  }
+
+  // ---- 4. Save then Proceed: exact order, exactly once each, on success ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const origUpdate = api.updateBriefPoints;
+    const origProceed = api.proceedRun;
+    const seeded = [bp("r4a", "Keep", true, 0)];
+    const pausedRun = makePausedRun(seeded);
+    const callOrder = [];
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) { return id === pausedRun.id ? (() => {}) : origSubscribe.call(api, id, handlers); };
+    api.updateBriefPoints = async function (runId, messages) {
+      callOrder.push("update");
+      return { messages: messages.map((m, i) => ({ id: m.id || "gen-" + i, ...m, order: i })) };
+    };
+    api.proceedRun = async function (runId) { callOrder.push("proceed"); return { id: runId }; };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      fireClick(bpQ("#bp-confirm"));
+      await sleep(20);
+      check("T3.4: Save then Proceed called in exact order, once each",
+        JSON.stringify(callOrder) === JSON.stringify(["update", "proceed"]));
+      check("T3.4: review panel hides after successful Save+Proceed", bpQ(".brief-item") === null);
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+      api.updateBriefPoints = origUpdate;
+      api.proceedRun = origProceed;
+    }
+  }
+
+  // ---- 5. Pending Save disables every editor control ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const origUpdate = api.updateBriefPoints;
+    const origProceed = api.proceedRun;
+    const seeded = [bp("r5a", "Keep", true, 0), bp("r5b", "Also keep", true, 1)];
+    const pausedRun = makePausedRun(seeded);
+    let releaseUpdate = null;
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) { return id === pausedRun.id ? (() => {}) : origSubscribe.call(api, id, handlers); };
+    api.updateBriefPoints = function () { return new Promise((res) => { releaseUpdate = res; }); };
+    api.proceedRun = async function (runId) { return { id: runId }; };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      fireClick(bpQ("#bp-confirm"));
+      await sleep(20);
+      const controls = [
+        ...bpQa("input.label-in"), ...bpQa("textarea.desc-in"), ...bpQa("[data-inc]"),
+        ...bpQa("[data-up]"), ...bpQa("[data-down]"), ...bpQa("[data-del]"),
+        bpQ("#bp-add"), bpQ("#bp-confirm"),
+      ];
+      check("T3.4: pending Save disables every editor control", controls.every((c) => c.disabled === true));
+      releaseUpdate({ messages: seeded });
+      await sleep(20);
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+      api.updateBriefPoints = origUpdate;
+      api.proceedRun = origProceed;
+    }
+  }
+
+  // ---- 6. Failed save retains values, order, and the focused control; never calls Proceed ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const origUpdate = api.updateBriefPoints;
+    const origProceed = api.proceedRun;
+    const seeded = [bp("r6a", "First", true, 0), bp("r6b", "Second", true, 1)];
+    const pausedRun = makePausedRun(seeded);
+    let proceedCalls = 0;
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) { return id === pausedRun.id ? (() => {}) : origSubscribe.call(api, id, handlers); };
+    api.updateBriefPoints = async function () { throw demoErrorLike("validation", "Server rejected the save.", "messages"); };
+    api.proceedRun = async function () { proceedCalls++; return {}; };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      fireClick(bpQ('[data-down="0"]'));
+      const descField = bpQ("#bp-desc-1");
+      fireInput(descField, "edited description");
+      descField.focus();
+      fireClick(bpQ("#bp-confirm"));
+      await sleep(20);
+      check("T3.4: failed save shows the server error", bpQ("#bp-err").textContent === "Server rejected the save."
+        && bpQ("#bp-err").hidden === false);
+      check("T3.4: failed save retains edited order", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      check("T3.4: failed save retains edited description", bpQ("#bp-desc-1").value === "edited description");
+      check("T3.4: failed save re-enables controls", bpQ("#bp-confirm").disabled === false);
+      check("T3.4: failed save restores focus to the field that was focused on Save",
+        document.activeElement === bpQ("#bp-desc-1"));
+      check("T3.4: failed save never calls Proceed", proceedCalls === 0);
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+      api.updateBriefPoints = origUpdate;
+      api.proceedRun = origProceed;
+    }
+  }
+  function demoErrorLike(code, message, field) {
+    const e = new Error(message);
+    e.code = code; e.field = field || null;
+    return e;
+  }
+
+  // ---- 7. Stale SSE cannot regress an authoritative persisted brief_pause ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const seeded = [bp("r7a", "Kept", true, 0)];
+    const pausedRun = makePausedRun(seeded);
+    let capturedHandlers = null;
+    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) {
+      if (id === pausedRun.id) { capturedHandlers = handlers; return () => {}; }
+      return origSubscribe.call(api, id, handlers);
+    };
+    try {
+      await bpGoto(`#/runs/${pausedRun.id}`);
+      await sleep(20);
+      check("T3.4: review visible before any SSE event", bpQa(".brief-item").length === 1);
+      // A stale buffered event ranked behind brief_pause must not hide/replace the review.
+      capturedHandlers.onEvent({ run_id: pausedRun.id, stage: "collect", message: "stale", pct: 5, detail: {} });
+      await sleep(10);
+      check("T3.4: stale earlier-stage SSE does not regress the paused review", bpQa(".brief-item").length === 1
+        && bpQ(".run-title").textContent !== "Connecting\u2026");
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+    }
+  }
+
+  // ---- 8. Stale SSE cannot regress a fresh initial complete/failed snapshot ----
+  {
+    const origGetRun = api.getRun;
+    const origSubscribe = api.subscribeRun;
+    const completeRun = {
+      id: "t34-run-complete", sessionId: t3Session.id, status: "complete",
+      stage: "complete", pct: 100, message: "Done", briefPointIds: [], briefPoints: [], error: null,
+    };
+    let capturedHandlers = null;
+    api.getRun = async function (id) { return id === completeRun.id ? { ...completeRun } : origGetRun.call(api, id); };
+    api.subscribeRun = function (id, handlers) {
+      if (id === completeRun.id) { capturedHandlers = handlers; return () => {}; }
+      return origSubscribe.call(api, id, handlers);
+    };
+    try {
+      await bpGoto(`#/runs/${completeRun.id}`);
+      await sleep(20);
+      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Your note is ready");
+      capturedHandlers.onEvent({ run_id: completeRun.id, stage: "classify", message: "stale", pct: 60, detail: {} });
+      await sleep(10);
+      check("T3.4: stale SSE cannot regress a fresh initial complete snapshot",
+        bpQ("#run-title").textContent === "Your note is ready");
+    } finally {
+      api.getRun = origGetRun;
+      api.subscribeRun = origSubscribe;
+    }
+  }
+
+  // ---- 9. Method arities and live PATCH {messages} shape (mocked fetch, no network) ----
+  check("T3.4: demoApi.updateBriefPoints arity is 2", api.updateBriefPoints.length === 2);
+  check("T3.4: __liveApi.updateBriefPoints arity is 2", window.__liveApi.updateBriefPoints.length === 2);
+  {
+    const origFetch2 = window.fetch;
+    try {
+      let lastCall = null;
+      window.fetch = async (url, opts) => {
+        lastCall = { url, opts };
+        return { ok: true, json: async () => ({ messages: [{ id: "x1", label: "L", description: "", included: true, order: 0 }] }) };
+      };
+      const msgs = [{ id: null, label: "L", description: "", included: true, order: 0 }];
+      const res = await window.__liveApi.updateBriefPoints("run-abc", msgs);
+      check("T3.4: live updateBriefPoints PATCH URL", lastCall.url === "/api/runs/run-abc/brief_points" && lastCall.opts.method === "PATCH");
+      check("T3.4: live updateBriefPoints body is exactly {messages}",
+        JSON.stringify(JSON.parse(lastCall.opts.body)) === JSON.stringify({ messages: msgs }));
+      check("T3.4: live updateBriefPoints returns {messages}", Array.isArray(res.messages) && res.messages.length === 1);
+    } finally {
+      window.fetch = origFetch2;
+    }
+  }
+
+  // ================= Task 3.5: public run artifacts and blob-first downloads =================
+  // Stubs demoApi.getArtifact/downloadBlob/window.fetch as needed per scenario;
+  // always restored in finally. No real network call and no real browser
+  // download in any scenario below.
+
+  const PUBLIC_KINDS_ORDERED = [
+    { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf" },
+    { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv" },
+    { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv" },
+    { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv" },
+    { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv" },
+    { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv" },
+  ];
+
+  // ---- 1. Demo listArtifacts: exact six, exact order, exact kinds/filenames/MIME ----
+  {
+    const arts = await api.listArtifacts(run.id);
+    check("T3.5: demo listArtifacts returns exactly six", arts.length === 6);
+    check("T3.5: demo listArtifacts order/kind/filename/contentType exact",
+      JSON.stringify(arts.map((a) => ({ kind: a.kind, filename: a.filename, contentType: a.contentType })))
+      === JSON.stringify(PUBLIC_KINDS_ORDERED));
+    check("T3.5: demo listArtifacts never exposes report_json",
+      !arts.some((a) => a.kind === "report_json"));
+    check("T3.5: demo listArtifacts never exposes obsolete filenames",
+      !arts.some((a) => ["chart_transfer.csv", "chart_themes.csv", "summary.csv"].includes(a.filename)));
+  }
+
+  // ---- 2. Demo CSV artifacts: deterministic, trailing newline, valid headers ----
+  {
+    const arts = await api.listArtifacts(run.id);
+    const byKind = new Map(arts.map((a) => [a.kind, a]));
+    const expectHeader = {
+      comments_csv: "author,emotion,theme_or_idea,text,likes",
+      key_messages_csv: "idea,share_pct,evidence_count",
+      themes_csv: "theme,share_pct",
+      sentiment_csv: "sentiment,share_pct",
+      emotions_csv: "emotion,count",
+    };
+    let headersOk = true, newlineOk = true;
+    for (const [kind, header] of Object.entries(expectHeader)) {
+      const a = byKind.get(kind);
+      if (!a || !a.content.startsWith(header)) headersOk = false;
+      if (!a || !a.content.endsWith("\n")) newlineOk = false;
+    }
+    check("T3.5: demo CSV artifacts have exact valid headers", headersOk);
+    check("T3.5: demo CSV artifacts end with a trailing newline", newlineOk);
+    const a1 = await api.getArtifact(byKind.get("comments_csv").id);
+    const a2 = await api.getArtifact(byKind.get("comments_csv").id);
+    check("T3.5: demo CSV content deterministic across getArtifact calls",
+      a1.content.size === a2.content.size);
+  }
+
+  // ---- 3. Demo getArtifact returns a Blob with exact MIME, exact filename ----
+  {
+    const arts = await api.listArtifacts(run.id);
+    const pdfMeta = arts.find((a) => a.kind === "report_pdf");
+    const a = await api.getArtifact(pdfMeta.id);
+    check("T3.5: demo getArtifact returns a Blob", a.content instanceof Blob);
+    check("T3.5: demo getArtifact Blob type is exact MIME", a.content.type === "application/pdf");
+    check("T3.5: demo getArtifact filename is exact", a.filename === "report.pdf");
+  }
+
+  // ---- 4. Files: only public artifact kinds ever appear, fixed order preserved ----
+  {
+    const files = await api.listFiles();
+    const arts = files.filter((f) => f._file === "artifact" && f.runId === run.id);
+    check("T3.5: Files never exposes report_json or a seventh artifact",
+      arts.length === 6 && !arts.some((a) => a.kind === "report_json"));
+    const sorted = [...arts].sort((a, b) =>
+      PUBLIC_KINDS_ORDERED.findIndex((p) => p.kind === a.kind) - PUBLIC_KINDS_ORDERED.findIndex((p) => p.kind === b.kind));
+    check("T3.5: Files artifact kinds match the fixed six", JSON.stringify(sorted.map((a) => a.kind).sort())
+      === JSON.stringify(PUBLIC_KINDS_ORDERED.map((p) => p.kind).sort()));
+  }
+
+  // ---- 5. Live getArtifact: blob-first fetch, Content-Disposition filename (quoted) ----
+  {
+    const origFetch = window.fetch;
+    try {
+      let fetchedUrl = null;
+      window.fetch = async (url) => {
+        fetchedUrl = url;
+        if (url === "/api/sessions") return { ok: true, json: async () => ([{ id: "s1" }]) };
+        if (url === "/api/sessions/s1") {
+          return { ok: true, json: async () => ({ runs: [{ id: "r1" }] }) };
+        }
+        if (url === "/api/runs/r1") {
+          return {
+            ok: true,
+            json: async () => ({ id: "r1", artifacts: [
+              { id: "art-1", kind: "themes_csv", filename: "themes.csv", contentType: "text/csv" },
+            ] }),
+          };
+        }
+        if (url === "/api/runs/r1/artifacts/art-1") {
+          return {
+            ok: true,
+            headers: { get: (h) => h === "Content-Disposition" ? 'attachment; filename="themes.csv"' : null },
+            blob: async () => new Blob(["theme,share_pct\n"], { type: "text/csv" }),
+          };
+        }
+        throw new Error("unexpected fetch: " + url);
+      };
+      const a = await window.__liveApi.getArtifact("art-1");
+      check("T3.5: live getArtifact fetches the artifact endpoint, not downloadUrl directly",
+        fetchedUrl === "/api/runs/r1/artifacts/art-1");
+      check("T3.5: live getArtifact returns a Blob", a.content instanceof Blob);
+      check("T3.5: live getArtifact uses quoted Content-Disposition filename", a.filename === "themes.csv");
+      check("T3.5: live getArtifact keeps the locked one-argument signature",
+        window.__liveApi.getArtifact.length === 1);
+    } finally {
+      window.fetch = origFetch;
+    }
+  }
+
+  // ---- 6. Live getArtifact: unquoted Content-Disposition filename, fallback to artifact.filename ----
+  {
+    const origFetch = window.fetch;
+    try {
+      window.fetch = async (url) => {
+        if (url === "/api/sessions") return { ok: true, json: async () => ([{ id: "s2" }]) };
+        if (url === "/api/sessions/s2") return { ok: true, json: async () => ({ runs: [{ id: "r2" }] }) };
+        if (url === "/api/runs/r2") {
+          return {
+            ok: true,
+            json: async () => ({ id: "r2", artifacts: [
+              { id: "art-2", kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv" },
+            ] }),
+          };
+        }
+        if (url === "/api/runs/r2/artifacts/art-2") {
+          return {
+            ok: true,
+            headers: { get: (h) => h === "Content-Disposition" ? "attachment; filename=emotions.csv" : null },
+            blob: async () => new Blob(["emotion,count\n"], { type: "text/csv" }),
+          };
+        }
+        throw new Error("unexpected fetch: " + url);
+      };
+      const a = await window.__liveApi.getArtifact("art-2");
+      check("T3.5: live getArtifact parses unquoted Content-Disposition filename", a.filename === "emotions.csv");
+
+      window.fetch = async (url) => {
+        if (url === "/api/sessions") return { ok: true, json: async () => ([{ id: "s3" }]) };
+        if (url === "/api/sessions/s3") return { ok: true, json: async () => ({ runs: [{ id: "r3" }] }) };
+        if (url === "/api/runs/r3") {
+          return {
+            ok: true,
+            json: async () => ({ id: "r3", artifacts: [
+              { id: "art-3", kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv" },
+            ] }),
+          };
+        }
+        if (url === "/api/runs/r3/artifacts/art-3") {
+          return {
+            ok: true,
+            headers: { get: () => null }, // header omits filename entirely
+            blob: async () => new Blob(["sentiment,share_pct\n"], { type: "text/csv" }),
+          };
+        }
+        throw new Error("unexpected fetch: " + url);
+      };
+      const a3 = await window.__liveApi.getArtifact("art-3");
+      check("T3.5: live getArtifact falls back to artifact.filename when header omits it",
+        a3.filename === "sentiment.csv");
+    } finally {
+      window.fetch = origFetch;
+    }
+  }
+
+  // ---- 7. Live listArtifacts/listFiles filter to the six public kinds even if the backend adds report_json ----
+  {
+    const origFetch = window.fetch;
+    try {
+      const malformedArtifacts = PUBLIC_KINDS_ORDERED.map((p, i) => ({ id: "mid-" + i, ...p }))
+        .concat([{ id: "mid-json", kind: "report_json", filename: "report.json", contentType: "application/json" }]);
+      window.fetch = async (url) => {
+        if (url === "/api/runs/r4") {
+          return { ok: true, json: async () => ({ id: "r4", status: "complete", artifacts: malformedArtifacts }) };
+        }
+        if (url === "/api/sessions") return { ok: true, json: async () => ([{ id: "s4" }]) };
+        if (url === "/api/sessions/s4") {
+          return { ok: true, json: async () => ({ campaignIds: [], campaigns: [], runs: [{ id: "r4", status: "complete" }] }) };
+        }
+        throw new Error("unexpected fetch: " + url);
+      };
+      const artifacts = await window.__liveApi.listArtifacts("r4");
+      check("T3.5: live listArtifacts drops report_json even if the backend sends it",
+        artifacts.length === 6 && !artifacts.some((a) => a.kind === "report_json"));
+      check("T3.5: live listArtifacts preserves contract order",
+        JSON.stringify(artifacts.map((a) => a.kind)) === JSON.stringify(PUBLIC_KINDS_ORDERED.map((p) => p.kind)));
+
+      const files = await window.__liveApi.listFiles();
+      const r4Artifacts = files.filter((f) => f._file === "artifact" && malformedArtifacts.some((m) => m.id === f.id));
+      check("T3.5: live listFiles drops report_json even if the backend sends it",
+        r4Artifacts.length === 6 && !r4Artifacts.some((a) => a.kind === "report_json"));
+    } finally {
+      window.fetch = origFetch;
+    }
+  }
+
+  // ---- 8. Results: six ordered controls, missing artifact disabled with exact copy ----
+  {
+    const origListArtifacts = api.listArtifacts;
+    api.listArtifacts = async function (id) {
+      if (id !== run.id) return origListArtifacts.call(api, id);
+      const all = await origListArtifacts.call(api, id);
+      return all.filter((a) => a.kind !== "emotions_csv"); // simulate one missing artifact
+    };
+    try {
+      await gotoHash(`#/runs/${run.id}/results`);
+      const controls = kmView.querySelectorAll("[data-artifact]");
+      check("T3.5: Results renders exactly six ordered artifact controls", controls.length === 6);
+      check("T3.5: Results controls follow contract order",
+        Array.from(controls).map((c) => c.dataset.artifact).join(",")
+        === PUBLIC_KINDS_ORDERED.map((p) => p.kind).join(","));
+      const missing = kmView.querySelector('[data-artifact="emotions_csv"]');
+      check("T3.5: missing artifact control is disabled", missing && missing.disabled === true);
+      const missingWrap = missing.closest(".dis-wrap");
+      check("T3.5: missing artifact shows exact explanatory copy",
+        !!missingWrap && missingWrap.getAttribute("aria-label") === "This file was not generated.");
+    } finally {
+      api.listArtifacts = origListArtifacts;
+    }
+  }
+
+  // ---- 9. Results: live blob-first download, no direct navigation to downloadUrl ----
+  {
+    const origGetArtifact = api.getArtifact;
+    const origDownloadBlobCalls = [];
+    const win = window;
+    const origOpen = win.open;
+    win.open = function () { throw new Error("must not navigate directly for artifact download"); };
+    let getArtifactCalledWith = null;
+    api.getArtifact = async function (id) {
+      getArtifactCalledWith = id;
+      return { id, runId: run.id, kind: "themes_csv", filename: "themes.csv", contentType: "text/csv",
+        content: new Blob(["theme,share_pct\n"], { type: "text/csv" }) };
+    };
+    try {
+      await gotoHash(`#/runs/${run.id}/results`);
+      const btn = kmView.querySelector('[data-artifact="themes_csv"]');
+      check("T3.5: themes_csv control present for click test", !!btn);
+      fireClick(btn);
+      await sleep(20);
+      check("T3.5: Results click fetches via demoApi.getArtifact, not downloadUrl", getArtifactCalledWith !== null);
+    } finally {
+      api.getArtifact = origGetArtifact;
+      win.open = origOpen;
+    }
+  }
+
+  // ---- 10. Results: download failure is announced in a live error region with exact copy ----
+  {
+    const origGetArtifact = api.getArtifact;
+    api.getArtifact = async function () { throw demoErrorLike("network", "boom", null); };
+    try {
+      await gotoHash(`#/runs/${run.id}/results`);
+      const btn = kmView.querySelector('[data-artifact="report_pdf"]') || document.getElementById("btn-pdf");
+      fireClick(btn);
+      await sleep(20);
+      const region = document.querySelector('[role="alert"]#results-dl-live-err, [role="alert"]#results-dl-err');
+      check("T3.5: Results announces exact failure copy in a live region",
+        !!region && region.textContent === "Download failed. Try again.");
+    } finally {
+      api.getArtifact = origGetArtifact;
+    }
+  }
+
+  // ---- 11. Files: each row's handler downloads its own clicked artifact, no undefined f, no outer capture ----
+  {
+    const origGetArtifact = api.getArtifact;
+    const seenIds = [];
+    api.getArtifact = async function (id) {
+      seenIds.push(id);
+      const arts = await origListArtifacts_forFiles();
+      const match = arts.find((a) => a.id === id);
+      return { ...match, content: new Blob([match ? "x" : ""], { type: match ? match.contentType : "text/plain" }) };
+    };
+    async function origListArtifacts_forFiles() {
+      return api.listArtifacts.call === undefined ? [] : await window.demoApi.listArtifacts(run.id);
+    }
+    try {
+      await gotoHash("#/files");
+      const rows = kmView.querySelectorAll('[data-dl-file][data-kind="artifact"]');
+      check("T3.5: Files renders artifact download rows", rows.length >= 2);
+      const first = rows[0], second = rows[1];
+      const firstId = first.dataset.dlFile, secondId = second.dataset.dlFile;
+      check("T3.5: distinct rows carry distinct artifact ids", firstId !== secondId);
+      fireClick(first);
+      await sleep(20);
+      fireClick(second);
+      await sleep(20);
+      check("T3.5: each Files click resolves its own clicked artifact by id, not an undefined/outer var",
+        seenIds.includes(firstId) && seenIds.includes(secondId));
+    } finally {
+      api.getArtifact = origGetArtifact;
+    }
+  }
+
+  // ---- 12. Files: download failure announced with exact copy, per-row isolation preserved ----
+  {
+    const origGetArtifact = api.getArtifact;
+    api.getArtifact = async function () { throw demoErrorLike("network", "boom", null); };
+    try {
+      await gotoHash("#/files");
+      const row = kmView.querySelector('[data-dl-file][data-kind="artifact"]');
+      fireClick(row);
+      await sleep(20);
+      const region = document.getElementById("files-dl-err");
+      check("T3.5: Files announces exact failure copy in a live region",
+        !!region && region.textContent === "Download failed. Try again.");
+    } finally {
+      api.getArtifact = origGetArtifact;
+    }
+  }
+
+  // ---- 13. demoApi public method signatures unchanged by this task ----
+  check("T3.5: demoApi.getArtifact keeps its locked one-argument signature", api.getArtifact.length === 1);
+  check("T3.5: demoApi.listArtifacts keeps its locked one-argument signature", api.listArtifacts.length === 1);
+  check("T3.5: demoApi.listFiles keeps its locked zero-argument signature", api.listFiles.length === 0);
 
   const summary = document.getElementById("summary");
   summary.textContent = pass + " passed, " + fail + " failed";

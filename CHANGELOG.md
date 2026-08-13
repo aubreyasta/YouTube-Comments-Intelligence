@@ -44,7 +44,14 @@ This is the execution brief for the final product. It is a contract, not a list 
   - Seven stored artifacts and six public artifacts confirmed; `report_json` internal.
   - `session-ses_004f.md` remains untracked, scheduled for removal before commit.
   - Commit has not been pushed at this record point.
-  - Resume point: commit this execution-record update, push `main`, then begin Wave 3 Task 3.1 in a later frontend session.
+  - Resume point completed: Wave 3 Tasks 3.1-3.5 implemented and verified.
+- Wave 3 Tasks 3.1-3.5 implemented in `app/index.html`, `app/app.js`, `app/live.js`, `app/style.css`, and `app/self-check.html`.
+  - Removed unsupported chat, search, discovery, OCR, lens, and key-visual UI while retaining the rejected compatibility methods.
+  - Added Session Key Message API parity, setup drafting, coalescing, explicit saves, dirty-state protection, and stale-run warnings.
+  - Restored persisted `brief_pause` review with editable ordered Key Messages, Save then Proceed, failure retention, and GET/SSE precedence.
+  - Added the six public artifacts in fixed order with exact filenames and MIME types, blob-first live downloads, `Content-Disposition` filenames, missing-file honesty, and download error announcements. `report_json` remains internal.
+  - Verified stopping point on 2026-08-14: `node --check app/app.js` and `node --check app/live.js` exited 0. Browser `app/self-check.html` completed with 188/188 assertions passing, zero console errors, zero page errors, and zero failed requests.
+  - Task 3.6 and `tests/e2e_product_flow.py` were not implemented or run. Resume at Task 3.6.
 
 ### Cross-chat handoff
 
@@ -499,6 +506,7 @@ Removed the background brief, where the model wrote what it knew about a campaig
 
 ## Revisions
 
+- 2026-08-14: Recorded Wave 3 Tasks 3.1-3.5 implementation and the complete frontend stopping-point verification: both Node syntax checks passed and browser self-check passed 188/188 with no console errors, page errors, or failed requests. Task 3.6 E2E coverage remains not implemented and not run.
 - 2026-08-13: Approved the Report JSON applicability and evidence contract (group/point matching, aggregation, denominators, merged Theme/Emotion labels, one-decimal percentages, sentiment `baseN`, balanced/backfilled evidence, metric-ID collision suffixes), the CSV-based Session comment count, the exposed `KeyMessageDraft.revision` semantics, and backend key-visual removal. Task 2.4 and Task 2.5 implemented against this contract with focused verification only; changes remain uncommitted pending Task 2.6.
 - 2026-08-13: Recorded Task 2.3 completion at commit `1d38d34`, its focused 9/9 verification, and Task 2.4 as the next resume point. Added cross-chat handoff rules so future sessions continue without rediscovering or replacing completed work.
 - 2026-08-13: Recorded Task 2.6's complete read-only QA rerun: 125 assertions across 14 test files passing, all `py_compile` and search checks clean, no excluded path tracked, changes still uncommitted. Next resume point is authorized integration cleanup, commit, and normal push of `main`, then Wave 3 Task 3.1.

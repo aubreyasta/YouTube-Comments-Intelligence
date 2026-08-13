@@ -38,6 +38,18 @@ function touchSession(sessionId) {
   if (s) s.updatedAt = nowIso();
 }
 
+function initialKeyMessages() {
+  return { status: "empty", messages: [], error: null, revision: 0 };
+}
+
+function cloneKeyMessages(km) {
+  const src = km || initialKeyMessages();
+  return {
+    status: src.status, error: src.error, revision: src.revision,
+    messages: src.messages.map((m) => ({ ...m })),
+  };
+}
+
 /* ============================== Validation ============================== */
 
 const MAX_UPLOAD = 10 * 1024 * 1024;
@@ -289,6 +301,19 @@ function failRun(engine, message) {
   engine.after(60000, () => engine.destroy());
 }
 
+/* The six public run artifacts, in contract order. kind is the stable id;
+   filename/contentType are exact and must never drift. No seventh entry,
+   no report_json, no chart_transfer.csv/chart_themes.csv/summary.csv. */
+const PUBLIC_ARTIFACTS = [
+  { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf" },
+  { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv" },
+  { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv" },
+  { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv" },
+  { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv" },
+  { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv" },
+];
+const PUBLIC_ARTIFACT_ORDER = PUBLIC_ARTIFACTS.reduce((m, a, i) => (m[a.kind] = i, m), {});
+
 function finalizeRun(engine) {
   const run = engine.run;
   const points = run.briefPointIds
@@ -361,9 +386,12 @@ function finalizeRun(engine) {
   const session = store.sessions.get(run.sessionId);
   const campaignId = session && session.campaignIds[0];
   const addedAt = nowIso();
-  const mkArtifact = (name, kind, content) => {
+  const mkArtifact = (kind, content) => {
+    const meta = PUBLIC_ARTIFACTS.find((p) => p.kind === kind);
     const a = {
-      id: uid(), runId: run.id, campaignId, name, kind,
+      id: uid(), runId: run.id, campaignId, kind,
+      filename: meta.filename, contentType: meta.contentType,
+      downloadUrl: "#demo-artifact/" + kind,
       size: new Blob([content]).size, addedAt, content,
     };
     store.artifacts.set(a.id, a);
@@ -373,20 +401,9 @@ function finalizeRun(engine) {
     const s = String(c == null ? "" : c);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }).join(",");
+  mkArtifact("report_pdf", buildDemoPdf(report));
   mkArtifact(
-    "chart_transfer.csv", "csv",
-    ["idea,share_pct,evidence_count"]
-      .concat(transfers.map((m) => csvLine([m.label, m.value, m.evidenceCount])))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "chart_themes.csv", "csv",
-    ["theme,share_pct"]
-      .concat(themes.map((m) => csvLine([m.label, m.value])))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "comments.csv", "csv",
+    "comments_csv",
     ["author,emotion,theme_or_idea,text,likes"]
       .concat(evidence.map((e) => {
         const m = transfers.concat(themes).find((x) => x.id === e.metricId);
@@ -394,7 +411,35 @@ function finalizeRun(engine) {
       }))
       .join("\n") + "\n",
   );
-  mkArtifact("report.pdf", "pdf", buildDemoPdf(report));
+  mkArtifact(
+    "key_messages_csv",
+    ["idea,share_pct,evidence_count"]
+      .concat(transfers.map((m) => csvLine([m.label, m.value, m.evidenceCount])))
+      .join("\n") + "\n",
+  );
+  mkArtifact(
+    "themes_csv",
+    ["theme,share_pct"]
+      .concat(themes.map((m) => csvLine([m.label, m.value])))
+      .join("\n") + "\n",
+  );
+  mkArtifact(
+    "sentiment_csv",
+    ["sentiment,share_pct"]
+      .concat([["positive", 0], ["neutral", 0], ["negative", 0]].map(([label]) => {
+        const count = evidence.filter((e) => e.emotion === label).length;
+        const pct = evidence.length ? Math.round((count / evidence.length) * 100) : 0;
+        return csvLine([label, pct]);
+      }))
+      .join("\n") + "\n",
+  );
+  mkArtifact(
+    "emotions_csv",
+    ["emotion,count"]
+      .concat([...new Set(evidence.map((e) => e.emotion))].sort().map((emotion) =>
+        csvLine([emotion, evidence.filter((e) => e.emotion === emotion).length])))
+      .join("\n") + "\n",
+  );
 
   if (session) {
     session.status = "complete";
@@ -531,7 +576,7 @@ const demoApi = {
   /** @returns {Promise<Array<object>>} all sessions, newest first */
   async listSessions() {
     return [...store.sessions.values()]
-      .map((s) => ({ ...s, campaignIds: [...s.campaignIds] }))
+      .map((s) => ({ ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
@@ -539,7 +584,7 @@ const demoApi = {
   async getSession(id) {
     const s = store.sessions.get(id);
     if (!s) throw demoError("not_found", "Session not found.");
-    return { ...s, campaignIds: [...s.campaignIds] };
+    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) };
   },
 
   /**
@@ -563,7 +608,7 @@ const demoApi = {
     const ts = nowIso();
     const session = {
       id: uid(), name, campaignIds: [], status: "ready",
-      commentCount: 0, updatedAt: ts,
+      commentCount: 0, updatedAt: ts, keyMessages: initialKeyMessages(),
     };
     const campaign = {
       id: uid(), sessionId: session.id, name: campaignName,
@@ -653,7 +698,7 @@ const demoApi = {
       kind: isImage ? "image" : "document",
       name: file.name, sourceUrl: null,
       mimeType: file.type || "application/octet-stream",
-      size: file.size, addedAt: nowIso(), isKeyVisual: false, status: "ready",
+      size: file.size, addedAt: nowIso(), status: "ready",
     };
     store.assets.set(asset.id, asset);
     store.assetData.set(asset.id, file);
@@ -679,7 +724,7 @@ const demoApi = {
       id: uid(), campaignId, kind: "article",
       name: host + " — article", sourceUrl: u,
       mimeType: "text/html", size: null, addedAt: nowIso(),
-      isKeyVisual: false, status: "ready",
+      status: "ready",
     };
     store.assets.set(asset.id, asset);
     c.assetIds.push(asset.id);
@@ -698,23 +743,93 @@ const demoApi = {
     if (c) touchSession(c.sessionId);
   },
 
+  /** @param {string} campaignId @param {string} assetId @returns {Promise<never>} */
+  setKeyVisual(campaignId, assetId) {
+    return Promise.reject({
+      error: "FEATURE_UNAVAILABLE",
+      message: "Key visuals are not supported.",
+      field: null,
+    });
+  },
+
+  /** @param {string} sessionId @returns {Promise<object>} KeyMessageDraft */
+  async getKeyMessages(sessionId) {
+    const s = store.sessions.get(sessionId);
+    if (!s) throw demoError("not_found", "Session not found.");
+    return cloneKeyMessages(s.keyMessages);
+  },
+
   /**
-   * Future backend contract: PATCH /api/assets/{id} with body { "is_key_visual": true }.
-   * @param {string} campaignId @param {string} assetId
-   * @returns {Promise<object>} the updated Asset
+   * Deterministic draft from current User Inputs. Existing messages are
+   * preserved; otherwise one included message per asset, in asset order.
+   * @param {string} sessionId @returns {Promise<object>} KeyMessageDraft
    */
-  async setKeyVisual(campaignId, assetId) {
-    const c = store.campaigns.get(campaignId);
-    if (!c) throw demoError("not_found", "Campaign not found.");
-    const a = store.assets.get(assetId);
-    if (!a || a.campaignId !== campaignId) throw demoError("not_found", "Asset not found.");
-    if (a.kind !== "image") throw demoError("validation", "Only images can be the key visual.", "asset");
-    for (const id of c.assetIds) {
-      const other = store.assets.get(id);
-      if (other) other.isKeyVisual = id === assetId;
+  async draftKeyMessages(sessionId) {
+    const s = store.sessions.get(sessionId);
+    if (!s) throw demoError("not_found", "Session not found.");
+    const km = s.keyMessages || initialKeyMessages();
+    if (!km.messages.length) {
+      const c = store.campaigns.get(s.campaignIds[0]);
+      const assets = c ? c.assetIds.map((id) => store.assets.get(id)).filter(Boolean) : [];
+      const built = [];
+      for (const a of assets) {
+        const label = (a.name || "").trim();
+        if (!label) continue;
+        built.push({ id: uid(), label, description: "", included: true, order: built.length });
+      }
+      km.messages = built;
     }
-    touchSession(c.sessionId);
-    return { ...a };
+    km.status = km.messages.length ? "ready" : "empty";
+    km.error = null;
+    km.revision = km.revision + 1;
+    s.keyMessages = km;
+    return cloneKeyMessages(km);
+  },
+
+  /**
+   * Validates the complete list before mutation.
+   * @param {string} sessionId @param {Array<object>} messages KeyMessageInput[]
+   * @returns {Promise<object>} KeyMessageDraft
+   */
+  async updateKeyMessages(sessionId, messages) {
+    const s = store.sessions.get(sessionId);
+    if (!s) throw demoError("not_found", "Session not found.");
+    if (!Array.isArray(messages)) {
+      throw demoError("validation", "messages must be an array.", "messages");
+    }
+    const km = s.keyMessages || initialKeyMessages();
+    const knownIds = new Set(km.messages.map((m) => m.id));
+    const seenIds = new Set();
+    const kept = [];
+    for (const m of messages) {
+      const label = ((m && m.label) || "").trim();
+      if (!label || label.length > 120) {
+        throw demoError("validation", "Every key message needs a label of 120 characters or fewer.", "messages");
+      }
+      const description = ((m && m.description) || "").trim();
+      if (description.length > 500) {
+        throw demoError("validation", "Description is limited to 500 characters.", "messages");
+      }
+      let id = m && m.id;
+      if (id != null) {
+        if (seenIds.has(id)) {
+          throw demoError("validation", "Duplicate key message ID.", "messages");
+        }
+        if (!knownIds.has(id)) {
+          throw demoError("validation", "Unknown key message ID.", "messages");
+        }
+        seenIds.add(id);
+      } else {
+        id = uid();
+      }
+      kept.push({ id, label, description, included: !!(m && m.included), order: 0 });
+    }
+    kept.forEach((m, i) => { m.order = i; });
+    km.messages = kept;
+    km.status = kept.length ? "ready" : "empty";
+    km.error = null;
+    s.keyMessages = km;
+    return cloneKeyMessages(km);
   },
 
   /**
@@ -762,8 +877,10 @@ const demoApi = {
     const r = store.runs.get(id);
     if (!r) throw demoError("not_found", "Run not found.");
     const eng = runEngines.get(id);
+    const briefPoints = r.briefPointIds.map((pid) => store.briefPoints.get(pid)).filter(Boolean)
+      .sort((a, b) => a.order - b.order).map((p) => ({ ...p }));
     return {
-      ...r, briefPointIds: [...r.briefPointIds],
+      ...r, briefPointIds: [...r.briefPointIds], briefPoints,
       counts: eng ? { ...eng.counts } : null,
       disconnected: eng ? eng.disconnected : false,
     };
@@ -805,32 +922,41 @@ const demoApi = {
 
   /**
    * @param {string} runId
-   * @param {Array<{ id: string, label: string, description: string, included: boolean, order: number }>} points
-   * @returns {Promise<Array<object>>} saved points in order
+   * @param {Array<{ id: string|null, label: string, description: string, included: boolean, order: number }>} messages
+   * @returns {Promise<{messages: Array<object>}>} saved messages in submitted order
    */
-  async updateBriefPoints(runId, points) {
+  async updateBriefPoints(runId, messages) {
     const run = store.runs.get(runId);
     if (!run) throw demoError("not_found", "Run not found.");
     if (run.stage !== "brief_pause") {
-      throw demoError("conflict", "Brief review is only open while the run is paused.");
+      throw demoError("conflict", "Brief review is only open while the run is paused.", null);
     }
+    const knownIds = new Set(run.briefPointIds);
+    const seenIds = new Set();
     const kept = [];
-    for (const p of points) {
+    for (const p of (messages || [])) {
       const label = (p.label || "").trim();
-      if (!label) throw demoError("validation", "Every idea needs a label.", "label");
-      kept.push({
-        id: p.id, runId, label,
-        description: (p.description || "").trim(),
-        included: !!p.included, order: p.order,
-      });
+      if (!label) throw demoError("validation", "Every Key Message needs a label.", "messages");
+      if (label.length > 120) throw demoError("validation", "Label is limited to 120 characters.", "messages");
+      const description = (p.description || "").trim();
+      if (description.length > 500) throw demoError("validation", "Description is limited to 500 characters.", "messages");
+      let id = p.id;
+      if (id != null) {
+        if (!knownIds.has(id)) throw demoError("validation", "Unknown Key Message id.", "messages");
+        if (seenIds.has(id)) throw demoError("validation", "Duplicate Key Message id.", "messages");
+        seenIds.add(id);
+      } else {
+        id = uid();
+      }
+      kept.push({ id, runId, label, description, included: !!p.included });
     }
     if (!kept.some((p) => p.included)) {
-      throw demoError("validation", "Keep at least one idea included.", "points");
+      throw demoError("validation", "Include at least one Key Message before continuing.", "messages");
     }
     for (const oldId of run.briefPointIds) store.briefPoints.delete(oldId);
     run.briefPointIds = kept.map((p) => p.id);
-    for (const p of kept) store.briefPoints.set(p.id, p);
-    return kept.map((p) => ({ ...p }));
+    kept.forEach((p, i) => { p.order = i; store.briefPoints.set(p.id, p); });
+    return { messages: kept.map((p) => ({ ...p })) };
   },
 
   /** @param {string} runId @returns {Promise<object>} */
@@ -842,7 +968,7 @@ const demoApi = {
     }
     const points = run.briefPointIds.map((id) => store.briefPoints.get(id)).filter(Boolean);
     if (!points.some((p) => p.included)) {
-      throw demoError("validation", "Keep at least one idea included before continuing.", "points");
+      throw demoError("validation", "Include at least one Key Message before continuing.", "messages");
     }
     const eng = runEngines.get(runId);
     if (eng && eng.proceedResolve) {
@@ -900,21 +1026,23 @@ const demoApi = {
   },
 
   /**
-   * @param {string} runId @returns {Promise<Array<object>>} artifacts produced by the run
+   * @param {string} runId @returns {Promise<Array<object>>} the six public artifacts, in contract order
    */
   async listArtifacts(runId) {
     return [...store.artifacts.values()]
-      .filter((a) => a.runId === runId)
+      .filter((a) => a.runId === runId && a.kind in PUBLIC_ARTIFACT_ORDER)
+      .sort((a, b) => PUBLIC_ARTIFACT_ORDER[a.kind] - PUBLIC_ARTIFACT_ORDER[b.kind])
       .map((a) => ({ ...a }));
   },
 
-  /** @returns {Promise<Array<object>>} mixed Assets and Artifacts */
+  /** @returns {Promise<Array<object>>} mixed Assets and public Artifacts */
   async listFiles() {
     const files = [];
     for (const a of store.assets.values()) {
       files.push({ ...a, _file: "asset" });
     }
     for (const a of store.artifacts.values()) {
+      if (!(a.kind in PUBLIC_ARTIFACT_ORDER)) continue;
       files.push({ ...a, _file: "artifact" });
     }
     files.sort((a, b) => b.addedAt.localeCompare(a.addedAt));
@@ -925,7 +1053,8 @@ const demoApi = {
   async getArtifact(id) {
     const a = store.artifacts.get(id);
     if (!a) throw demoError("not_found", "File not found.");
-    return { ...a };
+    const content = a.content instanceof Blob ? a.content : new Blob([a.content], { type: a.contentType });
+    return { ...a, content };
   },
 };
 
@@ -951,8 +1080,8 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
     "listSessions","getSession","createSession","getCampaign",
     "addVideo","removeVideo","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
-    "updateBriefPoints","proceedRun",
-    "getReport","getAssetData","getArtifact","listFiles","listArtifacts",
+    "proceedRun",
+    "getReport","getAssetData",
     "simulateDisconnect","simulateFailure",
   ];
   for (const m of asyncMethods) {
@@ -962,6 +1091,45 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
       return orig(...args);
     };
   }
+  // Explicit-arity wrappers, not the generic rest-arg loop above, so
+  // Function.length stays 1,1,0 for both demo and live.
+  const origGetArtifact = demoApi.getArtifact.bind(demoApi);
+  demoApi.getArtifact = function (artifactId) {
+    if (demoApi.mode === "live") return window.__liveApi.getArtifact(artifactId);
+    return origGetArtifact(artifactId);
+  };
+  const origListArtifacts = demoApi.listArtifacts.bind(demoApi);
+  demoApi.listArtifacts = function (runId) {
+    if (demoApi.mode === "live") return window.__liveApi.listArtifacts(runId);
+    return origListArtifacts(runId);
+  };
+  const origListFiles = demoApi.listFiles.bind(demoApi);
+  demoApi.listFiles = function () {
+    if (demoApi.mode === "live") return window.__liveApi.listFiles();
+    return origListFiles();
+  };
+  // Key Message methods: explicit-arity wrappers, not the generic rest-arg
+  // loop above, so Function.length stays 1,1,2 for both demo and live.
+  const origGetKeyMessages = demoApi.getKeyMessages.bind(demoApi);
+  demoApi.getKeyMessages = function (sessionId) {
+    if (demoApi.mode === "live") return window.__liveApi.getKeyMessages(sessionId);
+    return origGetKeyMessages(sessionId);
+  };
+  const origDraftKeyMessages = demoApi.draftKeyMessages.bind(demoApi);
+  demoApi.draftKeyMessages = function (sessionId) {
+    if (demoApi.mode === "live") return window.__liveApi.draftKeyMessages(sessionId);
+    return origDraftKeyMessages(sessionId);
+  };
+  const origUpdateKeyMessages = demoApi.updateKeyMessages.bind(demoApi);
+  demoApi.updateKeyMessages = function (sessionId, messages) {
+    if (demoApi.mode === "live") return window.__liveApi.updateKeyMessages(sessionId, messages);
+    return origUpdateKeyMessages(sessionId, messages);
+  };
+  const origUpdateBriefPoints = demoApi.updateBriefPoints.bind(demoApi);
+  demoApi.updateBriefPoints = function (runId, messages) {
+    if (demoApi.mode === "live") return window.__liveApi.updateBriefPoints(runId, messages);
+    return origUpdateBriefPoints(runId, messages);
+  };
   // subscribeRun returns an unsubscribe fn (not a Promise).
   const origSub = demoApi.subscribeRun.bind(demoApi);
   demoApi.subscribeRun = function (id, handlers) {
@@ -1041,6 +1209,22 @@ function downloadBlob(content, name, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+/* Shared blob-first download path for Results and Files. Always fetches
+   the artifact fresh (live: blob + Content-Disposition; demo: in-memory
+   Blob) before handing off to downloadBlob, so both modes use the exact
+   filename/contentType the API returns rather than any stale reference.
+   errorRegion is a live/alert region element; failures are announced there,
+   never swallowed. */
+async function downloadArtifact(artifact, errorRegion) {
+  try {
+    const a = await demoApi.getArtifact(artifact.id);
+    downloadBlob(a.content, a.filename, a.contentType);
+    if (errorRegion) errorRegion.textContent = "";
+  } catch {
+    if (errorRegion) errorRegion.textContent = "Download failed. Try again.";
+  }
+}
+
 /* Modal with focus trap, Escape, and focus restoration. */
 let modalState = null;
 function openModal(title, bodyHtml, objectUrl) {
@@ -1098,11 +1282,113 @@ function cleanupRoute() {
   closeEvidenceDrawer();
 }
 
+/* ============================== Key Messages editor state ==============================
+   Per-Session state, keyed by Session ID. Holds only what request coalescing and
+   dirty-preservation need; row/focus state used by the renderer lives alongside it. */
+const kmState = new Map(); // sessionId -> KmState
+
+function kmInitState() {
+  return {
+    inFlight: false,
+    requestedRevision: 0,
+    acceptedRevision: 0,
+    rerunRequested: false,
+    dirtyIds: new Set(),
+    status: "empty",
+  };
+}
+
+function kmGetState(sessionId) {
+  let s = kmState.get(sessionId);
+  if (!s) { s = kmInitState(); kmState.set(sessionId, s); }
+  return s;
+}
+
+/* Normalized label used as a fallback merge key when a row has no server ID yet. */
+function kmNormLabel(label) {
+  return (label || "").trim().toLowerCase();
+}
+
+/* localKey: rows with id:null need a stable local-only key, never sent to the server. */
+function kmLocalKey(row) {
+  if (!row._localKey) row._localKey = "local-" + uid();
+  return row._localKey;
+}
+
+/* Merge an accepted draft's messages into the current local rows, by ID first,
+   then by normalized label. Local rows flagged dirty keep their label,
+   description, included and order; everything else takes the server value. */
+function kmMergeDraft(localRows, draftMessages, dirtyIds) {
+  const byId = new Map();
+  const byLabel = new Map();
+  for (const row of localRows) {
+    const key = row.id || kmLocalKey(row);
+    byId.set(key, row);
+    const nl = kmNormLabel(row.label);
+    if (nl && !byLabel.has(nl)) byLabel.set(nl, row);
+  }
+  // Slot resolved entries into the local rows' original positions so a dirty,
+  // unmatched row keeps its place on screen instead of being pushed to the
+  // end. Unmatched draft entries (new server rows) are appended after.
+  const slots = new Array(localRows.length).fill(null);
+  const usedLocal = new Set();
+  const appended = [];
+  for (const dm of draftMessages) {
+    let local = dm.id && byId.has(dm.id) ? byId.get(dm.id) : null;
+    if (!local) {
+      const nl = kmNormLabel(dm.label);
+      if (nl && byLabel.has(nl)) local = byLabel.get(nl);
+    }
+    // A dirty, unmatched local row (typically id:null with a freshly edited
+    // label that no longer matches anything in the draft) is not this draft
+    // entry: it must not be replaced by, or merged with, an unrelated server
+    // row. Treat it as no match so it survives untouched in the pass below,
+    // and let this draft entry stand on its own.
+    if (local) {
+      const localKey = local.id || kmLocalKey(local);
+      if (dirtyIds.has(localKey) && kmNormLabel(local.label) !== kmNormLabel(dm.label)) {
+        local = null;
+      }
+    }
+    if (local) {
+      const localKey = local.id || kmLocalKey(local);
+      usedLocal.add(localKey);
+      const isDirty = dirtyIds.has(localKey);
+      const idx = localRows.indexOf(local);
+      slots[idx] = {
+        id: dm.id || local.id || null,
+        label: isDirty ? local.label : dm.label,
+        description: isDirty ? local.description : dm.description,
+        included: isDirty ? local.included : dm.included,
+        order: isDirty ? local.order : dm.order,
+        _localKey: local._localKey,
+      };
+    } else {
+      appended.push({ ...dm });
+    }
+  }
+  // Local rows not present in the draft (e.g. freshly added, not yet drafted,
+  // or dirty enough to no longer match any draft entry) survive as-is, in place.
+  localRows.forEach((row, i) => {
+    if (slots[i] === null) {
+      const key = row.id || kmLocalKey(row);
+      if (!usedLocal.has(key)) slots[i] = { ...row };
+    }
+  });
+  const merged = slots.filter((s) => s !== null).concat(appended);
+  merged.forEach((m, i) => { m.order = i; });
+  return merged;
+}
+
 /* ---------- Home ---------- */
 async function renderHome() {
   setSidebarActive("sessions");
-  const live = demoApi.mode === "live";
   const sessions = await demoApi.listSessions();
+  if (sessions.length > 0) {
+    // Populated Home routes directly to the Sessions list; no summary screen.
+    location.hash = "#/sessions";
+    return;
+  }
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
@@ -1112,60 +1398,29 @@ async function renderHome() {
 
   view.innerHTML = `
   <div class="view-pad" style="gap:30px">
-    <section class="hero" aria-label="Assistant">
-      <div class="hero-top">
-        <div class="hero-star">${ICONS.starLg}</div>
-        <div class="hero-body">
-          <h1>Hi there — what conversation<br><span class="accent">should we listen to today?</span></h1>
-          ${disWrap(`
-            <div class="hero-prompt dis" aria-disabled="true">
-              <div class="ph">Paste a YouTube link or a brief, or just describe the campaign you want to understand…</div>
-              <div class="row">
-                <div class="plusbox">${ICONS.plus}</div>
-                <div class="send">${ICONS.send}</div>
-              </div>
-            </div>`,
-            live ? "The assistant is not available yet. Create a session manually below." : "The assistant is not available in this local demo. Create a session manually below.")}
-          <div class="hero-note">Resonance only reports what real comments say — every number opens the comments behind it.</div>
-        </div>
-      </div>
-      <div class="hero-foot">
-        <span class="lead">${live ? "The assistant is not available." : "This local demo runs without the assistant."}</span>
-        <span class="why">${live ? "Start with a manual session - everything else works end to end." : "Start with a manual session — everything else works end to end on fixture data."}</span>
-      </div>
-    </section>
-
     <section aria-label="Your sessions" style="display:flex;flex-direction:column;gap:14px">
       <div class="section-label">Your sessions</div>
-      ${sessions.length === 0 ? `
-      <div class="empty-block">
-        <div class="empty-icon">${ICONS.folder}</div>
-        <h3>No sessions yet</h3>
-        <p>A session groups the campaigns you want to read together — Nike and Adidas in the same category, or one brand across three films.</p>
+      <div class="empty-card">
+        <div class="empty-badge">${ICONS.folder}</div>
+        <h1>Start a Session<br><span class="accent">Add videos to begin.</span></h1>
+        <p>A Session is one campaign - a name, the YouTube videos, and any briefs, articles or images you add. We read those to see what the campaign pushed. We never read them against the comments.</p>
         <div class="actions">
           <a class="btn primary lg" href="#/sessions/new">Create your first session</a>
         </div>
-      </div>` : `
-      <div class="empty-block">
-        <h3>${sessions.length} session${sessions.length === 1 ? "" : "s"}${live ? "" : " in this demo"}</h3>
-        <p>${live ? "Everything you create is saved on the server." : "Nothing is saved between page loads — this local demo keeps everything in memory."}</p>
-        <div class="actions">
-          <a class="btn primary" href="#/sessions">Open sessions</a>
-          <a class="btn secondary" href="#/sessions/new">New session</a>
-        </div>
-      </div>`}
+      </div>
     </section>
 
     <section class="steps" aria-label="How it works">
-      <div class="step"><span class="k">STEP 1</span><span class="t">Add the campaign</span><span class="d">YouTube links, the brief PDF, key visuals, press articles.</span></div>
-      <div class="step"><span class="k">STEP 2</span><span class="t">We read every comment</span><span class="d">Each one gets a theme label, so percentages are counted, not guessed.</span></div>
-      <div class="step"><span class="k">STEP 3</span><span class="t">You get a strategy note</span><span class="d">Two charts, a written read, and the comments behind every figure.</span></div>
+      <div class="step"><span class="k">STEP 1</span><span class="t">Set up the Session</span><span class="d">Name it, paste the videos, add the brief. Key Messages appear as you add things.</span></div>
+      <div class="step"><span class="k">STEP 2</span><span class="t">Review, then run</span><span class="d">The run pauses once to let you edit and confirm the Key Messages before labelling starts.</span></div>
+      <div class="step"><span class="k">STEP 3</span><span class="t">Read the results</span><span class="d">Travel, Themes, Sentiment and Emotions - every percentage opens the comments behind it.</span></div>
     </section>
   </div>`;
 }
 
 /* ---------- Sessions ---------- */
 const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", complete: "Complete", failed: "Failed" };
+let sessionsFilter = "all"; // "all" | "running" | "failed"
 
 async function renderSessions() {
   setSidebarActive("sessions");
@@ -1174,8 +1429,6 @@ async function renderSessions() {
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
-      ${disWrap(`<span class="searchbox" aria-disabled="true">${ICONS.search}<span>Search sessions</span></span>`,
-        live ? "Search is not available." : "Search is not available in this local demo.")}
       <a class="btn primary" href="#/sessions/new">New session</a>
     </div>`);
 
@@ -1184,39 +1437,40 @@ async function renderSessions() {
     <div class="view-pad">
       <div>
         <h2 class="greeting">Sessions</h2>
-        <div class="greeting-sub">Each session groups the campaigns you want to read together.</div>
+        <div class="greeting-sub">Each Session is one campaign - a name, the YouTube videos, and any User Inputs you add.</div>
       </div>
       <div class="empty-block">
         <div class="empty-icon">${ICONS.folder}</div>
         <h3>No sessions yet</h3>
-        <p>Create a session, add YouTube links and the campaign brief, and run your first read.</p>
+        <p>Create a session, add YouTube links and your User Inputs, and run your first read.</p>
         <div class="actions"><a class="btn primary lg" href="#/sessions/new">Create your first session</a></div>
       </div>
     </div>`;
     return;
   }
 
+  const shown = sessions.filter((s) => {
+    if (sessionsFilter === "running") return s.status === "running";
+    if (sessionsFilter === "failed") return s.status === "failed";
+    return true;
+  });
   const totalComments = sessions.reduce((a, s) => a + s.commentCount, 0);
-  const rows = await Promise.all(sessions.map(async (s) => {
+  const rows = await Promise.all(shown.map(async (s) => {
     const campaigns = (await Promise.all(s.campaignIds.map((id) => demoApi.getCampaign(id))))
       .map((c, i) => ({ ...c, id: s.campaignIds[i] }));
-    const tags = campaigns.slice(0, 2).map((c) => `<span class="campaign-tag">${esc(c.name)}</span>`).join("")
-      + (campaigns.length > 2 ? `<span class="campaign-tag more">+${campaigns.length - 2} more</span>` : "");
     const target = campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
     const runningRun = await demoApi.getRunningRun(s.id);
     const statusCell = s.status === "running" && runningRun
-      ? `<div style="display:flex;flex-direction:column;gap:6px">
-           <span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>
-           ${live ? "" : `<div class="progressbar" style="width:82px"><div style="width:${runningRun.pct}%"></div></div>`}
-         </div>`
+      ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
+    const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
     return `
-      <a class="trow" style="grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px" href="${target}">
+      <a class="trow" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px" href="${target}">
         <div class="trow-name">${esc(s.name)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">${tags || '<span class="trow-dim">No campaigns yet</span>'}</div>
-        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "—"}${campaigns.length ? `<div class="sub">${campaigns.reduce((a, c) => a + c.videoIds.length, 0)} videos</div>` : ""}</div>
+        <div class="trow-num">${videoCount}</div>
+        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "—"}</div>
         <div>${statusCell}</div>
         <div class="trow-dim">${fmtAgo(s.updatedAt)}</div>
         <div class="chev">${ICONS.chevR}</div>
@@ -1231,19 +1485,24 @@ async function renderSessions() {
         <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${fmtNum(totalComments)} comments read${live ? "" : " in this demo"}</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
-        <button class="pill active" type="button">All</button>
-        ${disWrap('<button class="pill" type="button" disabled>Drafts</button>', live ? "Drafts are not available - sessions save immediately." : "Drafts are not available in this local demo — sessions save immediately.")}
+        <button class="pill${sessionsFilter === "all" ? " active" : ""}" type="button" data-sf="all" aria-pressed="${sessionsFilter === "all"}">All</button>
+        <button class="pill${sessionsFilter === "running" ? " active" : ""}" type="button" data-sf="running" aria-pressed="${sessionsFilter === "running"}">Running</button>
+        <button class="pill${sessionsFilter === "failed" ? " active" : ""}" type="button" data-sf="failed" aria-pressed="${sessionsFilter === "failed"}">Failed</button>
       </div>
     </div>
     <div class="table-scroll">
     <div class="table" style="min-width:760px">
-      <div class="thead" style="grid-template-columns:1.5fr 1.4fr .7fr .8fr .7fr 20px">
-        <div>SESSION</div><div>CAMPAIGNS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
+      <div class="thead" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px">
+        <div>SESSION</div><div>VIDEOS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
       </div>
-      ${rows.join("")}
+      ${rows.join("") || '<div style="padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>'}
     </div>
     </div>
   </div>`;
+
+  view.querySelectorAll("[data-sf]").forEach((b) => {
+    b.addEventListener("click", () => { sessionsFilter = b.dataset.sf; renderSessions(); });
+  });
 }
 
 /* ---------- New session ---------- */
@@ -1262,29 +1521,22 @@ async function renderNewSession() {
     <form class="setup" id="setup-form" novalidate>
       <div style="display:flex;flex-direction:column;gap:9px">
         <h1>Set up your session</h1>
-        <div class="lede">Two names and at least one YouTube link. You can add briefs and assets on the next screen.</div>
+        <div class="lede">One Session is one campaign. Give it a name and at least one YouTube link - briefs, articles and images come next, and Key Messages are drafted from them.</div>
       </div>
 
       <div class="field">
         <label for="f-session-name">Session name</label>
-        <input class="input" id="f-session-name" name="sessionName" type="text" autocomplete="off" placeholder="Ramadan football push">
-        <div class="hint">Sessions are for organising — group the campaigns you want to read together.</div>
+        <input class="input" id="f-session-name" name="sessionName" type="text" autocomplete="off" placeholder="Ramadan football push" aria-describedby="hint-session err-session">
+        <div class="hint" id="hint-session">Sessions are for organising - group the campaigns you want to read together.</div>
         <div class="field-error" id="err-session" hidden></div>
       </div>
 
       <div class="field">
-        <label for="f-campaign-name">First campaign</label>
-        <input class="input" id="f-campaign-name" name="campaignName" type="text" autocomplete="off" placeholder="Nike — Bola Rakyat">
-        <div class="hint">One brand, one film — or a set of films for the same idea.</div>
-        <div class="field-error" id="err-campaign" hidden></div>
-      </div>
-
-      <div class="field">
         <span class="label" id="urls-label">YouTube links</span>
-        <div class="hint">Add links one at a time: youtube.com/watch?v=, youtu.be/ or youtube.com/shorts/. No playlists.</div>
+        <div class="hint" id="hint-urls">youtube.com/watch?v=, youtu.be/, or youtube.com/shorts/ links. No playlists, no duplicates.</div>
         <div class="url-list" id="url-list" role="list" aria-labelledby="urls-label"></div>
         <div class="url-add">
-          <input class="input" id="f-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-labelledby="urls-label">
+          <input class="input" id="f-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-labelledby="urls-label" aria-describedby="hint-urls err-url">
           <button class="btn secondary" type="button" id="btn-add-url">Add link</button>
         </div>
         <div class="field-error" id="err-url" hidden></div>
@@ -1293,9 +1545,8 @@ async function renderNewSession() {
 
       <div class="setup-foot">
         <button class="btn primary lg" type="submit">Create session</button>
-        ${disWrap('<button class="btn lg" type="button" disabled>Save as draft</button>', demoApi.mode === "live" ? "Drafts are not available - sessions save immediately." : "Drafts are not available in this local demo — sessions save immediately.")}
         <span class="tail"></span>
-        <span class="note">Brief and assets come next</span>
+        <span class="note">User Inputs and Key Messages come next</span>
       </div>
     </form>
   </div>`;
@@ -1323,11 +1574,11 @@ async function renderNewSession() {
   function addUrl() {
     const val = urlInput.value;
     const p = parseYouTubeUrl(val);
-    if (p.error) { showErr(errUrl, p.error); urlInput.classList.add("error"); return; }
+    if (p.error) { showErr(errUrl, p.error); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
     const dup = added.some((u) => parseYouTubeUrl(u).videoId === p.videoId);
-    if (dup) { showErr(errUrl, "That video is already in the list."); urlInput.classList.add("error"); return; }
+    if (dup) { showErr(errUrl, "That video is already in the list."); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
     showErr(errUrl, null); showErr(errVideos, null);
-    urlInput.classList.remove("error");
+    urlInput.classList.remove("error"); urlInput.removeAttribute("aria-invalid");
     added.push(val.trim());
     urlInput.value = "";
     paintUrls();
@@ -1341,20 +1592,22 @@ async function renderNewSession() {
   document.getElementById("setup-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = document.getElementById("f-session-name");
-    const camp = document.getElementById("f-campaign-name");
     const errS = document.getElementById("err-session");
-    const errC = document.getElementById("err-campaign");
     let ok = true;
-    if (!name.value.trim()) { showErr(errS, "Session name is required."); name.classList.add("error"); ok = false; }
-    else { showErr(errS, null); name.classList.remove("error"); }
-    if (!camp.value.trim()) { showErr(errC, "Campaign name is required."); camp.classList.add("error"); ok = false; }
-    else { showErr(errC, null); camp.classList.remove("error"); }
-    if (!added.length) { showErr(errVideos, "Add at least one YouTube link."); ok = false; }
-    else showErr(errVideos, null);
-    if (!ok) return;
+    let firstInvalid = null;
+    if (!name.value.trim()) {
+      showErr(errS, "Session name is required."); name.classList.add("error");
+      name.setAttribute("aria-invalid", "true"); ok = false; firstInvalid = firstInvalid || name;
+    } else { showErr(errS, null); name.classList.remove("error"); name.removeAttribute("aria-invalid"); }
+    if (!added.length) {
+      showErr(errVideos, "Add at least one YouTube link."); ok = false;
+      firstInvalid = firstInvalid || urlInput;
+    } else showErr(errVideos, null);
+    if (!ok) { if (firstInvalid) firstInvalid.focus(); return; }
     try {
+      // Session name doubles as the campaign name; there is no separate field.
       const { session, campaign } = await demoApi.createSession({
-        name: name.value, campaignName: camp.value, videoUrls: added,
+        name: name.value, campaignName: name.value, videoUrls: added,
       });
       location.hash = `#/sessions/${session.id}/campaigns/${campaign.id}`;
     } catch (err) {
@@ -1363,28 +1616,375 @@ async function renderNewSession() {
   });
 }
 
+/* ---------- Key Messages confirmation dialog ----------
+   Reuses the existing modal/overlay foundation minimally: focus trap, Escape,
+   and focus restoration all come from openModal/closeModal. This wraps that
+   with a Continue/Cancel choice instead of a single close button. */
+function openConfirm(message, onContinue) {
+  closeModal();
+  const prevFocus = document.activeElement;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm">
+      <div class="modal-body confirm-body">
+        <p class="confirm-msg">${esc(message)}</p>
+        <div class="confirm-actions">
+          <button class="btn secondary" type="button" data-confirm-cancel>Cancel</button>
+          <button class="btn primary" type="button" data-confirm-continue>Continue</button>
+        </div>
+      </div>
+    </div>`;
+  overlayRoot.appendChild(backdrop);
+  modalState = { el: backdrop, prevFocus, url: null };
+  const cancelBtn = backdrop.querySelector("[data-confirm-cancel]");
+  const continueBtn = backdrop.querySelector("[data-confirm-continue]");
+  const finish = (didContinue) => {
+    closeModal();
+    if (didContinue) onContinue();
+  };
+  cancelBtn.addEventListener("click", () => finish(false));
+  continueBtn.addEventListener("click", () => finish(true));
+  backdrop.addEventListener("mousedown", (e) => { if (e.target === backdrop) finish(false); });
+  backdrop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); finish(false); }
+    if (e.key === "Tab") {
+      const f = [cancelBtn, continueBtn];
+      if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[1].focus(); }
+      else if (!e.shiftKey && document.activeElement === f[1]) { e.preventDefault(); f[0].focus(); }
+    }
+  });
+  cancelBtn.focus();
+}
+
+/* ---------- Key Message drafting: coalesced background requests ----------
+   requestKeyMessageDraft(sessionId, rows, onAccepted): call after every
+   successful User Input mutation. rows is the current live array of local KM
+   rows (read at call time, not captured) so a rerun always drafts against the
+   latest structural state. onAccepted(mergedRows, status, error) fires only
+   for the response that matches the latest requested revision. */
+async function requestKeyMessageDraft(sessionId, getRows, onAccepted) {
+  const st = kmGetState(sessionId);
+  st.requestedRevision += 1;
+  if (st.inFlight) { st.rerunRequested = true; return; }
+  st.inFlight = true;
+  const runOne = async () => {
+    const myRevision = st.requestedRevision;
+    let draft;
+    let failed = false;
+    try {
+      draft = await demoApi.draftKeyMessages(sessionId);
+    } catch (err) {
+      failed = true;
+      draft = { status: null, messages: null, error: err.message, revision: myRevision };
+    }
+    // Discard if a newer request has since been requested past this one.
+    if (myRevision !== st.requestedRevision) {
+      // Obsolete response: neither accept nor overwrite current state.
+    } else {
+      st.acceptedRevision = myRevision;
+      const rows = getRows();
+      if (failed) {
+        st.status = rows.length ? "stale" : "failed";
+        onAccepted(rows, st.status, draft.error);
+      } else {
+        const merged = kmMergeDraft(rows, draft.messages, st.dirtyIds);
+        st.status = draft.status;
+        onAccepted(merged, draft.status, null);
+      }
+    }
+    st.inFlight = false;
+    if (st.rerunRequested || myRevision !== st.requestedRevision) {
+      st.rerunRequested = false;
+      st.inFlight = true;
+      await runOne();
+    }
+  };
+  await runOne();
+}
+
+/* ---------- Key Messages setup editor ----------
+   Local parameter contract used only inside this file: renderSetupKeyMessages
+   is called with (sessionId, container) and manages its own DOM inside
+   container. It reads/writes kmGetState(sessionId) for coalescing/dirty state
+   and keeps its row model in a closure, re-invoking its own paint function
+   rather than being re-entered from outside. */
+function renderSetupKeyMessages(sessionId, container, initialDraft) {
+  const st = kmGetState(sessionId);
+  st.status = initialDraft.status;
+  let rows = initialDraft.messages.map((m) => ({ ...m }));
+  let serverError = initialDraft.error;
+  let pendingPatch = false; // true while a structural PATCH (delete/include/reorder) is in flight
+  let deferredRepaint = false; // background response landed while focus was inside the editor
+  let saveInFlight = false; // guards Save's own fullPatch against a duplicate/rapid re-click
+
+  function isFocusInside() {
+    return container.contains(document.activeElement);
+  }
+
+  function rowKey(row) {
+    return row.id || kmLocalKey(row);
+  }
+
+  function markDirty(row) {
+    st.dirtyIds.add(rowKey(row));
+  }
+  function clearDirty(row) {
+    st.dirtyIds.delete(rowKey(row));
+  }
+  function hasDirtyText() {
+    return rows.some((r) => st.dirtyIds.has(rowKey(r)));
+  }
+
+  async function fullPatch() {
+    const payload = rows.map((r, i) => ({
+      id: r.id || null, label: r.label, description: r.description,
+      included: r.included, order: i,
+    }));
+    const updated = await demoApi.updateKeyMessages(sessionId, payload);
+    // Replace null IDs with server IDs in place, preserving dirty flags by key.
+    const newDirty = new Set();
+    rows = updated.messages.map((m, i) => {
+      const prev = rows[i];
+      const key = prev ? rowKey(prev) : null;
+      if (key && st.dirtyIds.has(key) && prev && kmNormLabel(prev.label) === kmNormLabel(m.label)) {
+        newDirty.add(m.id || key);
+      }
+      return { ...m, _localKey: prev ? prev._localKey : undefined };
+    });
+    st.dirtyIds = newDirty;
+    st.status = updated.status;
+    serverError = null;
+    return updated;
+  }
+
+  function paint() {
+    const focusInside = isFocusInside();
+    if (focusInside && st.inFlight === false && deferredRepaint) {
+      // Explicit action triggered this paint; clear the deferral.
+      deferredRepaint = false;
+    }
+    const count = rows.length;
+    const busy = st.status === "drafting";
+    let statusHtml = "";
+    if (st.status === "drafting") {
+      statusHtml = `<span class="km-status-msg">Drafting Key Messages...</span>`;
+    } else if (st.status === "stale") {
+      statusHtml = `<span class="km-status-msg">Key Messages may be out of date.</span> <button class="km-retry" type="button" id="km-retry">Retry</button>`;
+    } else if (st.status === "failed") {
+      statusHtml = `<span class="km-status-msg">Key Message drafting failed.</span> <button class="km-retry" type="button" id="km-retry">Retry</button>`;
+    } else if (serverError) {
+      statusHtml = `<span class="km-status-msg">${esc(serverError)}</span>`;
+    }
+
+    const rowsHtml = rows.length ? rows.map((r, i) => {
+      const key = rowKey(r);
+      const dirty = st.dirtyIds.has(key);
+      const labelInvalid = dirty && !r.label.trim();
+      const descInvalid = dirty && r.description.length > 500;
+      return `
+      <div class="km-row" data-km-idx="${i}">
+        <span class="km-num">${String(i + 1).padStart(2, "0")}</span>
+        <div class="km-fields">
+          <label class="sr-only" for="km-label-${i}">Key Message ${i + 1} label</label>
+          <input class="km-label-in" id="km-label-${i}" data-km-f="label" data-km-i="${i}"
+            maxlength="120" value="${esc(r.label)}"
+            ${labelInvalid ? `aria-invalid="true" aria-describedby="km-label-err-${i}"` : ""}
+            ${pendingPatch ? "disabled" : ""}>
+          ${labelInvalid ? `<div class="field-error" id="km-label-err-${i}">Label is required.</div>` : ""}
+          <label class="sr-only" for="km-desc-${i}">Key Message ${i + 1} description</label>
+          <textarea class="km-desc-in" id="km-desc-${i}" data-km-f="description" data-km-i="${i}"
+            maxlength="500" rows="2"
+            ${descInvalid ? `aria-invalid="true" aria-describedby="km-desc-err-${i}"` : ""}
+            ${pendingPatch ? "disabled" : ""}>${esc(r.description)}</textarea>
+          ${descInvalid ? `<div class="field-error" id="km-desc-err-${i}">Description is limited to 500 characters.</div>` : ""}
+        </div>
+        <div class="km-tools">
+          <button class="km-chip" type="button" data-km-inc="${i}" aria-pressed="${r.included}" ${pendingPatch ? "disabled" : ""}>${r.included ? "Included" : "Excluded"}</button>
+          <button class="icon-btn" type="button" data-km-up="${i}" aria-label="Move Key Message ${i + 1} up" ${pendingPatch || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
+          <button class="icon-btn" type="button" data-km-down="${i}" aria-label="Move Key Message ${i + 1} down" ${pendingPatch || i === rows.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
+          <button class="icon-btn" type="button" data-km-del="${i}" aria-label="Delete Key Message ${i + 1}" ${pendingPatch ? "disabled" : ""}>${ICONS.x}</button>
+        </div>
+      </div>`;
+    }).join("") : `<div class="km-empty">No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.</div>`;
+
+    container.innerHTML = `
+    <section class="card km-section" aria-labelledby="km-h" aria-busy="${busy}">
+      <div class="km-head">
+        <h2 class="panel-title" id="km-h">Key Messages - ${count}</h2>
+        <div class="panel-note">Drafted from your User Inputs before any comment is read. The run checks them against the video transcripts and pauses for your review before labelling.</div>
+      </div>
+      <div class="km-status" role="status" aria-live="polite">${statusHtml}</div>
+      <div class="km-rows">${rowsHtml}</div>
+      <div class="km-foot">
+        <button class="add-line" type="button" id="km-add" ${pendingPatch ? "disabled" : ""}>${ICONS.plusSm}<span>Add a Key Message</span></button>
+        <span class="tail"></span>
+        <button class="btn primary" type="button" id="km-save" ${pendingPatch ? "disabled" : ""}>Save changes</button>
+      </div>
+    </section>`;
+
+    const saveBtn = container.querySelector("#km-save");
+    saveBtn.disabled = pendingPatch || !hasDirtyText();
+
+    container.querySelectorAll("[data-km-f]").forEach((el) => {
+      el.addEventListener("input", () => {
+        const i = Number(el.dataset.kmI);
+        const field = el.dataset.kmF;
+        rows[i][field] = el.value;
+        markDirty(rows[i]);
+        saveBtn.disabled = pendingPatch || !hasDirtyText();
+        // Live validity on the edited field only: a full paint() here would
+        // replace the input and drop focus/caret mid-keystroke.
+        const dirty = st.dirtyIds.has(rowKey(rows[i]));
+        const invalid = field === "label" ? (dirty && !rows[i].label.trim())
+          : (dirty && rows[i].description.length > 500);
+        if (invalid) {
+          el.setAttribute("aria-invalid", "true");
+          el.setAttribute("aria-describedby", `km-${field === "label" ? "label" : "desc"}-err-${i}`);
+        } else {
+          el.removeAttribute("aria-invalid");
+          el.removeAttribute("aria-describedby");
+        }
+      });
+      el.addEventListener("blur", () => {
+        if (deferredRepaint) { deferredRepaint = false; paint(); }
+      });
+    });
+
+    container.querySelectorAll("[data-km-inc]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const i = Number(b.dataset.kmInc);
+        rows[i].included = !rows[i].included;
+        pendingPatch = true; paint();
+        try { await fullPatch(); }
+        catch (err) { serverError = err.message; }
+        pendingPatch = false; paint();
+      });
+    });
+    container.querySelectorAll("[data-km-up]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const i = Number(b.dataset.kmUp);
+        if (i === 0) return;
+        [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]];
+        pendingPatch = true; paint();
+        try { await fullPatch(); }
+        catch (err) { serverError = err.message; }
+        pendingPatch = false; paint();
+      });
+    });
+    container.querySelectorAll("[data-km-down]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const i = Number(b.dataset.kmDown);
+        if (i === rows.length - 1) return;
+        [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]];
+        pendingPatch = true; paint();
+        try { await fullPatch(); }
+        catch (err) { serverError = err.message; }
+        pendingPatch = false; paint();
+      });
+    });
+    container.querySelectorAll("[data-km-del]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const i = Number(b.dataset.kmDel);
+        const removed = rows[i];
+        rows.splice(i, 1);
+        clearDirty(removed);
+        pendingPatch = true; paint();
+        try { await fullPatch(); }
+        catch (err) { serverError = err.message; }
+        pendingPatch = false; paint();
+      });
+    });
+    const addBtn = container.querySelector("#km-add");
+    addBtn.addEventListener("click", () => {
+      rows.push({ id: null, label: "", description: "", included: true, order: rows.length });
+      paint();
+      const last = container.querySelector(`#km-label-${rows.length - 1}`);
+      if (last) last.focus();
+    });
+    saveBtn.addEventListener("click", async () => {
+      if (saveInFlight) return; // guards against a duplicate/rapid re-click re-entering fullPatch
+      const focusedId = document.activeElement ? document.activeElement.id : null;
+      let ok = true;
+      for (const r of rows) {
+        const label = r.label.trim();
+        if (!label || label.length > 120 || r.description.length > 500) ok = false;
+      }
+      if (!ok) {
+        paint();
+        if (focusedId) {
+          const toFocus = document.getElementById(focusedId);
+          if (toFocus) toFocus.focus();
+        }
+        return;
+      }
+      saveInFlight = true;
+      pendingPatch = true; paint();
+      try {
+        await fullPatch();
+      } catch (err) {
+        serverError = err.message;
+      }
+      pendingPatch = false; saveInFlight = false; paint();
+      if (focusedId) {
+        const toFocus = document.getElementById(focusedId);
+        if (toFocus) toFocus.focus();
+      }
+    });
+    const retryBtn = container.querySelector("#km-retry");
+    if (retryBtn) {
+      retryBtn.addEventListener("click", () => {
+        st.status = "drafting"; paint();
+        requestKeyMessageDraft(sessionId, () => rows, (merged, status, error) => {
+          if (isFocusInside()) { rows = merged; deferredRepaint = true; return; }
+          rows = merged; serverError = status === "failed" || status === "stale" ? error : null;
+          paint();
+        });
+      });
+    }
+  }
+
+  paint();
+
+  return {
+    getRows: () => rows,
+    isDirty: hasDirtyText,
+    acceptDraft: (merged, status, error) => {
+      if (isFocusInside()) {
+        rows = merged;
+        st.status = status;
+        deferredRepaint = true;
+        return;
+      }
+      rows = merged;
+      st.status = status;
+      serverError = (status === "failed" || status === "stale") ? error : null;
+      paint();
+    },
+  };
+}
+
 /* ---------- Campaign detail ---------- */
 async function renderCampaign(sessionId, campaignId) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
-  const [session, campaign, briefPoints, runningRun] = await Promise.all([
+  const [session, campaign, runningRun, kmDraft] = await Promise.all([
     demoApi.getSession(sessionId),
     demoApi.getCampaign(campaignId),
-    latestBriefPointsFor(sessionId),
     demoApi.getRunningRun(sessionId),
+    demoApi.getKeyMessages(sessionId),
   ]);
 
   setTopbar(`
     <div class="topbar-left">
       <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions">${esc(session.name)}</a>
+        <a href="#/sessions">Sessions</a>
         <span class="sep">/</span>
-        <span class="here">${esc(campaign.name)}</span>
+        <span class="here">${esc(session.name)}</span>
         <span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>
       </nav>
     </div>
     <div class="topbar-right">
-      ${live ? "" : disWrap('<button class="btn secondary" type="button" disabled>Settings</button>', "Session settings are not available in this local demo.")}
       <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>
     </div>`);
   const runBtn = document.getElementById("btn-run");
@@ -1392,15 +1992,30 @@ async function renderCampaign(sessionId, campaignId) {
     runBtn.disabled = false;
     runBtn.addEventListener("click", () => { location.hash = `#/runs/${runningRun.id}`; });
   } else {
-    runBtn.addEventListener("click", async () => {
-      try {
-        // Live mode: confirm overwrite when session is not fresh.
+    runBtn.addEventListener("click", () => {
+      const st = kmGetState(sessionId);
+      const startTheRun = () => {
+        const proceedOverwrite = async () => {
+          try {
+            const run = await demoApi.startRun(sessionId);
+            location.hash = `#/runs/${run.id}`;
+          } catch (err) { alert(err.message); }
+        };
+        // Live mode: confirm overwrite when session is not fresh (a previous result exists).
         if (live && session.status !== "ready") {
-          if (!window.confirm("A new run replaces this session's previous results. Continue?")) return;
+          openConfirm("A new run replaces this session's previous results. Continue?", proceedOverwrite);
+        } else {
+          proceedOverwrite();
         }
-        const run = await demoApi.startRun(sessionId);
-        location.hash = `#/runs/${run.id}`;
-      } catch (err) { alert(err.message); }
+      };
+      if (st.status === "stale" || st.status === "failed") {
+        openConfirm(
+          "Key Messages may be out of date. Continue and reconcile them with video transcripts?",
+          startTheRun,
+        );
+      } else {
+        startTheRun();
+      }
     });
   }
 
@@ -1441,28 +2056,16 @@ async function renderCampaign(sessionId, campaignId) {
     ? ""
     : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
 
-  const ocrNotice = live
-    ? `<div class="notice">Scanned documents are kept, but OCR is not yet available - image-only PDFs add no text to the brief context.</div>`
-    : `<div class="notice">Scanned documents are kept, but OCR is unavailable in this local demo - image-only PDFs add no text to the brief context.</div>`;
+  const priorResultWarning = session.status !== "ready" ? `
+    <div class="notice pink" role="note">This Session already has a result. Starting a new run deletes the current result and its files. You will be asked to confirm before anything is deleted.</div>` : "";
 
   view.innerHTML = `
-  <div class="campaign-layout">
+  <div class="campaign-layout single-col">
     <div class="campaign-main">
-      <section class="discovery" aria-labelledby="discovery-h">
-        <div class="head">
-          <span class="star">${ICONS.star}</span>
-          <h2 id="discovery-h">Source discovery</h2>
-        </div>
-        <p class="unavail">Automatic source discovery is not available${live ? "." : " in this local demo. Add individual YouTube URLs below."}</p>
-        <div class="fake-input" aria-disabled="true">
-          <span>e.g. "find reaction videos to ${esc(campaign.name)} with more than 500 comments"</span>
-          <span>${ICONS.send}</span>
-        </div>
-      </section>
-
+      ${priorResultWarning}
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
-          <div class="panel-title" id="videos-h">YouTube links <span style="color:var(--quiet);font-weight:600">· ${videos.length}</span></div>
+          <div class="panel-title" id="videos-h">Videos <span style="color:var(--quiet);font-weight:600">· ${videos.length}</span></div>
           ${commentCountLine}
         </div>
         <div class="video-list">
@@ -1475,14 +2078,13 @@ async function renderCampaign(sessionId, campaignId) {
         </div>
         <div class="field-error" id="c-url-err" hidden></div>
       </section>
-    </div>
 
-    <div class="campaign-rail">
       <section aria-labelledby="assets-h" style="display:flex;flex-direction:column;gap:12px">
-        <div class="panel-title" id="assets-h">Campaign assets</div>
+        <div class="panel-title" id="assets-h">User Inputs</div>
+        <div class="panel-note">Briefs, articles, campaign images - what the campaign was trying to do. Never the comments.</div>
         <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
           <span class="up">${ICONS.up}</span>
-          <span class="t">Drop briefs, decks or key visuals</span>
+          <span class="t">Drop a brief, a deck or an image</span>
           <span class="d">PDF, PPTX, DOCX, JPG, PNG, WEBP up to 10 MB - or paste an article URL below</span>
           <span class="d">Disallowed types bounce off; nothing is uploaded until it passes.</span>
         </div>
@@ -1496,27 +2098,22 @@ async function renderCampaign(sessionId, campaignId) {
         <div style="display:flex;flex-direction:column;gap:8px" id="asset-list">
           ${(campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
-        ${ocrNotice}
       </section>
 
-      <section class="card" aria-labelledby="ideas-h" style="display:flex;flex-direction:column;gap:12px">
-        <div style="display:flex;flex-direction:column;gap:4px">
-          <div class="panel-title" id="ideas-h">Ideas we'll test for transfer</div>
-          <div class="panel-note">Pulled from your brief during a run. Edit them when the run pauses for review.</div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:7px">
-          ${briefPoints.length ? briefPoints.map((p, i) => `
-            <div class="idea-row">
-              <span class="num">${String(i + 1).padStart(2, "0")}</span>
-              <span class="txt">${esc(p.label)}</span>
-            </div>`).join("") : `
-            <div class="idea-row"><span class="txt" style="color:var(--quiet)">Nothing here yet. Start a run and we'll pull the ideas out of your brief for you to confirm.</span></div>`}
-        </div>
-      </section>
+      <div id="km-container"></div>
     </div>
   </div>`;
 
-  // Videos
+  // Key Messages editor: initialize rows/state from getKeyMessages, not from
+  // any prior run's briefPoints.
+  const kmContainer = document.getElementById("km-container");
+  const priorKmEditor = currentKmEditors.get(sessionId);
+  const initialKmDraft = (priorKmEditor && priorKmEditor.isDirty())
+    ? { ...kmDraft, messages: priorKmEditor.getRows().map((r) => ({ ...r })) }
+    : kmDraft;
+  const kmEditor = renderSetupKeyMessages(sessionId, kmContainer, initialKmDraft);
+
+  // Videos: mutations never trigger Key Message drafting.
   const urlInput = document.getElementById("c-url");
   const urlErr = document.getElementById("c-url-err");
   const addUrl = async () => {
@@ -1537,7 +2134,7 @@ async function renderCampaign(sessionId, campaignId) {
     });
   });
 
-  // Assets
+  // Assets: successful mutation renders first, then requests drafting.
   const dz = document.getElementById("dropzone");
   const fi = document.getElementById("file-input");
   const assetErr = document.getElementById("asset-err");
@@ -1550,14 +2147,16 @@ async function renderCampaign(sessionId, campaignId) {
     }
     if (failed) {
       // Keep the message visible across the rerender: the error element is
-      // recreated, so carry the text through the render.
+      // recreated, so carry the text through the render. Failed upload keeps
+      // its error and never drafts.
       const msg = assetErr.textContent;
       await renderCampaign(sessionId, campaignId);
       const el = document.getElementById("asset-err");
       if (el && msg) { el.textContent = msg; el.hidden = false; }
       return;
     }
-    renderCampaign(sessionId, campaignId);
+    await renderCampaign(sessionId, campaignId);
+    requestDraftForCurrentEditor(sessionId);
   };
   dz.addEventListener("click", () => fi.click());
   dz.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fi.click(); } });
@@ -1574,7 +2173,8 @@ async function renderCampaign(sessionId, campaignId) {
   const addArticle = async () => {
     try {
       await demoApi.addArticle(campaignId, artInput.value);
-      renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId);
+      requestDraftForCurrentEditor(sessionId);
     } catch (err) {
       artErr.textContent = err.message; artErr.hidden = false;
       artInput.classList.add("error");
@@ -1586,15 +2186,26 @@ async function renderCampaign(sessionId, campaignId) {
   view.querySelectorAll("[data-rm-asset]").forEach((b) => {
     b.addEventListener("click", async () => {
       await demoApi.removeAsset(b.dataset.rmAsset);
-      renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId);
+      requestDraftForCurrentEditor(sessionId);
     });
   });
-  view.querySelectorAll("[data-kv]").forEach((b) => {
-    b.addEventListener("click", async () => {
-      try { await demoApi.setKeyVisual(campaignId, b.dataset.kv); }
-      catch (err) { assetErr.textContent = err.message; assetErr.hidden = false; }
-      renderCampaign(sessionId, campaignId);
-    });
+
+  currentKmEditors.set(sessionId, kmEditor);
+  routeCleanup = () => { currentKmEditors.delete(sessionId); };
+}
+
+/* The live kmEditor for each Session currently mounted, so a post-mutation
+   draft request (fired after renderCampaign has already rerendered and
+   replaced kmEditor) always targets the editor instance actually on screen. */
+const currentKmEditors = new Map(); // sessionId -> editor returned by renderSetupKeyMessages
+
+function requestDraftForCurrentEditor(sessionId) {
+  const editor = currentKmEditors.get(sessionId);
+  if (!editor) return;
+  requestKeyMessageDraft(sessionId, editor.getRows, (merged, status, error) => {
+    const live = currentKmEditors.get(sessionId);
+    if (live) live.acceptDraft(merged, status, error);
   });
 }
 
@@ -1612,17 +2223,9 @@ function assetRowHtml(a, live) {
   let sub;
   if (a.kind === "article") {
     sub = `<div class="asset-sub ok">Linked · added to context at run time</div>`;
-  } else if (live) {
-    // Live: no key-visual wording; image context line unchanged, document line unchanged.
-    sub = `<div class="asset-sub">${a.kind === "image" ? fmtSize(a.size) + " · image context at run time" : fmtSize(a.size) + " · text added to context at run time"}</div>`;
   } else {
-    sub = a.isKeyVisual
-      ? `<div class="asset-sub ok">Used as the key visual in the report</div>`
-      : `<div class="asset-sub">${a.kind === "image" ? fmtSize(a.size) + " · image context" : fmtSize(a.size) + " · text added to context at run time"}</div>`;
+    sub = `<div class="asset-sub">${a.kind === "image" ? fmtSize(a.size) + " · image context at run time" : fmtSize(a.size) + " · text added to context at run time"}</div>`;
   }
-  // Live: hide key-visual toggle (no backing route).
-  const kvToggle = (live || a.kind !== "image") ? "" :
-    `<button class="kv-toggle ${a.isKeyVisual ? "on" : ""}" type="button" data-kv="${a.id}" ${a.isKeyVisual ? "aria-pressed=\"true\"" : ""}>${a.isKeyVisual ? "Key visual" : "Set as key visual"}</button>`;
   return `
   <div class="asset-row">
     ${icon}
@@ -1630,42 +2233,8 @@ function assetRowHtml(a, live) {
       <div class="asset-name" title="${esc(displayName)}">${esc(displayName)}</div>
       ${sub}
     </div>
-    ${kvToggle}
     <button class="icon-btn" type="button" data-rm-asset="${a.id}" aria-label="Remove ${esc(displayName)}">${ICONS.x}</button>
   </div>`;
-}
-
-async function latestBriefPointsFor(sessionId) {
-  if (demoApi.mode === "live") {
-    // In live mode, get the latest run and return its briefPoints array.
-    const runningRun = await demoApi.getRunningRun(sessionId);
-    if (runningRun && runningRun.id) {
-      try {
-        const run = await demoApi.getRun(runningRun.id);
-        return (run.briefPoints || []).slice().sort((a, b) => a.order - b.order);
-      } catch { return []; }
-    }
-    // Also check session for a complete run.
-    const sess = await demoApi.getSession(sessionId);
-    const runs = (sess.runs || []).slice().sort((a, b) =>
-      (b.createdAt || "").localeCompare(a.createdAt || ""));
-    for (const rs of runs) {
-      try {
-        const run = await demoApi.getRun(rs.id);
-        if (run.briefPoints && run.briefPoints.length) {
-          return run.briefPoints.slice().sort((a, b) => a.order - b.order);
-        }
-      } catch { /* skip */ }
-    }
-    return [];
-  }
-  // Demo mode: read from store.
-  const runs = [...store.runs.values()]
-    .filter((r) => r.sessionId === sessionId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (!runs.length) return [];
-  return runs[0].briefPointIds.map((id) => store.briefPoints.get(id)).filter(Boolean)
-    .sort((a, b) => a.order - b.order);
 }
 
 /* ---------- Run ---------- */
@@ -1767,11 +2336,27 @@ async function renderRun(runId) {
   const cntThemes = document.getElementById("cnt-themes");
   const cntOther = document.getElementById("cnt-other");
 
-  let state = { stage: "connecting", pct: 0, detail: {}, disconnected: false, failed: null, completed: false };
-  let currentStep = -1;
+  // Terminal mapping for the initial snapshot: failed/error is failed; complete
+  // is complete; brief_pause opens review immediately with persisted order.
+  // STAGE_TO_STEP gives a monotonic rank used to reject stale buffered SSE below.
+  const initialStage = run.status === "failed" ? "failed"
+    : run.stage === "error" ? "error"
+    : run.stage;
+  let state = {
+    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
+    failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
+    completed: initialStage === "complete",
+  };
+  let currentStep = STAGE_TO_STEP[initialStage] != null ? Math.max(STAGE_TO_STEP[initialStage], -1) : -1;
+  // Authoritative-stage floor: a fresh initial brief_pause/complete/failed/error
+  // snapshot can never be regressed by a stale buffered SSE event. For other
+  // initial (nonterminal) states, later events may advance the floor.
+  let authoritativeRank = STAGE_TO_STEP[initialStage] != null ? STAGE_TO_STEP[initialStage] : -1;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
   let briefRendered = false;
+  let briefPointsSnapshot = (run.briefPoints || []).map((p) => ({ ...p }));
+  briefPointsSnapshot = briefPointsSnapshot.slice().sort((a, b) => a.order - b.order);
 
   function paintSteps() {
     const d = state.detail || {};
@@ -1883,101 +2468,117 @@ async function renderRun(runId) {
     }
   }
 
-  function renderBriefReview() {
-    // Live: briefPoints come from run.briefPoints (server response).
-    // Demo: briefPoints come from store via run.briefPointIds.
-    const sourcePoints = live
-      ? (run.briefPoints || []).slice().sort((a, b) => a.order - b.order)
-      : run.briefPointIds.map((id) => store.briefPoints.get(id)).filter(Boolean)
-          .sort((a, b) => a.order - b.order);
+  function renderBriefReview(seedPoints) {
+    // seedPoints (when supplied) is the persisted/pushed source of truth for
+    // this paint call; otherwise fall back to the snapshot captured at mount.
+    const sourcePoints = (seedPoints || briefPointsSnapshot).slice().sort((a, b) => a.order - b.order);
     const points = sourcePoints.map((p) => ({ ...p })); // local working copy
     briefEl.hidden = false;
+    let saving = false;
+    let focusedField = null; // { i, f } of the control focused when Save was pressed
 
     function paint() {
-      const addBtn = live ? "" : `<button class="add-line" type="button" id="bp-add">${ICONS.plusSm}<span>Add an idea</span></button>`;
-      const liveNote = live ? `<div class="panel-note" style="color:var(--quiet)">Ideas are fixed for this run. Exclude one to drop it.</div>` : "";
       briefEl.innerHTML = `
-      <section class="card" aria-labelledby="brief-h" style="border-color:var(--pink-border);display:flex;flex-direction:column;gap:14px">
+      <section class="card" aria-labelledby="brief-h" style="border-color:var(--pink-border);display:flex;flex-direction:column;gap:14px" aria-busy="${saving}">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <h2 class="panel-title" id="brief-h" style="font-size:16px">Ideas we'll test for transfer</h2>
-          <div class="panel-note">Pulled from your brief. ${live ? "Exclude ideas you don't want tested." : "Edit, reorder, drop or add - these are what we look for in the comments."} Nothing is saved until you confirm.</div>
-          ${liveNote}
+          <h2 class="panel-title" id="brief-h" style="font-size:16px">Key Messages we'll test for transfer</h2>
+          <div class="panel-note">Edit, reorder, drop or add - these are what we look for in the comments. Nothing is saved until you confirm.</div>
         </div>
         <div class="brief-list">
-          ${points.map((p, i) => {
-            const upDown = live ? "" : `
-                <button class="icon-btn" type="button" data-up="${i}" aria-label="Move idea ${i + 1} up" ${i === 0 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.upArr}</button>
-                <button class="icon-btn" type="button" data-down="${i}" aria-label="Move idea ${i + 1} down" ${i === points.length - 1 ? "disabled style=\"opacity:.35;cursor:default\"" : ""}>${ICONS.downArr}</button>`;
-            const delBtn = live ? "" : `<button class="icon-btn" type="button" data-del="${i}" aria-label="Delete idea ${i + 1}">${ICONS.x}</button>`;
-            return `
+          ${points.map((p, i) => `
           <div class="brief-item ${p.included ? "" : "excluded"}" data-idx="${i}">
             <div class="top">
               <div class="fields">
-                <label class="sr-only" for="bp-label-${i}">Idea ${i + 1} label</label>
-                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" value="${esc(p.label)}"${live ? " readonly" : ""}>
-                <label class="sr-only" for="bp-desc-${i}">Idea ${i + 1} description</label>
-                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" rows="2"${live ? " readonly" : ""}>${esc(p.description)}</textarea>
+                <label class="sr-only" for="bp-label-${i}">Key Message ${i + 1} label</label>
+                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" maxlength="120" value="${esc(p.label)}" ${saving ? "disabled" : ""}>
+                <label class="sr-only" for="bp-desc-${i}">Key Message ${i + 1} description</label>
+                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" maxlength="500" rows="2" ${saving ? "disabled" : ""}>${esc(p.description)}</textarea>
               </div>
               <div class="brief-tools">
-                ${upDown}
-                ${delBtn}
+                <button class="icon-btn" type="button" data-up="${i}" aria-label="Move Key Message ${i + 1} up" ${saving || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
+                <button class="icon-btn" type="button" data-down="${i}" aria-label="Move Key Message ${i + 1} down" ${saving || i === points.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
+                <button class="icon-btn" type="button" data-del="${i}" aria-label="Delete Key Message ${i + 1}" ${saving ? "disabled" : ""}>${ICONS.x}</button>
               </div>
             </div>
             <label class="switch">
-              <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""}>
+              <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""} ${saving ? "disabled" : ""}>
               <span class="track" aria-hidden="true"></span>
               <span class="sw-label">${p.included ? "Included" : "Excluded"}</span>
             </label>
-          </div>`;
-          }).join("")}
+          </div>`).join("")}
         </div>
-        ${addBtn}
-        <div class="field-error" id="bp-err" hidden></div>
+        <button class="add-line" type="button" id="bp-add" ${saving ? "disabled" : ""}>${ICONS.plusSm}<span>Add a Key Message</span></button>
+        <div class="field-error" id="bp-err" role="alert" ${saving ? "hidden" : ""}></div>
         <div class="brief-foot">
-          <button class="btn primary lg" type="button" id="bp-confirm">Confirm and continue</button>
-          <span class="panel-note">At least one idea must stay included.</span>
+          <button class="btn primary lg" type="button" id="bp-confirm" ${saving ? "disabled" : ""}>${saving ? "Saving\u2026" : "Confirm and continue"}</button>
+          <span class="panel-note">At least one Key Message must stay included.</span>
         </div>
       </section>`;
 
       briefEl.querySelectorAll("[data-inc]").forEach((t) => {
         t.addEventListener("change", () => { points[Number(t.dataset.inc)].included = t.checked; paint(); });
       });
-      if (!live) {
-        briefEl.querySelectorAll("[data-f]").forEach((inp) => {
-          inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
-        });
-        briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
-          const i = Number(b.dataset.up);
-          [points[i - 1], points[i]] = [points[i], points[i - 1]];
-          paint();
-        }));
-        briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
-          const i = Number(b.dataset.down);
-          [points[i + 1], points[i]] = [points[i], points[i + 1]];
-          paint();
-        }));
-        briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
-          points.splice(Number(b.dataset.del), 1);
-          paint();
-        }));
-        const addLine = briefEl.querySelector("#bp-add");
-        if (addLine) addLine.addEventListener("click", () => {
-          points.push({ id: uid(), label: "", description: "", included: true, order: points.length + 1 });
-          paint();
-          const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
-          if (last) last.focus();
-        });
-      }
+      briefEl.querySelectorAll("[data-f]").forEach((inp) => {
+        inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
+      });
+      briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
+        const i = Number(b.dataset.up);
+        [points[i - 1], points[i]] = [points[i], points[i - 1]];
+        paint();
+      }));
+      briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
+        const i = Number(b.dataset.down);
+        [points[i + 1], points[i]] = [points[i], points[i + 1]];
+        paint();
+      }));
+      briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+        points.splice(Number(b.dataset.del), 1);
+        paint();
+      }));
+      const addLine = briefEl.querySelector("#bp-add");
+      if (addLine) addLine.addEventListener("click", () => {
+        points.push({ id: null, label: "", description: "", included: true, order: points.length });
+        paint();
+        const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
+        if (last) last.focus();
+      });
+
       briefEl.querySelector("#bp-confirm").addEventListener("click", async () => {
         const errEl = briefEl.querySelector("#bp-err");
-        const payload = points.map((p, i) => ({ ...p, order: i + 1 }));
+        errEl.textContent = ""; errEl.hidden = true;
+        if (!points.some((p) => p.included)) {
+          errEl.textContent = "Include at least one Key Message before continuing.";
+          errEl.hidden = false;
+          return;
+        }
+        const active = document.activeElement;
+        focusedField = (active && active.dataset && active.dataset.i != null)
+          ? { i: Number(active.dataset.i), f: active.dataset.f || null }
+          : null;
+        const payload = points.map((p, i) => ({
+          id: p.id || null, label: p.label, description: p.description,
+          included: p.included, order: i,
+        }));
+        saving = true;
+        paint();
         try {
-          await demoApi.updateBriefPoints(runId, payload);
+          const updated = await demoApi.updateBriefPoints(runId, payload);
           await demoApi.proceedRun(runId);
           briefEl.hidden = true;
           briefEl.innerHTML = "";
+          briefPointsSnapshot = updated.messages.slice();
         } catch (err) {
-          errEl.textContent = err.message; errEl.hidden = false;
+          saving = false;
+          paint();
+          const errEl2 = briefEl.querySelector("#bp-err");
+          errEl2.textContent = err.message; errEl2.hidden = false;
+          if (focusedField) {
+            const sel = focusedField.f
+              ? `[data-i="${focusedField.i}"][data-f="${focusedField.f}"]`
+              : `[data-i="${focusedField.i}"]`;
+            const toFocus = briefEl.querySelector(sel);
+            if (toFocus) toFocus.focus();
+          }
         }
       });
     }
@@ -1986,7 +2587,18 @@ async function renderRun(runId) {
     if (first) first.focus();
   }
 
+
   function onEvent(e) {
+    // Precedence: reject any event whose stage rank is behind the
+    // authoritative floor. A fresh initial brief_pause/complete/failed/error
+    // snapshot set that floor at mount; nonterminal initial states let the
+    // floor advance as real events arrive. This blocks stale buffered SSE
+    // (e.g. a late "collect" event after a persisted brief_pause reopen)
+    // from regressing the UI.
+    const rank = STAGE_TO_STEP[e.stage];
+    if (rank != null && rank < authoritativeRank) return;
+    if (rank != null && rank > authoritativeRank) authoritativeRank = rank;
+
     state.stage = e.stage;
     state.pct = e.pct;
     // Live: detail is a string from adapter.py; parse it into an object.
@@ -2020,7 +2632,9 @@ async function renderRun(runId) {
 
     if (e.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
-      renderBriefReview();
+      // Use the pushed brief_points on the event when present; otherwise the
+      // captured snapshot (covers the demo engine, which does not push points).
+      renderBriefReview(e.brief_points || e.detail && e.detail.brief_points || null);
     }
     if (e.stage === "classify" && briefRendered) {
       briefEl.hidden = true;
@@ -2054,6 +2668,16 @@ async function renderRun(runId) {
     bannerEl.innerHTML = "";
     paintHeader();
     paintSteps();
+  }
+
+  // Paint the initial snapshot before subscribing to SSE. A reopened run
+  // already at brief_pause shows its persisted ordered briefPoints immediately,
+  // with no SSE replay required.
+  paintHeader();
+  paintSteps();
+  if (initialStage === "brief_pause") {
+    briefRendered = true;
+    renderBriefReview();
   }
 
   const unsubscribe = demoApi.subscribeRun(runId, { onEvent, onDisconnect, onReconnect });
@@ -2209,11 +2833,11 @@ async function renderResults(runId) {
     : store.campaigns.get(session.campaignIds[0]);
   const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
   // Live: artifacts come from run.artifacts (present when status===complete).
-  // Demo: artifacts come from store.
-  const artifacts = live
-    ? (run.artifacts || [])
-    : [...store.artifacts.values()].filter((a) => a.runId === runId);
-  const pdf = artifacts.find((a) => a.kind === "pdf" || a.kind === "report_pdf");
+  // Demo: artifacts come from store. Both already filtered/sorted to the six
+  // public kinds in contract order by listArtifacts.
+  const artifacts = await demoApi.listArtifacts(runId);
+  const byKind = new Map(artifacts.map((a) => [a.kind, a]));
+  const pdf = byKind.get("report_pdf");
   report._totalComments = session.commentCount || 8412;
 
   setTopbar(`
@@ -2226,23 +2850,30 @@ async function renderResults(runId) {
       </nav>
     </div>
     <div class="topbar-right">
-      <button class="btn secondary" type="button" id="btn-pdf">Download PDF</button>
+      ${pdf
+        ? '<button class="btn secondary" type="button" id="btn-pdf">Download PDF</button>'
+        : disWrap('<button class="btn secondary" type="button" id="btn-pdf" disabled>Download PDF</button>', "This file was not generated.")}
     </div>`);
 
-  document.getElementById("btn-pdf").addEventListener("click", async () => {
-    if (!pdf) return;
-    if (live) {
-      const a = await demoApi.getArtifact(pdf.id);
-      downloadBlob(a.content, a.name, "application/pdf");
-    } else {
-      downloadBlob(pdf.content, pdf.name, "application/pdf");
-    }
-  });
+  const topbarErr = document.createElement("div");
+  topbarErr.id = "results-dl-err";
+  topbarErr.setAttribute("role", "alert");
+  topbarErr.className = "sr-only-err";
+  document.querySelector(".topbar-right").appendChild(topbarErr);
+
+  if (pdf) {
+    document.getElementById("btn-pdf").addEventListener("click", () => downloadArtifact(pdf, topbarErr));
+  }
 
   const [line1, line2] = report.title.split("\n");
   const metaLine = live
     ? esc(report.subtitle)
     : esc(report.subtitle) + " · fixture data";
+  const artifactRow = (meta) => {
+    const art = byKind.get(meta.kind);
+    const btn = `<button class="btn ghost small" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
+    return art ? btn : disWrap(btn, "This file was not generated.");
+  };
   view.innerHTML = `
   <div class="report-layout">
     <div class="report-scroll">
@@ -2271,7 +2902,7 @@ async function renderResults(runId) {
               <div class="bar-track"><div class="bar-fill" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
-          <div class="method-line"><span>Counted from per-comment labels — never estimated.</span><a href="#" data-dl="chart_transfer.csv">chart_transfer.csv ↓</a></div>
+          <div class="method-line"><span>Counted from per-comment labels — never estimated.</span></div>
         </section>
 
         <section class="chart" aria-labelledby="chart-themes-h">
@@ -2294,7 +2925,6 @@ async function renderResults(runId) {
               <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
-          <div class="method-line"><a href="#" data-dl="chart_themes.csv">chart_themes.csv ↓</a></div>
         </section>
 
         <section class="read" aria-labelledby="read-h">
@@ -2302,7 +2932,11 @@ async function renderResults(runId) {
           ${report.interpretation.split("\n\n").map((p) => `<p>${esc(p)}</p>`).join("")}
           <blockquote class="quote">"${esc(report.quote.text)}"<span class="attr">${esc(report.quote.attr)}</span></blockquote>
           <div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>
-          <div class="method-line"><span>Every labelled comment is in the full export.</span><a href="#" data-dl="comments.csv">comments.csv ↓</a></div>
+        </section>
+
+        <section class="downloads" aria-labelledby="downloads-h">
+          <h2 id="downloads-h">Files from this run</h2>
+          <div class="dl-row">${PUBLIC_ARTIFACTS.map(artifactRow).join("")}</div>
         </section>
       </article>
     </div>
@@ -2317,11 +2951,10 @@ async function renderResults(runId) {
       if (metric && metric.id !== "none") openEvidenceDrawer(report, metric, b);
     });
   });
-  view.querySelectorAll("[data-dl]").forEach((a) => {
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      const art = artifacts.find((x) => x.name === a.dataset.dl);
-      if (art) downloadBlob(art.content, art.name, "text/csv");
+  view.querySelectorAll("[data-artifact]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const art = byKind.get(b.dataset.artifact);
+      if (art) downloadArtifact(art, topbarErr);
     });
   });
 
@@ -2336,10 +2969,7 @@ async function renderFiles() {
   const live = demoApi.mode === "live";
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Files</span></div>
-    <div class="topbar-right">
-      ${disWrap(`<span class="searchbox" aria-disabled="true">${ICONS.search}<span>Search files</span></span>`,
-        live ? "Search is not available." : "Search is not available in this local demo.")}
-    </div>`);
+    <div class="topbar-right"></div>`);
 
   const files = await demoApi.listFiles();
   const shown = files.filter((f) =>
@@ -2348,13 +2978,14 @@ async function renderFiles() {
   const rows = shown.map((f) => {
     const campaign = (f.campaignName ? { name: f.campaignName } : store.campaigns.get(f.campaignId)) || null;
     const isArtifact = f._file === "artifact";
-    const ext = isArtifact ? (f.kind === "pdf" ? "PDF" : "CSV")
+    const displayName = isArtifact ? f.filename : f.name;
+    const ext = isArtifact ? (f.contentType === "application/pdf" ? "PDF" : "CSV")
       : f.kind === "article" ? null : (f.name.split(".").pop() || "").toUpperCase().slice(0, 4);
     const icon = f.kind === "article"
       ? `<div class="file-icon">${ICONS.link}</div>`
       : f.kind === "image" ? `<div class="file-icon img"></div>`
       : `<div class="file-icon">${esc(ext || "")}</div>`;
-    const canOpen = isArtifact ? f.kind === "pdf" : f.kind === "image";
+    const canOpen = isArtifact ? f.contentType === "application/pdf" : f.kind === "image";
     const action = canOpen
       ? `<button class="file-open" type="button" data-open="${f.id}" data-kind="${f._file}">Open</button>`
       : `<button class="file-open" type="button" data-dl-file="${f.id}" data-kind="${f._file}">Download</button>`;
@@ -2362,7 +2993,7 @@ async function renderFiles() {
     <div class="trow" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
       <div style="display:flex;gap:11px;align-items:center;min-width:0">
         ${icon}
-        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.name)}">${esc(f.name)}</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(displayName)}">${esc(displayName)}</div>
       </div>
       <div class="trow-dim">${esc(campaign ? campaign.name : "—")}</div>
       <div>${isArtifact ? '<span class="badge">We made</span>' : '<span class="badge outline">You added</span>'}</div>
@@ -2389,7 +3020,7 @@ async function renderFiles() {
     <div class="empty-block">
       <div class="empty-icon">${ICONS.folder}</div>
       <h3>No files yet</h3>
-      <p>Upload briefs and key visuals to a campaign, or run an analysis — reports and CSVs land here.</p>
+      <p>Upload briefs, articles or images to a campaign, or run an analysis — reports and CSVs land here.</p>
       <div class="actions"><a class="btn primary" href="#/sessions/new">Create a session</a></div>
     </div>` : `
     <div class="table-scroll">
@@ -2403,34 +3034,51 @@ async function renderFiles() {
     <div style="font-size:12px;color:var(--quiet)">${shown.length} file${shown.length === 1 ? "" : "s"}. Deleting an input you added won't change a report that has already run — reports are immutable.</div>`}
   </div>`;
 
+  const filesDlErr = document.createElement("div");
+  filesDlErr.id = "files-dl-err";
+  filesDlErr.setAttribute("role", "alert");
+  filesDlErr.className = "sr-only-err";
+  view.appendChild(filesDlErr);
+
   view.querySelectorAll("[data-ff]").forEach((b) => {
     b.addEventListener("click", () => { filesFilter = b.dataset.ff; renderFiles(); });
   });
   view.querySelectorAll("[data-dl-file]").forEach((b) => {
     b.addEventListener("click", async () => {
+      const item = files.find((x) => x.id === b.dataset.dlFile);
+      if (!item) return;
       if (b.dataset.kind === "artifact") {
-        const a = await demoApi.getArtifact(b.dataset.dlFile);
-        downloadBlob(a.content, a.name, a.kind === "pdf" ? "application/pdf" : "text/csv");
+        await downloadArtifact(item, filesDlErr);
       } else {
-        const blob = await demoApi.getAssetData(b.dataset.dlFile);
-        const a = live ? f : store.assets.get(b.dataset.dlFile);
-        if (blob && a) downloadBlob(blob, a.name, a.mimeType);
-        else if (a && a.sourceUrl) window.open(a.sourceUrl, "_blank", "noopener");
+        try {
+          const blob = await demoApi.getAssetData(item.id);
+          if (blob) downloadBlob(blob, item.name, item.mimeType);
+          else if (item.sourceUrl) window.open(item.sourceUrl, "_blank", "noopener");
+          filesDlErr.textContent = "";
+        } catch {
+          filesDlErr.textContent = "Download failed. Try again.";
+        }
       }
     });
   });
   view.querySelectorAll("[data-open]").forEach((b) => {
     b.addEventListener("click", async () => {
+      const item = files.find((x) => x.id === b.dataset.open);
+      if (!item) return;
       if (b.dataset.kind === "artifact") {
-        const a = await demoApi.getArtifact(b.dataset.open);
-        const url = URL.createObjectURL(new Blob([a.content], { type: "application/pdf" }));
-        openModal(a.name + (live ? "" : " (demo data)"), `<iframe src="${url}" title="Preview of ${esc(a.name)}"></iframe>`, url);
+        try {
+          const a = await demoApi.getArtifact(item.id);
+          const url = URL.createObjectURL(a.content);
+          openModal(a.filename + (live ? "" : " (demo data)"), `<iframe src="${url}" title="Preview of ${esc(a.filename)}"></iframe>`, url);
+          filesDlErr.textContent = "";
+        } catch {
+          filesDlErr.textContent = "Download failed. Try again.";
+        }
       } else {
-        const blob = await demoApi.getAssetData(b.dataset.open);
-        const a = live ? f : store.assets.get(b.dataset.open);
-        if (blob && a) {
+        const blob = await demoApi.getAssetData(item.id);
+        if (blob) {
           const url = URL.createObjectURL(blob);
-          openModal(a.name, `<img src="${url}" alt="Preview of ${esc(a.name)}">`, url);
+          openModal(item.name, `<img src="${url}" alt="Preview of ${esc(item.name)}">`, url);
         }
       }
     });
@@ -2439,16 +3087,54 @@ async function renderFiles() {
 
 /* ============================== Router ============================== */
 
+let currentRouteHash = null; // last hash the router actually committed to
+let suppressDirtyGuard = false; // set while the router is applying a confirmed navigation
+let revertingHash = false; // true only while the guard is programmatically restoring currentRouteHash
+
+/* Any Key Message editor mounted for the current route that might be dirty.
+   Set by renderCampaign, cleared by cleanupRoute. */
+let activeDirtySessionId = null;
+
+function routeHasDirtyKeyMessages() {
+  if (!activeDirtySessionId) return false;
+  const editor = currentKmEditors.get(activeDirtySessionId);
+  return !!(editor && editor.isDirty());
+}
+
 async function route() {
+  if (revertingHash) {
+    // This is the nested hashchange fired by the guard's own revert below.
+    // The address bar is already back at currentRouteHash; do not re-render
+    // or re-run the guard for it.
+    revertingHash = false;
+    return;
+  }
+  if (!suppressDirtyGuard && currentRouteHash != null && routeHasDirtyKeyMessages()) {
+    const intendedHash = location.hash;
+    // Revert the address bar to the current route immediately, then ask.
+    // Setting location.hash fires a synchronous nested hashchange even when
+    // restoring the prior value in some browsers; revertingHash swallows
+    // that one call so it never re-renders or re-opens the guard.
+    revertingHash = true;
+    location.hash = currentRouteHash;
+    openConfirm("Unsaved Key Message changes will be lost. Continue?", () => {
+      suppressDirtyGuard = true;
+      location.hash = intendedHash;
+    });
+    return;
+  }
+  suppressDirtyGuard = false;
   cleanupRoute();
+  activeDirtySessionId = null;
   const hash = location.hash || "#/home";
+  currentRouteHash = hash;
   const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
   view.focus({ preventScroll: true });
   try {
     if (parts.length === 0 || parts[0] === "home") await renderHome();
     else if (parts[0] === "sessions" && parts.length === 1) await renderSessions();
     else if (parts[0] === "sessions" && parts[1] === "new") await renderNewSession();
-    else if (parts[0] === "sessions" && parts[2] === "campaigns") await renderCampaign(parts[1], parts[3]);
+    else if (parts[0] === "sessions" && parts[2] === "campaigns") { activeDirtySessionId = parts[1]; await renderCampaign(parts[1], parts[3]); }
     else if (parts[0] === "runs" && parts.length === 2) await renderRun(parts[1]);
     else if (parts[0] === "runs" && parts[2] === "results") await renderResults(parts[1]);
     else if (parts[0] === "files") await renderFiles();
@@ -2471,11 +3157,10 @@ window.addEventListener("hashchange", route);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && modalState) closeModal();
 });
-// Only boot the UI when the app shell is mounted. self-check.html loads this
-// file for the store/demoApi assertions but has no #view/#topbar shell.
+// Only boot the UI when the app shell is mounted (#view/#topbar/#overlay-root
+// present). Both index.html and self-check.html's fixture shell qualify.
 if (view && topbar && overlayRoot) {
   // Mode probe: live when __liveApi exists AND GET /api/sessions succeeds within 1200ms.
-  // self-check.html has no shell elements so this block never runs there.
   (async function resolveMode() {
     if (window.__liveApi) {
       try {
@@ -2489,7 +3174,7 @@ if (view && topbar && overlayRoot) {
     route();
   })();
 } else {
-  // self-check.html path: no probe, no route.
+  // No shell mounted: no probe, no route.
 }
 
 })();
