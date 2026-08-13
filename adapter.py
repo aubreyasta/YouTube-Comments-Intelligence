@@ -64,6 +64,25 @@ _proceed_events: dict[str, threading.Event] = {}
 _terminal: dict[str, bool] = {}
 _lock = threading.Lock()
 
+# Single source of truth for the seven (kind, filename) pairs a completed
+# run must produce under out_dir. server.py's _ARTIFACT_CONTRACT carries
+# the matching order/MIME/public-visibility contract for the API side.
+_ARTIFACT_FILES: list[tuple[str, str]] = [
+    ("report_pdf",        "report.pdf"),
+    ("comments_csv",      "comments.csv"),
+    ("key_messages_csv",  "key-messages.csv"),
+    ("themes_csv",        "themes.csv"),
+    ("sentiment_csv",     "sentiment.csv"),
+    ("emotions_csv",      "emotions.csv"),
+    ("report_json",       "report.json"),
+]
+
+
+def _missing_required_artifacts(out_dir: str) -> list[str]:
+    """Filenames from _ARTIFACT_FILES not present under out_dir."""
+    return [filename for _kind, filename in _ARTIFACT_FILES
+            if not os.path.isfile(os.path.join(out_dir, filename))]
+
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -902,20 +921,16 @@ def _execute(run_id: str) -> None:
             json.dump(report_data, fh, ensure_ascii=False, indent=2)
 
         # --- 13. Copy artifacts to artifacts_dir and register in DB --------
+        # Fixed order per _ARTIFACT_FILES. All seven are required: a run
+        # cannot reach "complete" missing one, so a short source scan runs
+        # first and raises before any DB row or state change.
         art_dir = storage.artifacts_dir(run_id)
-        artifact_files = [
-            ("report_pdf",         "report.pdf"),
-            ("comments_csv",       "comments.csv"),
-            ("summary_csv",        "summary.csv"),
-            ("chart_transfer_csv", "chart_transfer.csv"),
-            ("chart_themes_csv",   "chart_themes.csv"),
-            ("report_json",        "report.json"),
-        ]
-        for kind, filename in artifact_files:
+        missing = _missing_required_artifacts(out_dir)
+        if missing:
+            raise ValueError(
+                f"Run finished without required output files: {', '.join(missing)}")
+        for kind, filename in _ARTIFACT_FILES:
             src = os.path.join(out_dir, filename)
-            if not os.path.isfile(src):
-                logger.warning("artifact %s not found at %s, skipping", kind, src)
-                continue
             dst = os.path.join(art_dir, filename)
             shutil.copy2(src, dst)
             _insert_artifact(run_id, kind, dst)

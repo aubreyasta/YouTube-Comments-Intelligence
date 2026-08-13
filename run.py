@@ -4,9 +4,9 @@
     python run.py
 
 Each run creates a folder under output/, named after what was analysed,
-holding five files: report.pdf, comments.csv, summary.csv,
-chart_transfer.csv, chart_themes.csv. See README.md#what-you-get for what
-each one is for.
+holding six files: report.pdf, comments.csv, key-messages.csv, themes.csv,
+sentiment.csv, emotions.csv. See README.md#what-you-get for what each one
+is for.
 
 Set KEEP_INTERMEDIATE in config.py for a debug/ subfolder of working files;
 see docs/setup.md#running for what's in it.
@@ -213,8 +213,8 @@ def main():
                       out_dir)
 
         print(f"\nDone. {out_dir}")
-        for name in ("report.pdf", "comments.csv", "summary.csv",
-                     "chart_transfer.csv", "chart_themes.csv"):
+        for name in ("report.pdf", "comments.csv", "key-messages.csv",
+                     "themes.csv", "sentiment.csv", "emotions.csv"):
             print(f"  {name}")
         if cfg.KEEP_INTERMEDIATE:
             print("  debug/")

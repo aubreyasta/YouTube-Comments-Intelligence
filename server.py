@@ -356,6 +356,15 @@ def _ser_run(row, conn) -> dict:
     arts = conn.execute(
         "SELECT * FROM run_artifacts WHERE run_id = ?", (rid,)
     ).fetchall()
+    # contract.get() is None for a legacy/unknown kind (old runs, or a kind
+    # retired from the contract); such rows are skipped instead of a
+    # KeyError crashing the whole snapshot.
+    public_arts = []
+    for a in arts:
+        contract = _ARTIFACT_CONTRACT.get(a["kind"])
+        if contract is not None and contract[3]:
+            public_arts.append(a)
+    public_arts.sort(key=lambda a: _ARTIFACT_CONTRACT[a["kind"]][0])
 
     return {
         "id": rid,
@@ -366,7 +375,7 @@ def _ser_run(row, conn) -> dict:
         "message": "",
         "error": row["error"],
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
-        "artifacts": [_ser_artifact(a) for a in arts],
+        "artifacts": [_ser_artifact(a) for a in public_arts],
     }
 
 
@@ -406,37 +415,28 @@ def _ser_key_message_draft(session_row, conn) -> dict:
     }
 
 
-_ARTIFACT_TIER = {
-    "report_pdf": "primary",
-    "summary_csv": "primary",
-    "chart_transfer_csv": "primary",
-    "chart_themes_csv": "primary",
-    "report_json": "primary",
-    "comments_csv": "advanced",
+# Single source of truth for artifact order, filename, MIME, and public
+# status (CHANGELOG "Artifacts"). order also drives RunSnapshot.artifacts
+# ordering; public=False keeps report_json out of that list and download.
+_ARTIFACT_CONTRACT = {
+    "report_pdf":       (1, "report.pdf",       "application/pdf",  True),
+    "comments_csv":     (2, "comments.csv",     "text/csv",         True),
+    "key_messages_csv": (3, "key-messages.csv", "text/csv",         True),
+    "themes_csv":       (4, "themes.csv",       "text/csv",         True),
+    "sentiment_csv":    (5, "sentiment.csv",    "text/csv",         True),
+    "emotions_csv":     (6, "emotions.csv",     "text/csv",         True),
+    "report_json":      (7, "report.json",      "application/json", False),
 }
 
 
 def _ser_artifact(row) -> dict:
-    rid = row["run_id"]
-    filename = os.path.basename(row["file_path"])
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    kind_to_name = {
-        "report_pdf": "report.pdf",
-        "comments_csv": "comments.csv",
-        "summary_csv": "summary.csv",
-        "chart_transfer_csv": "chart_transfer.csv",
-        "chart_themes_csv": "chart_themes.csv",
-        "report_json": "report.json",
-    }
+    _order, filename, content_type, _public = _ARTIFACT_CONTRACT[row["kind"]]
     return {
         "id": row["id"],
-        "runId": rid,
-        "kind": ext if ext in ("pdf", "csv", "json") else "file",
-        "name": kind_to_name.get(row["kind"], filename),
-        "fileKind": row["kind"],
-        "tier": _ARTIFACT_TIER.get(row["kind"], "advanced"),
-        "size": _file_size(row["file_path"]),
-        "addedAt": _now(),  # ponytail: add created_at to run_artifacts when schema evolves
+        "kind": row["kind"],
+        "filename": filename,
+        "contentType": content_type,
+        "downloadUrl": f"/api/runs/{row['run_id']}/artifacts/{row['id']}",
     }
 
 
@@ -1456,7 +1456,7 @@ def get_report(run_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}/artifacts/{artifact_id}")
-def get_artifact(run_id: str, artifact_id: str):
+def download_artifact(run_id: str, artifact_id: str):
     conn = db.get_conn()
     try:
         art = conn.execute(
@@ -1465,13 +1465,16 @@ def get_artifact(run_id: str, artifact_id: str):
         ).fetchone()
         if art is None:
             _404("Artifact not found.")
+        contract = _ARTIFACT_CONTRACT.get(art["kind"])
+        if contract is None or not contract[3]:
+            _404("Artifact not found.")
+        _order, filename, content_type, _public = contract
         path = art["file_path"]
         if not os.path.isfile(path):
-            _404("Artifact file not found on disk.")
-        filename = os.path.basename(path)
+            _404("Artifact not found.")
         return FileResponse(
             path,
-            filename=filename,
+            media_type=content_type,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     finally:
