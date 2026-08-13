@@ -132,6 +132,7 @@ Frontend: `node --check app/app.js`, then `app/self-check.html` in a browser. Fu
 
 ## When making changes
 
+- **Parallel work:** Prefer several small concurrent workflows over one large task or a serial task chain. If a subagent exceeds its estimated runtime, stop it before 40 minutes, collect its handoff, and split the remaining work into independent workflows that can run concurrently. Avoid concurrent edits to the same files.
 - Read the affected file before editing.
 - Read the relevant `docs/` file if the change touches an area you have not worked in.
 - Match the existing style and libraries. Do not introduce a new dependency or pattern for something the codebase already handles another way.
