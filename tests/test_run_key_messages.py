@@ -113,6 +113,20 @@ def _fake_affect_result():
     }
 
 
+def _fake_render(markdown, out_dir, cfg, debug_dir, _df=None, _transfer=None):
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "report.pdf"), "wb") as f:
+        f.write(b"%PDF-1.4 fake report\n")
+
+
+def _fake_export(base_df, theme_table, transfer_table, affect_result, meta_df, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    for name in ("comments.csv", "key-messages.csv", "themes.csv",
+                 "sentiment.csv", "emotions.csv"):
+        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
+            f.write("placeholder\n")
+
+
 def _patched_pipeline(reconcile_side_effect):
     """Context managers covering every pipeline edge _execute() touches,
     including every stage AFTER brief_pause, so the run reaches complete
@@ -136,8 +150,8 @@ def _patched_pipeline(reconcile_side_effect):
                     side_effect=lambda df, cfg: (df, _fake_affect_result())),
         patch.object(adapter.pipeline_llm, "unload", return_value=None),
         patch.object(adapter.pipeline_report, "write", return_value="# report"),
-        patch.object(adapter.pipeline_report, "render", return_value=None),
-        patch.object(adapter.pipeline_report, "export", return_value=None),
+        patch.object(adapter.pipeline_report, "render", side_effect=_fake_render),
+        patch.object(adapter.pipeline_report, "export", side_effect=_fake_export),
         patch.object(adapter, "_build_prose",
                     return_value={"title": "t", "interpretation": "i",
                                   "quote": {"text": "q", "attr": "a"},

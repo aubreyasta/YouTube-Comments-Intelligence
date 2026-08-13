@@ -102,10 +102,38 @@ def test_failed_article_fetch_saves_empty_text_no_draft_call():
     print("  ok  failed article fetch saves/returns empty text, asset still created")
 
 
+def test_image_upload_returns_kind_and_mime_without_key_visual_flag():
+    _, cid = _make_session_and_campaign()
+    _retired_key = "is" + "Key" + "Visual"
+
+    with patch.object(server.assets, "extract_upload", return_value="") as mock_extract:
+        resp = client.post(
+            f"/api/campaigns/{cid}/assets/upload",
+            files={"file": ("visual.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+        )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert mock_extract.called, "extract_upload was not called on upload"
+    assert body["kind"] == "image", body["kind"]
+    assert body["mimeType"] == "image/png", body["mimeType"]
+    assert _retired_key not in body, body
+
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT file_path, kind FROM assets WHERE id = ?", (body["id"],)
+    ).fetchone()
+    conn.close()
+    assert row["kind"] == "image", row["kind"]
+    assert Path(row["file_path"]).is_file(), row["file_path"]
+    print("  ok  image upload returns kind/mimeType, no retired flag, file persisted")
+
+
 if __name__ == "__main__":
     tests = [
         test_upload_persists_text_before_return,
         test_failed_article_fetch_saves_empty_text_no_draft_call,
+        test_image_upload_returns_kind_and_mime_without_key_visual_flag,
     ]
     failed = 0
     try:

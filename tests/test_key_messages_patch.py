@@ -26,7 +26,7 @@ import server
 db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = TestClient(server.app)
 
-_DRAFT_KEYS = {"status", "messages", "error"}
+_DRAFT_KEYS = {"status", "messages", "error", "revision"}
 _MESSAGE_KEYS = {"id", "label", "description", "included", "order"}
 
 
@@ -75,7 +75,9 @@ def test_patch_shape_and_new_session_field():
     assert km["status"] == "empty", km["status"]
     assert km["messages"] == []
     assert km["error"] is None
-    print("  ok  fresh Session keyMessages is an empty KeyMessageDraft")
+    assert km["revision"] == 0, km["revision"]
+    assert isinstance(km["revision"], int), type(km["revision"])
+    print("  ok  fresh Session keyMessages is an empty KeyMessageDraft with revision 0")
 
 
 def test_patch_accepts_empty_list():
@@ -86,6 +88,23 @@ def test_patch_accepts_empty_list():
     assert set(body.keys()) == _DRAFT_KEYS, body.keys()
     assert body["messages"] == []
     print("  ok  PATCH accepts an empty message list and returns KeyMessageDraft shape")
+
+
+def test_patch_returns_current_revision_without_incrementing():
+    session_id = _new_session()
+    r0 = client.get(f"/api/sessions/{session_id}")
+    revision_before = r0.json()["keyMessages"]["revision"]
+
+    r = client.patch(f"/api/sessions/{session_id}/key_messages", json={"messages": []})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["revision"] == revision_before, (
+        "PATCH must not increment key_messages_revision"
+    )
+
+    r2 = client.get(f"/api/sessions/{session_id}")
+    assert r2.json()["keyMessages"]["revision"] == revision_before
+    print("  ok  PATCH returns the current revision without incrementing it")
 
 
 def test_patch_replaces_atomically_preserving_order_and_zero_included():
@@ -175,6 +194,7 @@ if __name__ == "__main__":
     tests = [
         test_patch_shape_and_new_session_field,
         test_patch_accepts_empty_list,
+        test_patch_returns_current_revision_without_incrementing,
         test_patch_replaces_atomically_preserving_order_and_zero_included,
         test_patch_rejects_duplicate_ids,
         test_patch_rejects_unknown_id_from_another_session,

@@ -52,7 +52,6 @@ def _load_cfg() -> PipelineConfig:
         SENTIMENT_MODEL=_config_module.SENTIMENT_MODEL,
         REPORT_LANGUAGE=_config_module.REPORT_LANGUAGE,
         CAMPAIGN_CONTEXT=_config_module.CAMPAIGN_CONTEXT,
-        KEY_VISUALS=getattr(_config_module, "KEY_VISUALS", {}),
         KEEP_INTERMEDIATE=getattr(_config_module, "KEEP_INTERMEDIATE", False),
     )
 

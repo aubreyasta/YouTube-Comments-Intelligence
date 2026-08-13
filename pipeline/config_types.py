@@ -7,7 +7,7 @@ the config shim, so the shim can be removed once all callers migrate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -27,7 +27,6 @@ class PipelineConfig:
     SENTIMENT_MODEL: str
     REPORT_LANGUAGE: str
     CAMPAIGN_CONTEXT: str | dict
-    KEY_VISUALS: dict = field(default_factory=dict)
     KEEP_INTERMEDIATE: bool = False
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     TEXT_MODEL: str = "qwen3:14b-q4_K_M"

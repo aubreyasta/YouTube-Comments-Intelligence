@@ -32,8 +32,19 @@ This is the execution brief for the final product. It is a contract, not a list 
   - Verified post-rebase: `python -m py_compile db.py server.py` clean; `python tests/test_run_key_messages.py` 10/10; `python tests/test_key_messages_patch.py` 8/8; `git diff --check main...HEAD` clean (no whitespace errors).
 - Commit `1d38d34`: Task 2.3 done. `adapter.py` registers all seven required artifacts and prevents incomplete output from reaching `complete`; `server.py` returns six public artifacts in fixed contract order with exact filenames and MIME types, keeps `report_json` internal, and safely skips legacy artifact rows; `run.py` lists the six final public filenames; `tests/test_run_artifacts.py` is the focused direct check.
   - Verified: `python -m py_compile adapter.py server.py run.py tests/test_run_artifacts.py` clean; `python tests/test_run_artifacts.py` 9/9.
-  - Resume point: Task 2.4 (Finalize report JSON).
 - Worktree `YouTube Intelligence-wt-2.1` on branch `work/wave2-task-2.1`, HEAD `36e294b`, fast-forwarded into `main` and not deleted.
+- Task 2.4 and Task 2.5: implemented. Task 2.6 complete read-only QA rerun passed.
+  - All 26 listed commands exited 0. Evaluator-reported totals: 125 assertions across 14 test files, all passing.
+  - Per-script results: `test_db_schema.py` 5/5; `test_run_concurrency_guard.py` 3/3; `test_run_key_messages.py` 10/10, after repairing its report-writer mocks to create the six required files; `test_brief_key_messages.py` 5/5; `test_report_themes_csv.py` 2/2 each run; `test_report_sentiment_emotions_csv.py` 2/2 each run; `test_report_key_messages_csv.py` 2/2 each run; `test_classify.py` 7/7; `test_run_artifacts.py` 10/10; `test_evidence.py` 27/27 each run; `test_asset_extraction.py` 3/3; `test_key_messages_patch.py` 9/9; `test_key_messages_draft.py` 9/9; both benchmark self-checks passed.
+  - Every `py_compile` command exited 0.
+  - `git diff --check` exited 0: no whitespace errors, one CRLF-to-LF advisory for `config-template.py`.
+  - Restricted backend key-visual search (Task 2.5 listed files, `KEY_VISUALS|isKeyVisual|keyvis`): zero matches.
+  - Old backend artifact/report-key search: zero matches.
+  - No excluded path (`.env`, `config.py`, `data/`, `output/`, `benchmark-data/private/`) is tracked.
+  - Seven stored artifacts and six public artifacts confirmed; `report_json` internal.
+  - `session-ses_004f.md` remains untracked, scheduled for removal before commit.
+  - Changes remain uncommitted at this record point.
+  - Resume point: authorized integration cleanup, commit, and normal push of `main`, then Wave 3 Task 3.1.
 
 ### Cross-chat handoff
 
@@ -86,6 +97,11 @@ type SaveKeyMessagesRequest = { messages: KeyMessageInput[] };
 - Labels are trimmed, required, and at most 120 characters. Descriptions are trimmed, may be empty, and are at most 500 characters.
 - `PATCH /api/runs/{runId}/brief_points` accepts `{messages: BriefPointInput[]}` and returns `{messages: BriefPoint[]}`. It uses the same `id:null` creation rule and ownership checks. At least one included row is required before `POST /api/runs/{runId}/proceed` succeeds.
 - `POST /api/runs/{runId}/proceed` returns the current `RunSnapshot`.
+- Every `KeyMessageDraft` response includes integer `revision`. Each completed drafting pass, including empty and failed passes, increments it. `PATCH` returns the current revision without incrementing it. Coalesced calls return the final completed revision.
+
+#### Session comment count
+
+`commentCount` counts CSV records from the latest complete run's internal `comments_csv`. It is 0 without a readable complete artifact. Active and failed runs do not replace the latest complete result. It is not parsed from `report_json`.
 
 #### Runs and SSE
 
@@ -144,7 +160,7 @@ Stored and public order is fixed:
 #### Report JSON
 
 ```ts
-type MetricComment = { text: string; likes: number; videoId: string };
+type MetricComment = { text: string; likes: number; videoId: string; sentiment: "positive" | "negative" | "neutral" | null };
 type KeyMessageMetric = { id: string; metricId: string; label: string; description: string; count: number; percent: number };
 type ThemeMetric = { metricId: string; label: string; count: number; percent: number };
 type EmotionMetric = { metricId: string; label: string; count: number; percent: number };
@@ -166,6 +182,12 @@ type ReportJson = {
 ```
 
 The top-level key set is exact. `transfers` and `ideaSentiment` do not exist. Existing `m-t-*` and `m-is-*` metric IDs remain opaque strings. Python counts every number.
+
+Key Message applicability comes from exact `group` values in transfer rows whose `point` matches after trim/case-insensitive normalization. Message results aggregate all applicable groups. Non-null applicability cells form the denominator; `True` cells form the count. Included messages without applicability remain with zero values. `overallTransfer` counts each Session comment once when it mentions at least one message applicable to its group, divided by all Session comments. Theme and Emotion labels merge case-insensitively, retain first spelling, and use non-empty category labels as denominator. Report percentages use one decimal. Sentiment `baseN` recognizes positive, negative, neutral; neutral enters the denominator; unknown/null does not.
+
+Evidence rules: empty text excluded; invalid likes 0; missing video ID empty. Ordinary evidence orders likes descending, text length descending, source order, and caps at eight. Key Message Sentiment evidence selects up to four positive and four negative, then fills from best unselected recognized comments including neutral. Evidence may repeat one source comment across matching metrics but not within one metric.
+
+Metric ID collision rule: retain `m-t-*`/`m-is-*`; use `message` for empty slugs; suffix collisions `-2`, `-3` consistently across the paired IDs.
 
 #### CSVs
 
@@ -237,8 +259,8 @@ All CSVs use UTF-8, comma separators, a header, `\n` line endings, one-decimal p
 - Files: `adapter.py`, `tests/test_evidence.py`.
 - Symbols: `adapter._build_report_json`, `adapter._build_evidence`.
 - Consumes/Produces: deterministic DataFrames to exact `ReportJson`.
-- Behavior: use only the six exact top-level keys and nested fields above. Keep evidence selection deterministic: likes descending, then text length descending, maximum eight.
-- Verification: `python -m py_compile adapter.py tests/test_evidence.py`; `python tests/test_evidence.py`. Assert exact key set, nested types, fixed fixture numbers, unchanged metric IDs, and absence of old keys.
+- Behavior: use only the six exact top-level keys and nested fields above. Applicability comes from exact `transfer_table.group` values matched against trim/case-insensitive `point`; aggregate every applicable group per message; the denominator counts non-null applicability cells, the count is exact `True` cells; included messages with no applicability keep zero values as a shell row, not an omission. `overallTransfer` counts each Session comment once when it mentions at least one message applicable to its group, over all Session comments. Merge Theme and Emotion labels case-insensitively, keep the first-seen spelling, and use non-empty category labels as the denominator. Round every report percentage to one decimal. Sentiment `baseN` recognizes positive, negative, neutral; neutral counts toward the denominator; unknown/null does not. Evidence: drop empty text, coerce invalid likes to 0, leave missing video ID as an empty string; order by likes descending, then text length descending, then source order, capped at eight. Key Message Sentiment evidence takes up to four positive and four negative first, then backfills from the best unselected recognized comments including neutral. The same source comment may appear across different metrics but not twice inside one metric. Metric IDs retain existing `m-t-*`/`m-is-*` values; an empty slug falls back to `message`; colliding slugs get `-2`, `-3`, ... applied identically to both members of a paired ID.
+- Verification: `python -m py_compile adapter.py tests/test_evidence.py`; `python tests/test_evidence.py`. Assert the exact key set and nested types at every level (no extra/missing fields at any depth); fixed fixture numbers; unchanged metric IDs; absence of old keys; a message applicable to its own group counts correctly; a message with only unrelated-group rows produces a zero shell, not an omission; aggregation sums correctly across two or more applicable groups for one message; an all-null applicability column yields a zero denominator, not a crash or `null` percent; a comment applicable to two messages in `overallTransfer` counts once; Theme/Emotion labels differing only by case merge into one entry under the first-seen spelling; two slugs colliding produce suffixed IDs consistent across paired metrics; `baseN` includes neutral and excludes unknown/null; Key Message Sentiment evidence is balanced up to four/four and backfills without exceeding eight; empty-text comments are excluded from evidence; invalid likes normalize to 0 instead of erroring; tie-breaking on likes and text length is deterministic across repeated runs; every evidence list is capped at eight; and all emitted values are JSON-serializable (no NaN, no numpy types).
 - Depends on: Task 2.3, because both edit `adapter.py`.
 - Stop: do not add compatibility aliases or model-generated numbers.
 
@@ -253,6 +275,7 @@ All CSVs use UTF-8, comma separators, a header, `\n` line endings, one-decimal p
   - `python tests/test_asset_extraction.py`
   - Run the three report tests from Task 2.2.
   - Search only these listed files for `KEY_VISUALS|isKeyVisual|keyvis`; zero matches are allowed.
+  - `test_asset_extraction.py` asserts the retired key-visual field is absent from the asset response by checking the response's key set, without spelling the retired key literal in the assertion.
 - Depends on: Tasks 2.2-2.4.
 - Stop: frontend compatibility methods are Wave 3 scope.
 
@@ -476,4 +499,6 @@ Removed the background brief, where the model wrote what it knew about a campaig
 
 ## Revisions
 
+- 2026-08-13: Approved the Report JSON applicability and evidence contract (group/point matching, aggregation, denominators, merged Theme/Emotion labels, one-decimal percentages, sentiment `baseN`, balanced/backfilled evidence, metric-ID collision suffixes), the CSV-based Session comment count, the exposed `KeyMessageDraft.revision` semantics, and backend key-visual removal. Task 2.4 and Task 2.5 implemented against this contract with focused verification only; changes remain uncommitted pending Task 2.6.
 - 2026-08-13: Recorded Task 2.3 completion at commit `1d38d34`, its focused 9/9 verification, and Task 2.4 as the next resume point. Added cross-chat handoff rules so future sessions continue without rediscovering or replacing completed work.
+- 2026-08-13: Recorded Task 2.6's complete read-only QA rerun: 125 assertions across 14 test files passing, all `py_compile` and search checks clean, no excluded path tracked, changes still uncommitted. Next resume point is authorized integration cleanup, commit, and normal push of `main`, then Wave 3 Task 3.1.

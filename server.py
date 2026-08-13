@@ -1,6 +1,7 @@
 # UNAUTHENTICATED - binds 127.0.0.1:8000, localhost-only by design. Single user, no auth.
 
 import asyncio
+import csv
 import json
 import logging
 import os
@@ -181,29 +182,27 @@ def _session_status(session_id: str, conn) -> str:
 
 
 def _session_comment_count(session_id: str, conn) -> int:
-    """Comment count from the latest complete run's report.json, or 0."""
+    """Comment count from the latest complete run's comments.csv, or 0."""
     run = conn.execute(
-        "SELECT id FROM runs WHERE session_id = ? AND state = 'complete' ORDER BY finished_at DESC LIMIT 1",
+        "SELECT id FROM runs WHERE session_id = ? AND state = 'complete' "
+        "ORDER BY finished_at DESC, rowid DESC LIMIT 1",
         (session_id,)
     ).fetchone()
     if run is None:
         return 0
     art = conn.execute(
-        "SELECT file_path FROM run_artifacts WHERE run_id = ? AND kind = 'report_json'",
+        "SELECT file_path FROM run_artifacts WHERE run_id = ? AND kind = 'comments_csv'",
         (run["id"],)
     ).fetchone()
     if art is None:
         return 0
     try:
-        with open(art["file_path"], encoding="utf-8") as f:
-            data = json.load(f)
-        # subtitle e.g. "1,234 comments · ..."
-        m = re.match(r"([\d,]+)\s+comments", data.get("subtitle", ""))
-        if m:
-            return int(m.group(1).replace(",", ""))
-    except Exception:
-        pass
-    return 0
+        with open(art["file_path"], encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            next(reader)
+            return sum(1 for _ in reader)
+    except (OSError, csv.Error, StopIteration):
+        return 0
 
 
 def _ser_session(row, conn) -> dict:
@@ -265,7 +264,6 @@ def _ser_asset(row) -> dict:
         "mimeType": _mime_from_kind(row["kind"], row.get("filename")),
         "size": _file_size(row.get("file_path")),
         "addedAt": row.get("retrieved_at") or _now(),
-        "isKeyVisual": False,  # ponytail: key-visual toggle deferred (no route yet)
         "status": "ready",
     }
 
@@ -412,6 +410,7 @@ def _ser_key_message_draft(session_row, conn) -> dict:
         "status": session_row["key_messages_status"],
         "messages": [_ser_key_message(r) for r in rows],
         "error": session_row["key_messages_error"],
+        "revision": int(session_row["key_messages_revision"]),
     }
 
 

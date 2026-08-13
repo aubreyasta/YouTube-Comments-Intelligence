@@ -30,7 +30,7 @@ import server
 db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = TestClient(server.app)
 
-_DRAFT_KEYS = {"status", "messages", "error"}
+_DRAFT_KEYS = {"status", "messages", "error", "revision"}
 _MESSAGE_KEYS = {"id", "label", "description", "included", "order"}
 
 
@@ -95,7 +95,9 @@ def test_draft_with_no_inputs_and_no_prior_messages_is_empty_without_model_call(
     assert body["status"] == "empty", body
     assert body["messages"] == []
     assert body["error"] is None
-    print("  ok  no campaign/no inputs and no prior messages -> empty, no model call")
+    assert body["revision"] == 1, body["revision"]
+    assert isinstance(body["revision"], int), type(body["revision"])
+    print("  ok  no campaign/no inputs and no prior messages -> empty, no model call, revision 1")
 
 
 def test_draft_success_returns_ready_with_proposals():
@@ -116,7 +118,9 @@ def test_draft_success_returns_ready_with_proposals():
     assert msg["label"] == "Lower price"
     assert msg["description"] == "Cheaper than before."
     assert msg["included"] is True
-    print("  ok  successful draft with proposals -> ready with messages")
+    assert body["revision"] == 1, body["revision"]
+    assert isinstance(body["revision"], int), type(body["revision"])
+    print("  ok  successful draft with proposals -> ready with messages, revision 1")
 
 
 def test_draft_preserves_edited_message_even_when_absent_from_proposals():
@@ -198,7 +202,8 @@ def test_draft_failure_keeps_prior_messages_and_marks_stale():
     assert len(body["messages"]) == 1
     assert body["messages"][0]["id"] == kept_id
     assert body["messages"][0]["description"] == "kept description"
-    print("  ok  model failure with prior messages -> stale, prior messages unchanged")
+    assert body["revision"] == 1, body["revision"]
+    print("  ok  model failure with prior messages -> stale, prior messages unchanged, revision 1")
 
 
 def test_draft_failure_with_no_prior_messages_marks_failed():
@@ -216,7 +221,8 @@ def test_draft_failure_with_no_prior_messages_marks_failed():
     assert body["status"] == "failed", body
     assert body["error"] is not None
     assert body["messages"] == []
-    print("  ok  model failure with no prior messages -> failed, empty list, safe error string")
+    assert body["revision"] == 1, body["revision"]
+    print("  ok  model failure with no prior messages -> failed, empty list, safe error string, revision 1")
 
 
 def test_draft_unknown_session_404():
@@ -280,8 +286,10 @@ def test_concurrent_requests_coalesce_to_at_most_two_model_calls():
         labels = [m["label"] for m in body["messages"]]
         assert labels == ["Second idea"], (
             f"request {i} did not see the final coalesced result: {labels}")
+        assert body["revision"] == 2, body["revision"]
+        assert isinstance(body["revision"], int), type(body["revision"])
     print("  ok  3 concurrent requests -> exactly 2 model calls, all responses "
-          "reflect the latest coalesced result")
+          "reflect the latest coalesced result and final revision 2")
 
 
 if __name__ == "__main__":

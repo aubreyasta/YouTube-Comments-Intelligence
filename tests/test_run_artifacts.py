@@ -21,6 +21,8 @@ network, model, browser, or external API is touched.
 Run: python tests/test_run_artifacts.py
 """
 
+import csv
+import json
 import os
 import pathlib
 import sys
@@ -104,6 +106,52 @@ def _seed_all_artifacts(run_id):
             fh.write(_stub_content(kind))
         adapter._insert_artifact(run_id, kind, path)
     return art_dir
+
+
+_REPORT_JSON_KEYS = [
+    "overallTransfer",
+    "keyMessages",
+    "themes",
+    "emotions",
+    "keyMessageSentiment",
+    "evidence",
+]
+
+
+def _seed_complete_run_with_comment_csv(sid, finished_at):
+    """Insert a 'complete' run for sid with the given finished_at, then
+    write and register a real comments_csv (three data rows, one field
+    with an embedded newline) and a real report_json (exact six current
+    top-level keys, no subtitle). Returns the run id."""
+    conn = db.get_conn()
+    try:
+        rid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO runs (id, session_id, state, stage, finished_at) "
+            "VALUES (?, ?, 'complete', 'complete', ?)",
+            (rid, sid, finished_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    art_dir = storage.artifacts_dir(rid)
+
+    csv_path = os.path.join(art_dir, "comments.csv")
+    with open(csv_path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["author", "comment", "sentiment"])
+        writer.writerow(["alice", "line one\nline two", "positive"])
+        writer.writerow(["bob", "great video", "positive"])
+        writer.writerow(["carol", "not convinced", "negative"])
+    adapter._insert_artifact(rid, "comments_csv", csv_path)
+
+    json_path = os.path.join(art_dir, "report.json")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({k: None for k in _REPORT_JSON_KEYS}))
+    adapter._insert_artifact(rid, "report_json", json_path)
+
+    return rid
 
 
 def _rows_for_run(run_id):
@@ -275,6 +323,59 @@ def test_artifact_files_matches_contract():
     print("  ok  adapter._ARTIFACT_FILES matches the exact seven (kind, filename) pairs")
 
 
+def test_session_comment_count_from_comments_csv():
+    """server._session_comment_count reads the latest complete run's
+    comments_csv and counts data rows (header excluded), reflected on
+    both Session routes, and stays pinned to that complete run even when
+    a newer, still-running run exists for the same session."""
+    resp = client.post("/api/sessions", json={"name": "S"})
+    sid = resp.json()["id"]
+
+    assert resp.json()["commentCount"] == 0, (
+        f"new session before any complete run: expected commentCount 0, got {resp.json()['commentCount']}"
+    )
+
+    rid = _seed_complete_run_with_comment_csv(sid, finished_at="2024-01-01T00:00:00Z")
+
+    detail = client.get(f"/api/sessions/{sid}").json()
+    assert detail["commentCount"] == 3, (
+        f"GET /api/sessions/{{id}}: expected commentCount 3, got {detail['commentCount']}"
+    )
+
+    listing = client.get("/api/sessions").json()
+    listed = next(s for s in listing if s["id"] == sid)
+    assert listed["commentCount"] == 3, (
+        f"GET /api/sessions: expected commentCount 3, got {listed['commentCount']}"
+    )
+
+    conn = db.get_conn()
+    try:
+        newer_rid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO runs (id, session_id, state, stage, started_at) "
+            "VALUES (?, ?, 'running', 'collect', ?)",
+            (newer_rid, sid, "2099-01-01T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail_after = client.get(f"/api/sessions/{sid}").json()
+    assert detail_after["commentCount"] == 3, (
+        f"after newer running run inserted, GET /api/sessions/{{id}}: "
+        f"expected commentCount still 3, got {detail_after['commentCount']}"
+    )
+
+    listing_after = client.get("/api/sessions").json()
+    listed_after = next(s for s in listing_after if s["id"] == sid)
+    assert listed_after["commentCount"] == 3, (
+        f"after newer running run inserted, GET /api/sessions: "
+        f"expected commentCount still 3, got {listed_after['commentCount']}"
+    )
+    print("  ok  commentCount is 0 pre-run, 3 from comments_csv after a complete run, "
+          "unaffected by a newer running run")
+
+
 def test_legacy_kind_row_does_not_crash_run_snapshot():
     """A run_artifacts row with a kind outside _ARTIFACT_CONTRACT (a
     retired kind from before a schema change, or hand-inserted test data)
@@ -304,6 +405,7 @@ def main() -> None:
         test_report_json_direct_download_returns_exact_404,
         test_partial_run_missing_artifact_raises_before_insert,
         test_artifact_files_matches_contract,
+        test_session_comment_count_from_comments_csv,
         test_legacy_kind_row_does_not_crash_run_snapshot,
     ]
     failed = 0

@@ -99,16 +99,10 @@ REPORT_LANGUAGE = "English"
 
 OUTPUT_DIR = "output"
 
-# Optional local image path per campaign group, embedded in the report.
-# Keys must match the "group" value in VIDEOS exactly.
-# Missing files are silently skipped.
-KEY_VISUALS = {
-    # "World Cup Ads": "assets/world-cup-ads.jpg",
-}
 
-# By default the run produces five files: report.pdf, comments.csv,
-# summary.csv, chart_transfer.csv, and chart_themes.csv. Turn this on
-# to also write working files into output/debug/ for auditing - see
+# By default the run produces six files: report.pdf, comments.csv,
+# key-messages.csv, themes.csv, sentiment.csv, and emotions.csv. Turn this
+# on to also write working files into output/debug/ for auditing - see
 # docs/setup.md#running for what's in it and which file is worth
 # checking first when a number looks wrong.
 KEEP_INTERMEDIATE = False

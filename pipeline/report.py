@@ -14,7 +14,6 @@ the model is explicitly told not to invent chart figures - the [[CHART:...]]
 tokens are replaced by code-generated CSS bars after the LLM returns.
 """
 
-import base64
 import os
 import re
 
@@ -286,8 +285,6 @@ li { margin-bottom: 3px; }
 .bar-fill { height: 7px; background: #1c1c1c; border-radius: 2px; }
 .bar-val { font-size: 6.6pt; color: #6b6660; width: 34px;
            min-width: 34px; text-align: right; padding-left: 5px; }
-.keyvis { max-width: 180px; float: right; margin: 0 0 8px 12px;
-          border-radius: 4px; }
 """
 
 BANDS = {"yes": "v-yes", "loud": "v-yes", "partly": "v-mid",
@@ -442,28 +439,6 @@ def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None
 
     body = _style(md.markdown(markdown_text,
                               extensions=["tables", "sane_lists"]))
-
-    # Inject key visuals after each ## {group} heading.
-    key_visuals = cfg.KEY_VISUALS or {}
-    for group, img_path in key_visuals.items():
-        if not img_path or not os.path.isfile(img_path):
-            continue
-        ext = os.path.splitext(img_path)[1].lstrip(".").lower()
-        if ext == "jpg":
-            ext = "jpeg"
-        try:
-            with open(img_path, "rb") as fh:
-                b64 = base64.b64encode(fh.read()).decode("ascii")
-            img_tag = (f'<img class="keyvis" '
-                       f'src="data:image/{ext};base64,{b64}">')
-            # Match the rendered h2 for this group exactly.
-            escaped = re.escape(group)
-            body = re.sub(
-                r'(<h2[^>]*>' + escaped + r'</h2>)',
-                r'\1' + img_tag,
-                body)
-        except Exception:
-            pass  # missing or unreadable -> skip silently
 
     # Replace [[CHART:transfer]] and [[CHART:themes]] tokens.
     # markdown wraps bare paragraphs, so the token arrives as <p>[[CHART:...]]</p>.
