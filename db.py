@@ -106,6 +106,14 @@ def init() -> None:
     conn = sqlite3.connect(_DB_PATH)
     try:
         conn.executescript(_SCHEMA)
+        # Migration: a pre-stage database has a runs table without the
+        # `stage` column (CREATE TABLE IF NOT EXISTS above is a no-op on
+        # an existing table). ALTER TABLE ADD COLUMN is a one-shot,
+        # idempotent-by-guard fix rather than a migrations framework.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        if "stage" not in cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN stage TEXT NOT NULL DEFAULT 'queued'")
         conn.commit()
     finally:
         conn.close()

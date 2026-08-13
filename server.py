@@ -51,26 +51,45 @@ def _err(status: int, code: str, message: str, field=None):
 
 
 def _404(message="Not found."):
-    _err(404, "not_found", message)
+    _err(404, "NOT_FOUND", message)
 
 
-def _409(message):
-    _err(409, "conflict", message)
+def _409(message, code="CONFLICT"):
+    _err(409, code, message)
 
 
 def _422(message, field=None):
-    _err(422, "validation", message, field)
+    _err(422, "VALIDATION_ERROR", message, field)
 
 
 def _413(message):
-    _err(413, "file_too_large", message)
+    _err(413, "FILE_TOO_LARGE", message)
 
 
-# FastAPI returns its own 422 for Pydantic; we override the detail format for
-# our own validation errors using the helpers above. HTTPException detail is
-# passed through as-is when it's already a dict.
+# FastAPI wraps HTTPException.detail as {"detail": ...} by default and
+# emits its own {"detail": [...]} shape for Pydantic validation errors.
+# Both handlers below unwrap to the bare {error, message, field} shape
+# every client-facing error must have (CHANGELOG "HTTP errors").
+#
+# Registered on starlette.exceptions.HTTPException, not fastapi.HTTPException:
+# fastapi.HTTPException is a subclass, so routes raising it are still
+# covered, but routing-level 404/405 responses (unmatched path, wrong
+# method) are raised by Starlette itself as the base class and would
+# bypass a handler registered only on the FastAPI subclass.
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exc(request, exc):
+    detail = exc.detail
+    if isinstance(detail, dict) and "error" in detail:
+        return JSONResponse(status_code=exc.status_code, content=detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "ERROR", "message": str(detail), "field": None},
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -79,7 +98,7 @@ async def _validation_exc(request, exc):
     field = ".".join(str(x) for x in first.get("loc", [])[1:]) or None
     return JSONResponse(
         status_code=422,
-        content={"error": "validation", "message": first.get("msg", "Invalid input."), "field": field},
+        content={"error": "VALIDATION_ERROR", "message": first.get("msg", "Invalid input."), "field": field},
     )
 
 
@@ -304,61 +323,61 @@ def _ser_campaign(row, conn) -> dict:
     }
 
 
+_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
+               "emotion", "report", "complete", "error"}
+
+
 def _ser_run(row, conn) -> dict:
+    """RunSnapshot shape (CHANGELOG "Runs and SSE"): briefPoints and
+    artifacts are always present, including empty arrays, so a fresh
+    queued run and a completed run have the same shape."""
     rid = row["id"]
-    bp_rows = conn.execute(
-        "SELECT id FROM brief_points WHERE run_id = ? ORDER BY sort_order", (rid,)
-    ).fetchall()
-    brief_point_ids = [r["id"] for r in bp_rows]
-
-    # Derive frontend status/stage from DB state.
-    # DB states: queued | running | complete | failed
-    # Frontend status: queued | running | complete | failed
     state = row["state"]
-    # stage: terminal states always win. Otherwise use the persisted
-    # fine-grained stage adapter.py writes on every progress push (see
-    # adapter._set_run_stage) so a tab reopened with no SSE connection to
-    # replay from can still tell brief_pause apart from plain "running".
-    # "queued" is the DB default before the adapter thread's first push.
-    if state in ("complete", "failed"):
-        stage = state
-    elif row["stage"] and row["stage"] != "queued":
-        stage = row["stage"]
+    # stage: terminal DB states always win over whatever was last
+    # persisted, since a run can crash leaving a stale non-terminal stage
+    # on the row. Otherwise use the persisted fine-grained stage
+    # adapter.py writes on every progress push (see adapter._set_run_stage)
+    # so a tab reopened with no SSE connection to replay from can still
+    # tell brief_pause apart from plain "running". "failed" is a run
+    # status, not a RunStage - it maps to the "error" stage. row["stage"]
+    # is never empty (schema default 'queued'); the `or` below is a
+    # defensive fallback, not a case that happens in practice.
+    if state == "complete":
+        stage = "complete"
+    elif state == "failed":
+        stage = "error"
     else:
-        stage = "connecting" if state == "queued" else "running"
+        stage = row["stage"] or "queued"
+    assert stage in _RUN_STAGES, f"unexpected run stage {stage!r}"
 
-    result = {
+    bp_rows = conn.execute(
+        "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (rid,)
+    ).fetchall()
+    arts = conn.execute(
+        "SELECT * FROM run_artifacts WHERE run_id = ?", (rid,)
+    ).fetchall()
+
+    return {
         "id": rid,
         "sessionId": row["session_id"],
         "status": state,
         "stage": stage,
         "pct": 100 if state == "complete" else 0,
         "message": "",
-        "briefPointIds": brief_point_ids,
         "error": row["error"],
-        "createdAt": row["started_at"] or _now(),
+        "briefPoints": [_ser_brief_point(r) for r in bp_rows],
+        "artifacts": [_ser_artifact(a) for a in arts],
     }
-
-    # When complete, include artifacts.
-    if state == "complete":
-        arts = conn.execute(
-            "SELECT * FROM run_artifacts WHERE run_id = ?", (rid,)
-        ).fetchall()
-        result["artifacts"] = [_ser_artifact(a) for a in arts]
-
-    return result
 
 
 def _ser_brief_point(row) -> dict:
+    """BriefPoint shape (== KeyMessage, CHANGELOG "Key Messages"): only
+    these five fields. `approved`/`edited`/`runId`/`campaignId`/`videoId`
+    stay in the DB row for internal bookkeeping but never cross the wire."""
     return {
         "id": row["id"],
-        "runId": row["run_id"],
-        "campaignId": row["campaign_id"],
-        "videoId": row["video_id"],
         "label": row["label"],
         "description": row["description"],
-        "approved": bool(row["approved"]),
-        "edited": bool(row["edited"]),
         "included": bool(row["included"]),
         "order": row["sort_order"],
     }
@@ -438,27 +457,21 @@ class VideoBody(BaseModel):
 class ArticleBody(BaseModel):
     url: str
 
-class BriefPointUpdate(BaseModel):
-    id: str
-    label: str
-    description: str
-    approved: bool = False
-    included: bool = True
-    order: int = 0
-
-class BriefPointsBody(BaseModel):
-    points: list[BriefPointUpdate]
-
 class KeyMessageIn(BaseModel):
-    """Matches the KeyMessage type in CHANGELOG.md exactly - no optional
-    fields, since the client always resends the full row it received."""
-    id: str
+    """Matches the KeyMessageInput type in CHANGELOG.md exactly: id is
+    nullable (None creates a server-generated row), every other field is
+    always resent by the client."""
+    id: str | None
     label: str
     description: str
     included: bool
     order: int
 
 class SaveKeyMessagesBody(BaseModel):
+    messages: list[KeyMessageIn]
+
+class BriefPointsBody(BaseModel):
+    """BriefPointInput == KeyMessageInput (CHANGELOG "Runs and SSE")."""
     messages: list[KeyMessageIn]
 
 
@@ -823,38 +836,47 @@ def save_key_messages(session_id: str, body: SaveKeyMessagesBody):
             _404("Session not found.")
 
         messages = body.messages
-        ids = [m.id for m in messages]
+        non_null_ids = [m.id for m in messages if m.id is not None]
 
         seen = set()
-        for i in ids:
+        for i in non_null_ids:
             if i in seen:
                 _422(f"Duplicate Key Message id: {i}.", "messages")
             seen.add(i)
 
-        # Stable ids come from the draft that created them; this route
-        # cannot invent new ones.
+        # Non-null ids must belong to this Session (also rejects ids that
+        # exist but were owned by another Session). id:null is a create
+        # and gets a fresh server UUID below, so it is never checked here.
         existing_ids = {r["id"] for r in conn.execute(
             "SELECT id FROM key_messages WHERE session_id = ?", (session_id,)
         ).fetchall()}
-        for i in ids:
+        for i in non_null_ids:
             if i not in existing_ids:
                 _422(f"Unknown Key Message id: {i}.", "messages")
 
         for m in messages:
-            if not (m.label or "").strip():
-                _422("Every Key Message needs a label.", "label")
+            label = (m.label or "").strip()
+            if not label:
+                _422("Every Key Message needs a label.", "messages")
+            if len(label) > 120:
+                _422("Key Message label must be 120 characters or fewer.", "messages")
+            if len((m.description or "").strip()) > 500:
+                _422("Key Message description must be 500 characters or fewer.", "messages")
 
         # Complete ordered replacement in one transaction: delete then
-        # reinsert with the same client-supplied ids, so ids stay stable
-        # from the caller's point of view.
+        # reinsert. id:null mints a server UUID (the locked create rule);
+        # every other id is the caller's, already validated above. Write
+        # order is the submitted array position, zero-based, not the
+        # client-supplied `order` field.
         conn.execute("DELETE FROM key_messages WHERE session_id = ?", (session_id,))
-        for m in messages:
+        for order, m in enumerate(messages):
+            row_id = m.id if m.id is not None else str(uuid.uuid4())
             conn.execute(
                 """INSERT INTO key_messages
                    (id, session_id, label, description, included, sort_order, edited)
                    VALUES (?,?,?,?,?,?,1)""",
-                (m.id, session_id, m.label.strip(), (m.description or "").strip(),
-                 int(m.included), m.order)
+                (row_id, session_id, m.label.strip(), (m.description or "").strip(),
+                 int(m.included), order)
             )
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (_now(), session_id))
         conn.commit()
@@ -1134,7 +1156,7 @@ def start_run(session_id: str):
             (session_id,)
         ).fetchone()
         if active:
-            _409("This session already has a run in progress.")
+            _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
 
         # Overwrite: clear prior runs for this session before inserting the new one.
         # ponytail: hard overwrite, no run history; if history is wanted later, keep rows
@@ -1179,14 +1201,7 @@ def get_run(run_id: str):
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         if row is None:
             _404("Run not found.")
-        result = _ser_run(row, conn)
-        # Include brief_points when present (brief_pause and beyond).
-        bp_rows = conn.execute(
-            "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (run_id,)
-        ).fetchall()
-        if bp_rows:
-            result["briefPoints"] = [_ser_brief_point(r) for r in bp_rows]
-        return result
+        return _ser_run(row, conn)
     finally:
         conn.close()
 
@@ -1217,53 +1232,67 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         if proceed_event.is_set():
             _409("Brief has already been approved and the run has continued.")
 
-        points = body.points
-        if not points:
-            _422("At least one brief point is required.", "points")
-        if not any(p.included for p in points):
-            _422("Keep at least one idea included.", "points")
+        messages = body.messages
 
         existing = conn.execute(
             "SELECT id, campaign_id FROM brief_points WHERE run_id = ?", (run_id,)
         ).fetchall()
         existing_ids = {r["id"] for r in existing}
-        campaign_id = existing[0]["campaign_id"] if existing else conn.execute(
-            "SELECT id FROM campaigns WHERE session_id = ?", (run["session_id"],)
-        ).fetchone()["id"]
+        if existing:
+            campaign_id = existing[0]["campaign_id"]
+        else:
+            campaign_row = conn.execute(
+                "SELECT id FROM campaigns WHERE session_id = ?", (run["session_id"],)
+            ).fetchone()
+            if campaign_row is None:
+                _404("Campaign not found.")
+            campaign_id = campaign_row["id"]
 
-        for p in points:
-            label = (p.label or "").strip()
+        # Validate the complete list before any write (CHANGELOG "Key
+        # Messages"): id:null mints a server UUID below; a duplicate
+        # non-null id, an id unknown to this run, or an id owned by
+        # another run (which is equally "not in existing_ids", since
+        # existing_ids is scoped to this run_id) is a 422 naming
+        # field "messages". At-least-one-included is proceed_run's job,
+        # not this route's - an all-excluded save must still succeed so
+        # the user can flip inclusion back on before proceeding.
+        seen_ids = set()
+        for m in messages:
+            label = (m.label or "").strip()
             if not label:
-                _422("Every idea needs a label.", "label")
-            if p.id in existing_ids:
-                conn.execute(
-                    """UPDATE brief_points
-                       SET label = ?, description = ?, approved = ?, included = ?, sort_order = ?, edited = 1
-                       WHERE id = ? AND run_id = ?""",
-                    (label, (p.description or "").strip(), int(p.approved),
-                     int(p.included), p.order, p.id, run_id)
-                )
-            else:
-                # Unknown id: this is a new idea added client-side (the
-                # empty-list-at-pause case above, or any manual addition).
-                # Never trust a client-supplied id for a new row - mint
-                # one server-side so it can never collide with a row from
-                # another run or session.
-                conn.execute(
-                    """INSERT INTO brief_points
-                       (id, run_id, campaign_id, video_id, label, description,
-                        approved, edited, included, sort_order)
-                       VALUES (?, ?, ?, NULL, ?, ?, ?, 1, ?, ?)""",
-                    (str(uuid.uuid4()), run_id, campaign_id, label,
-                     (p.description or "").strip(), int(p.approved),
-                     int(p.included), p.order)
-                )
+                _422("Every Key Message needs a label.", "messages")
+            if len(label) > 120:
+                _422("Key Message labels are limited to 120 characters.", "messages")
+            if len((m.description or "").strip()) > 500:
+                _422("Key Message descriptions are limited to 500 characters.", "messages")
+            if m.id is None:
+                continue
+            if m.id in seen_ids:
+                _422(f"Duplicate Key Message id: {m.id}.", "messages")
+            seen_ids.add(m.id)
+            if m.id not in existing_ids:
+                _422(f"Unknown Key Message id: {m.id}.", "messages")
+
+        # Atomic full replace: delete then reinsert in submitted order.
+        # A row omitted from `messages` is simply not reinserted, so it
+        # is deleted along with everything else.
+        conn.execute("DELETE FROM brief_points WHERE run_id = ?", (run_id,))
+        for sort_order, m in enumerate(messages):
+            row_id = m.id if m.id is not None else str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO brief_points
+                   (id, run_id, campaign_id, video_id, label, description,
+                    approved, edited, included, sort_order)
+                   VALUES (?, ?, ?, NULL, ?, ?, 0, 1, ?, ?)""",
+                (row_id, run_id, campaign_id, m.label.strip(),
+                 (m.description or "").strip(), int(m.included), sort_order)
+            )
         conn.commit()
 
         saved = conn.execute(
             "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (run_id,)
         ).fetchall()
-        return [_ser_brief_point(r) for r in saved]
+        return {"messages": [_ser_brief_point(r) for r in saved]}
     finally:
         conn.close()
 
@@ -1297,7 +1326,7 @@ def proceed_run(run_id: str):
 
         # Verify at least one included point.
         if not any(r["included"] for r in bp):
-            _422("Keep at least one idea included before continuing.", "points")
+            _422("Include at least one Key Message before continuing.", "messages")
 
         proceed_event.set()
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

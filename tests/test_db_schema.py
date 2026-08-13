@@ -137,6 +137,65 @@ def test_key_messages_row_defaults_and_fk_cascade():
           "edited=0) and FK cascade delete from sessions")
 
 
+def test_init_migrates_pre_stage_database():
+    """A database created before `runs.stage` existed (simulated here by
+    creating the `runs` table without that column, bypassing db._SCHEMA)
+    must gain `stage TEXT NOT NULL DEFAULT 'queued'` the next time
+    db.init() opens it, without losing existing rows."""
+    tmp_dir = tempfile.mkdtemp()
+    path = __import__("pathlib").Path(tmp_dir) / "app.db"
+    db._DB_PATH = path
+
+    pre_conn = sqlite3.connect(path)
+    pre_conn.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    pre_conn.execute(
+        "CREATE TABLE runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+        "state TEXT NOT NULL DEFAULT 'queued', started_at TEXT, "
+        "finished_at TEXT, error TEXT)"
+    )
+    session_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    pre_conn.execute(
+        "INSERT INTO sessions (id, name, created_at, updated_at) "
+        "VALUES (?, 'pre-stage', 't', 't')", (session_id,))
+    pre_conn.execute(
+        "INSERT INTO runs (id, session_id) VALUES (?, ?)", (run_id, session_id))
+    pre_conn.commit()
+    pre_conn.close()
+
+    cols_before = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(runs)")}
+    assert "stage" not in cols_before, "test setup already has a stage column"
+
+    db.init()
+
+    conn = db.get_conn()
+    cols_after = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    assert "stage" in cols_after, "db.init() did not add runs.stage to a pre-stage database"
+    row = conn.execute("SELECT stage FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert row["stage"] == "queued", row["stage"]
+
+    try:
+        conn.execute("UPDATE runs SET stage = NULL WHERE id = ?", (run_id,))
+        conn.commit()
+        raised = False
+    except sqlite3.IntegrityError:
+        raised = True
+    assert raised, "migrated stage column did not reject NULL"
+
+    new_run_id = str(uuid.uuid4())
+    conn.execute("INSERT INTO runs (id, session_id) VALUES (?, ?)", (new_run_id, session_id))
+    conn.commit()
+    row = conn.execute("SELECT stage FROM runs WHERE id = ?", (new_run_id,)).fetchone()
+    assert row["stage"] == "queued", row["stage"]
+    conn.close()
+    print("  ok  db.init() migrates a pre-stage database by adding "
+          "runs.stage TEXT NOT NULL DEFAULT 'queued', existing rows kept, "
+          "NULL rejected, new rows default to 'queued'")
+
+
 def test_key_messages_orphan_session_rejected():
     conn = _fresh_db()
     try:
@@ -156,6 +215,7 @@ def test_key_messages_orphan_session_rejected():
 if __name__ == "__main__":
     tests = [
         test_runs_stage_default_and_brief_pause_persistence,
+        test_init_migrates_pre_stage_database,
         test_key_messages_status_default_and_check,
         test_key_messages_row_defaults_and_fk_cascade,
         test_key_messages_orphan_session_rejected,

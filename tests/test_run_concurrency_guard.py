@@ -23,6 +23,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db
 db._DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "app.db"
 
+import storage
+storage._ROOT = tempfile.mkdtemp()
+
 from starlette.testclient import TestClient
 import server
 import adapter
@@ -51,6 +54,14 @@ def _seed_run(session_id, state):
     return rid
 
 
+def _seed_sentinel_file(run_id):
+    """Drop a marker file under this run's storage dir. If a 409 ever let the
+    overwrite path run, storage.clear_run(run_id) would delete it."""
+    path = pathlib.Path(storage.run_dir(run_id)) / "sentinel.txt"
+    path.write_text("sentinel")
+    return path
+
+
 def _run_exists(run_id):
     conn = db.get_conn()
     try:
@@ -65,28 +76,38 @@ def test_queued_run_blocks_second_start_with_409():
     session_id = _new_session()
     with patch.object(adapter, "start_run", return_value=None):
         first_id = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
+        sentinel = _seed_sentinel_file(first_id)
 
         resp = client.post(f"/api/sessions/{session_id}/runs")
         assert resp.status_code == 409, resp.text
-        body = resp.json()["detail"]
-        assert body["error"] == "conflict"
-        assert body["message"] == "This session already has a run in progress."
+        assert resp.json() == {
+            "error": "RUN_IN_PROGRESS",
+            "message": "This session already has a run in progress.",
+            "field": None,
+        }
 
         assert _run_exists(first_id), "409 path deleted the queued run"
-    print("  ok  queued run blocks a second start with 409, existing row untouched")
+        assert sentinel.exists(), "409 path deleted the queued run's files"
+    print("  ok  queued run blocks a second start with 409, existing row and files untouched")
 
 
 def test_running_run_blocks_second_start_with_409():
     session_id = _new_session()
     run_id = _seed_run(session_id, "running")
+    sentinel = _seed_sentinel_file(run_id)
 
     with patch.object(adapter, "start_run", return_value=None):
         resp = client.post(f"/api/sessions/{session_id}/runs")
         assert resp.status_code == 409, resp.text
-        assert resp.json()["detail"]["message"] == "This session already has a run in progress."
+        assert resp.json() == {
+            "error": "RUN_IN_PROGRESS",
+            "message": "This session already has a run in progress.",
+            "field": None,
+        }
 
     assert _run_exists(run_id), "409 path deleted the running run"
-    print("  ok  running run blocks a second start with 409, existing row untouched")
+    assert sentinel.exists(), "409 path deleted the running run's files"
+    print("  ok  running run blocks a second start with 409, existing row and files untouched")
 
 
 def test_terminal_prior_run_allows_replacement():

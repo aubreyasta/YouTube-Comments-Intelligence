@@ -30,6 +30,16 @@ _DRAFT_KEYS = {"status", "messages", "error"}
 _MESSAGE_KEYS = {"id", "label", "description", "included", "order"}
 
 
+def _assert_validation_error(resp):
+    """Shared contract: unwrapped {error,message,field}, error uppercase VALIDATION_ERROR."""
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    assert set(body.keys()) == {"error", "message", "field"}, body
+    assert body["error"] == "VALIDATION_ERROR", body
+    assert body["field"] == "messages", body
+    return body
+
+
 def _new_session():
     r = client.post("/api/sessions", json={"name": "Test Session"})
     assert r.status_code == 201, r.text
@@ -110,11 +120,8 @@ def test_patch_rejects_duplicate_ids():
         ]
     }
     r = client.patch(f"/api/sessions/{session_id}/key_messages", json=payload)
-    assert r.status_code == 422, r.text
-    body = r.json()["detail"]
-    assert body["error"] == "validation", body
-    assert body["field"] == "messages", body
-    print("  ok  PATCH rejects duplicate ids with 422 validation/messages")
+    _assert_validation_error(r)
+    print("  ok  PATCH rejects duplicate ids with 422 VALIDATION_ERROR/messages")
 
 
 def test_patch_rejects_unknown_id_from_another_session():
@@ -126,11 +133,36 @@ def test_patch_rejects_unknown_id_from_another_session():
         {"id": foreign_ids[0], "label": "X", "description": "", "included": True, "order": 0}
     ]}
     r = client.patch(f"/api/sessions/{session_a}/key_messages", json=payload)
-    assert r.status_code == 422, r.text
-    body = r.json()["detail"]
-    assert body["error"] == "validation", body
-    assert body["field"] == "messages", body
+    _assert_validation_error(r)
     print("  ok  PATCH rejects an id belonging to a different session")
+
+
+def test_patch_id_null_generates_uuid():
+    """id:null creates a server-generated UUID string; returned row keeps submitted order."""
+    session_id = _new_session()
+    payload = {"messages": [
+        {"id": None, "label": "New", "description": "d", "included": True, "order": 0},
+    ]}
+    r = client.patch(f"/api/sessions/{session_id}/key_messages", json=payload)
+    assert r.status_code == 200, r.text
+    msgs = r.json()["messages"]
+    assert len(msgs) == 1, msgs
+    uuid.UUID(msgs[0]["id"])  # raises ValueError if not a valid UUID string
+    assert msgs[0]["label"] == "New", msgs[0]
+    assert msgs[0]["order"] == 0, msgs[0]
+    print("  ok  PATCH id:null generates a server UUID and returns ordered row")
+
+
+def test_patch_rejects_label_and_description_over_max_length():
+    session_id = _new_session()
+    over_label = {"id": None, "label": "x" * 121, "description": "", "included": True, "order": 0}
+    r = client.patch(f"/api/sessions/{session_id}/key_messages", json={"messages": [over_label]})
+    _assert_validation_error(r)
+
+    over_description = {"id": None, "label": "ok", "description": "x" * 501, "included": True, "order": 0}
+    r = client.patch(f"/api/sessions/{session_id}/key_messages", json={"messages": [over_description]})
+    _assert_validation_error(r)
+    print("  ok  PATCH rejects label >120 and description >500 chars")
 
 
 def test_patch_unknown_session_404():
@@ -146,6 +178,8 @@ if __name__ == "__main__":
         test_patch_replaces_atomically_preserving_order_and_zero_included,
         test_patch_rejects_duplicate_ids,
         test_patch_rejects_unknown_id_from_another_session,
+        test_patch_id_null_generates_uuid,
+        test_patch_rejects_label_and_description_over_max_length,
         test_patch_unknown_session_404,
     ]
     failed = 0
