@@ -30,8 +30,18 @@ This is the execution brief for the final product. It is a contract, not a list 
 - Commit `36e294b`: Task 2.1 done. `runs.stage` migration; active-run guard; Session-to-run Key Message snapshot; transcript reconciliation before `brief_pause`; unified run/error contract (`_ser_run`, `_404`/`_409`/`_422`/`_413`, Starlette `HTTPException` handler); Key Messages and brief points on one `messages: KeyMessageIn[]` replace contract.
   - Verified before packaging: expanded suite, 40/40 assertions passed (not re-run at commit time; diff unchanged since that pass).
   - Verified post-rebase: `python -m py_compile db.py server.py` clean; `python tests/test_run_key_messages.py` 10/10; `python tests/test_key_messages_patch.py` 8/8; `git diff --check main...HEAD` clean (no whitespace errors).
-- Task 2.3 (Register artifacts) not started. Resume point: implement per the Task 2.3 entry below in a fresh worktree branched from `main` at `36e294b`.
+- Commit `1d38d34`: Task 2.3 done. `adapter.py` registers all seven required artifacts and prevents incomplete output from reaching `complete`; `server.py` returns six public artifacts in fixed contract order with exact filenames and MIME types, keeps `report_json` internal, and safely skips legacy artifact rows; `run.py` lists the six final public filenames; `tests/test_run_artifacts.py` is the focused direct check.
+  - Verified: `python -m py_compile adapter.py server.py run.py tests/test_run_artifacts.py` clean; `python tests/test_run_artifacts.py` 9/9.
+  - Resume point: Task 2.4 (Finalize report JSON).
 - Worktree `YouTube Intelligence-wt-2.1` on branch `work/wave2-task-2.1`, HEAD `36e294b`, fast-forwarded into `main` and not deleted.
+
+### Cross-chat handoff
+
+- Treat this file as the cross-chat execution record. At the start of a new session, read `AGENTS.md`, then read `Delivery state`, this handoff, the next task, and that task's named prerequisite outputs.
+- Continue from the stated resume point. Treat existing uncommitted changes as the baseline and do not discard, overwrite, or duplicate them.
+- After each task, update `Delivery state` with completion status, changed files, exact verification that ran, commit state, and the next resume point.
+- Record only commands that actually ran. Mark omitted checks as not run instead of inferring a pass.
+- Keep completed task contracts in place. They remain the implementation record and interface reference for later tasks.
 
 ### Shared contracts
 
@@ -463,3 +473,7 @@ The driver was accuracy. Regex undercounted paraphrase and mishandled negation (
 ### Grounded-only brief
 
 Removed the background brief, where the model wrote what it knew about a campaign from memory. Taglines, unit counts, and launch dates are exactly what a model invents fluently. Every claim now traces to something the user provided.
+
+## Revisions
+
+- 2026-08-13: Recorded Task 2.3 completion at commit `1d38d34`, its focused 9/9 verification, and Task 2.4 as the next resume point. Added cross-chat handoff rules so future sessions continue without rediscovering or replacing completed work.
