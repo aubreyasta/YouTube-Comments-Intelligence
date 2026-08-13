@@ -558,15 +558,19 @@ def _comments_csv(df, out_path):
 
     Groups follow first appearance; within a group, likes descending.
     """
-    out = pd.DataFrame(index=df.index)
+    # Build on a fresh positional RangeIndex: df's index may carry
+    # duplicate labels (e.g. after pd.concat elsewhere in the pipeline),
+    # and `.loc[dup_label]` returns every row sharing that label, which
+    # would silently multiply rows during the sort step below.
+    out = pd.DataFrame(index=pd.RangeIndex(len(df)))
     for col in COMMENTS_HEADER:
         source = _SOURCE_COL.get(col, col)
-        out[col] = df[source] if source in df.columns else ""
+        out[col] = df[source].to_numpy() if source in df.columns else ""
 
     for col in [c for c in df.columns if c.startswith("pt__")]:
-        out["key_message_" + col[4:]] = df[col]
+        out["key_message_" + col[4:]] = df[col].to_numpy()
 
-    if not df.empty:
+    if not out.empty:
         group_order = _group_order(df)
         rank = pd.Categorical(out["group"], categories=group_order, ordered=True)
         likes = pd.to_numeric(out["likes"], errors="coerce")
@@ -669,8 +673,9 @@ def _key_messages_csv(df, transfer, out_path):
         mentioned = active[active[col]] if col and base_n else active.iloc[0:0]
         count = len(mentioned)
 
-        sent = (mentioned["sentiment"].dropna().str.strip().str.lower()
+        norm = (mentioned["sentiment"].dropna().str.strip().str.lower()
                 if has_sentiment and count else pd.Series(dtype=object))
+        sent = norm[norm.isin(("positive", "negative", "neutral"))]
         sentiment_base_n = len(sent)
         positive_count = int((sent == "positive").sum())
         negative_count = int((sent == "negative").sum())

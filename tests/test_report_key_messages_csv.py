@@ -52,15 +52,27 @@ def test_key_messages_csv_rows_and_math():
          "sentiment": "negative", "likes": 7, "video_id": "v2"},
         {"group": "G2", "pt__value_for_money": pd.NA, "pt__speed": False,
          "sentiment": "positive", "likes": 8, "video_id": "v2"},
+        # G4: mentions "Speed" but carries an unrecognized sentiment
+        # label ("mixed"). Must count toward count/base_n, but be
+        # excluded from sentiment_base_n and both positive/negative
+        # counts - only normalized exact positive/negative/neutral count.
+        {"group": "G4", "pt__value_for_money": pd.NA, "pt__speed": True,
+         "sentiment": "mixed", "likes": 9, "video_id": "v4"},
     ])
     meta_df = pd.DataFrame([
         {"group": "G1", "video_id": "v1"},
         {"group": "G2", "video_id": "v2"},
+        {"group": "G4", "video_id": "v4"},
     ])
     transfer = pd.DataFrame([
         {"group": "G1", "point": "Value For Money", "echoed_pct": 40.0, "n": 2},
         {"group": "G1", "point": "Speed", "echoed_pct": 40.0, "n": 2},
         {"group": "G2", "point": "Speed", "echoed_pct": 0.0, "n": 0},
+        {"group": "G4", "point": "Speed", "echoed_pct": 100.0, "n": 1},
+        # G3 has no rows in df at all (a group with zero comments), but a
+        # transfer row still names it applicable. base_n must be a true
+        # zero here, not a divide-by-zero crash, and percent must be 0.0.
+        {"group": "G3", "point": "Speed", "echoed_pct": 0.0, "n": 0},
     ])
 
     with tempfile.TemporaryDirectory() as out_dir:
@@ -72,13 +84,14 @@ def test_key_messages_csv_rows_and_math():
         rows = _read_csv(path)
 
     assert header == HEADER, f"header mismatch: {header}"
-    assert len(rows) == 3, f"expected 3 (group, key_message) rows, got {len(rows)}"
+    assert len(rows) == 5, f"expected 5 (group, key_message) rows, got {len(rows)}"
 
     # Group-first (by first appearance), then count descending, then
     # case-insensitive label. G1's two rows tie on count (2), so
     # "Speed" sorts before "Value For Money" alphabetically.
     assert [(r["group"], r["key_message"]) for r in rows] == [
-        ("G1", "Speed"), ("G1", "Value For Money"), ("G2", "Speed")], (
+        ("G1", "Speed"), ("G1", "Value For Money"),
+        ("G2", "Speed"), ("G4", "Speed"), ("G3", "Speed")], (
         f"row order mismatch: {[(r['group'], r['key_message']) for r in rows]}")
 
     by_key = {(r["group"], r["key_message"]): r for r in rows}
@@ -115,6 +128,29 @@ def test_key_messages_csv_rows_and_math():
     # G2 was never shown "Value For Money" (pt__ column is NA there), so
     # no row for it - inapplicable, not a zero.
     assert ("G2", "Value For Money") not in by_key
+
+    # G4's only mention carries an unrecognized sentiment label ("mixed"):
+    # counts toward count/base_n, but sentiment_base_n and both
+    # positive/negative counts stay zero.
+    g4_speed = by_key[("G4", "Speed")]
+    assert g4_speed["base_n"] == "1"
+    assert g4_speed["count"] == "1"
+    assert g4_speed["percent"] == "100.0"
+    assert g4_speed["sentiment_base_n"] == "0"
+    assert g4_speed["positive_count"] == "0"
+    assert g4_speed["negative_count"] == "0"
+    assert g4_speed["positive_percent"] == "0.0"
+    assert g4_speed["negative_percent"] == "0.0"
+
+    # G3 has zero comments in df: base_n is a true zero denominator, not
+    # a spurious count. percent must be exactly "0.0", not a crash.
+    g3_speed = by_key[("G3", "Speed")]
+    assert g3_speed["base_n"] == "0"
+    assert g3_speed["count"] == "0"
+    assert g3_speed["percent"] == "0.0"
+    assert g3_speed["sentiment_base_n"] == "0"
+    assert g3_speed["positive_percent"] == "0.0"
+    assert g3_speed["negative_percent"] == "0.0"
     print(f"  ok  key-messages.csv rows and percent math: {rows}")
 
 

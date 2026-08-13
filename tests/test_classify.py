@@ -197,6 +197,55 @@ def test_report_quotes_and_export_survive_pdna_pt_columns():
         assert by_comment.loc["Too expensive", "key_message_value_for_money"] == ""
 
 
+def test_comments_csv_header_order_and_empty_input():
+    """
+    comments.csv: exact header/column order per the CSV contract
+    (CHANGELOG.md), and empty input still writes headers with no data
+    rows.
+    """
+    import csv as csv_module
+
+    themes, transfer = pd.DataFrame(), pd.DataFrame()
+    affect_result = {
+        "emotion": {"table": pd.DataFrame(), "caveat": ""},
+        "sentiment": {"table": pd.DataFrame(), "caveat": ""},
+    }
+    df = pd.DataFrame([
+        {"video_id": "video_1", "group": "G1", "comment": "Hello",
+         "likes": 3, "lang": "en", "theme": "Quality",
+         "sentiment": "positive", "sentiment_confidence": 0.9,
+         "emotion": "joy", "emotion_confidence": 0.8},
+    ])
+    meta_df = pd.DataFrame([{"group": "G1", "video_id": "video_1"}])
+
+    with tempfile.TemporaryDirectory() as out_dir:
+        report.export(df, themes, transfer, affect_result, meta_df, out_dir)
+        path = os.path.join(out_dir, "comments.csv")
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            header = next(csv_module.reader(fh))
+    assert header == [
+        "video_id", "group", "comment", "likes", "language", "theme",
+        "sentiment", "sentiment_confidence", "emotion",
+        "emotion_confidence"], f"comments.csv header mismatch: {header}"
+
+    empty_df = pd.DataFrame(columns=[
+        "video_id", "group", "comment", "likes", "lang", "theme",
+        "sentiment", "sentiment_confidence", "emotion",
+        "emotion_confidence"])
+    empty_meta = pd.DataFrame(columns=["group", "video_id"])
+    with tempfile.TemporaryDirectory() as out_dir:
+        report.export(empty_df, themes, transfer, affect_result, empty_meta,
+                      out_dir)
+        path = os.path.join(out_dir, "comments.csv")
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            reader = csv_module.reader(fh)
+            empty_header = next(reader)
+            data_rows = list(reader)
+    assert empty_header == header, (
+        f"comments.csv header mismatch on empty input: {empty_header}")
+    assert data_rows == [], f"expected no data rows, got {data_rows}"
+
+
 def test_classification_schema_empty_points_forbids_enum():
     """
     A video with no Key Messages must emit an "echoed" schema that only
