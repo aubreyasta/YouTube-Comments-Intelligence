@@ -26,7 +26,12 @@ This is the execution brief for the final product. It is a contract, not a list 
 
 - Commit `6eaa00b`: local Ollama boundary, documentation realignment, Session Key Message schema, and atomic PATCH foundation.
 - Commit `81bfe27`: setup drafting, draft coalescing and stale state, asset extraction coverage, brief pipeline split, and benchmark harnesses.
-- Uncommitted baseline to validate before changing: `runs.stage`; active-run guard; Session-to-run Key Message snapshot; transcript reconciliation before `brief_pause`; focused run tests; `themes.csv`, `sentiment.csv`, `emotions.csv`, and `key-messages.csv` export helpers and tests.
+- Commits `1a5a3e4`, `8a3de04`: Task 2.2 done. `pipeline/report.py` exports the exact CSV contract (`comments.csv`, `themes.csv`, `sentiment.csv`, `emotions.csv`, `key-messages.csv`); `summary.csv`, `chart_transfer.csv`, `chart_themes.csv` removed.
+- Commit `36e294b`: Task 2.1 done. `runs.stage` migration; active-run guard; Session-to-run Key Message snapshot; transcript reconciliation before `brief_pause`; unified run/error contract (`_ser_run`, `_404`/`_409`/`_422`/`_413`, Starlette `HTTPException` handler); Key Messages and brief points on one `messages: KeyMessageIn[]` replace contract.
+  - Verified before packaging: expanded suite, 40/40 assertions passed (not re-run at commit time; diff unchanged since that pass).
+  - Verified post-rebase: `python -m py_compile db.py server.py` clean; `python tests/test_run_key_messages.py` 10/10; `python tests/test_key_messages_patch.py` 8/8; `git diff --check main...HEAD` clean (no whitespace errors).
+- Task 2.3 (Register artifacts) not started. Resume point: implement per the Task 2.3 entry below in a fresh worktree branched from `main` at `36e294b`.
+- Worktree `YouTube Intelligence-wt-2.1` on branch `work/wave2-task-2.1`, HEAD `36e294b`, fast-forwarded into `main` and not deleted.
 
 ### Shared contracts
 
