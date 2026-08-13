@@ -33,7 +33,7 @@ This is the execution brief for the final product. It is a contract, not a list 
 - Commit `1d38d34`: Task 2.3 done. `adapter.py` registers all seven required artifacts and prevents incomplete output from reaching `complete`; `server.py` returns six public artifacts in fixed contract order with exact filenames and MIME types, keeps `report_json` internal, and safely skips legacy artifact rows; `run.py` lists the six final public filenames; `tests/test_run_artifacts.py` is the focused direct check.
   - Verified: `python -m py_compile adapter.py server.py run.py tests/test_run_artifacts.py` clean; `python tests/test_run_artifacts.py` 9/9.
 - Worktree `YouTube Intelligence-wt-2.1` on branch `work/wave2-task-2.1`, HEAD `36e294b`, fast-forwarded into `main` and not deleted.
-- Task 2.4 and Task 2.5: implemented. Task 2.6 complete read-only QA rerun passed.
+- Commit `8d07da3798ee11a209b8b247b7197a10341b57e7`: finished Task 2.4 Report JSON, Session comment count, `KeyMessageDraft.revision`, Task 2.5 backend key-visual removal, and Task 2.6 passing QA.
   - All 26 listed commands exited 0. Evaluator-reported totals: 125 assertions across 14 test files, all passing.
   - Per-script results: `test_db_schema.py` 5/5; `test_run_concurrency_guard.py` 3/3; `test_run_key_messages.py` 10/10, after repairing its report-writer mocks to create the six required files; `test_brief_key_messages.py` 5/5; `test_report_themes_csv.py` 2/2 each run; `test_report_sentiment_emotions_csv.py` 2/2 each run; `test_report_key_messages_csv.py` 2/2 each run; `test_classify.py` 7/7; `test_run_artifacts.py` 10/10; `test_evidence.py` 27/27 each run; `test_asset_extraction.py` 3/3; `test_key_messages_patch.py` 9/9; `test_key_messages_draft.py` 9/9; both benchmark self-checks passed.
   - Every `py_compile` command exited 0.
@@ -43,8 +43,8 @@ This is the execution brief for the final product. It is a contract, not a list 
   - No excluded path (`.env`, `config.py`, `data/`, `output/`, `benchmark-data/private/`) is tracked.
   - Seven stored artifacts and six public artifacts confirmed; `report_json` internal.
   - `session-ses_004f.md` remains untracked, scheduled for removal before commit.
-  - Changes remain uncommitted at this record point.
-  - Resume point: authorized integration cleanup, commit, and normal push of `main`, then Wave 3 Task 3.1.
+  - Commit has not been pushed at this record point.
+  - Resume point: commit this execution-record update, push `main`, then begin Wave 3 Task 3.1 in a later frontend session.
 
 ### Cross-chat handoff
 
@@ -502,3 +502,4 @@ Removed the background brief, where the model wrote what it knew about a campaig
 - 2026-08-13: Approved the Report JSON applicability and evidence contract (group/point matching, aggregation, denominators, merged Theme/Emotion labels, one-decimal percentages, sentiment `baseN`, balanced/backfilled evidence, metric-ID collision suffixes), the CSV-based Session comment count, the exposed `KeyMessageDraft.revision` semantics, and backend key-visual removal. Task 2.4 and Task 2.5 implemented against this contract with focused verification only; changes remain uncommitted pending Task 2.6.
 - 2026-08-13: Recorded Task 2.3 completion at commit `1d38d34`, its focused 9/9 verification, and Task 2.4 as the next resume point. Added cross-chat handoff rules so future sessions continue without rediscovering or replacing completed work.
 - 2026-08-13: Recorded Task 2.6's complete read-only QA rerun: 125 assertions across 14 test files passing, all `py_compile` and search checks clean, no excluded path tracked, changes still uncommitted. Next resume point is authorized integration cleanup, commit, and normal push of `main`, then Wave 3 Task 3.1.
+- 2026-08-13: Committed Task 2.4, Task 2.5, and Task 2.6 at `8d07da3798ee11a209b8b247b7197a10341b57e7`; worktree clean immediately after. Push to `main` remains pending.
