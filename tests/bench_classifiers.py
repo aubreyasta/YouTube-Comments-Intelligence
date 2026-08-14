@@ -1,6 +1,6 @@
 """
 Evaluation harness for the Indonesian-English Sentiment and Emotion
-classifier candidates (see CHANGELOG.md, Phase 1 item 1: multilingual
+classifier candidates (see PRD.md, Phase 1 item 1: multilingual
 scope is Indonesian, English, and mixed Indonesian-English comments;
 Macro F1 is the selection metric, accuracy is secondary).
 
@@ -274,7 +274,7 @@ def main():
         description=(
             "Score Indonesian-English Sentiment and Emotion classifier "
             "predictions against labelled data. Macro F1 is primary "
-            "(selection metric per CHANGELOG.md), accuracy is secondary. "
+            "(selection metric per PRD.md), accuracy is secondary. "
             "Computes per-language-stratum metrics (id/en/mixed), "
             "per-label precision/recall/F1, and confusion counts. Runs "
             "entirely on stdlib; does not call or download any model."),

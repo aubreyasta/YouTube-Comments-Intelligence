@@ -5,7 +5,7 @@ through the same llm.classify_batch() boundary run.py uses.
 
 This script does not download models or judge pass/fail. It measures.
 The 40-minute/3000-comment release benchmark and the multilingual Macro F1
-model-selection benchmark (see CHANGELOG.md "Approved plan") both need
+model-selection benchmark (see PRD.md "Approved plan") both need
 this measurement; this script produces the timing and GPU-memory half of
 that. GPU memory is a whole-GPU before/after nvidia-smi reading, not a
 sampled peak: it will not catch a spike between the two readings.

@@ -110,7 +110,7 @@ Running locally means no per-run cost and no client material leaving the buildin
 
 ## Where the code is today
 
-The product above is the target. The shipped code differs in four places, all of them being closed out. Details and sequencing: [CHANGELOG.md](CHANGELOG.md).
+The product above is the target. The shipped code differs in four places, all of them being closed out. Details and sequencing: [PRD.md](PRD.md).
 
 1. The LLM is still Gemini over the API, not local Qwen.
 2. Sentiment and Emotion models are Indonesian-only. English comments get labels the models were not trained for.
@@ -125,5 +125,5 @@ The product above is the target. The shipped code differs in four places, all of
 - [docs/setup.md](docs/setup.md) install, configure, run, troubleshoot.
 - [docs/architecture.md](docs/architecture.md) how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) the HTTP contract.
-- [CHANGELOG.md](CHANGELOG.md) what changed and what is planned.
+- [PRD.md](PRD.md) what changed and what is planned.
 - [AGENTS.md](AGENTS.md) conventions for contributors and agents.

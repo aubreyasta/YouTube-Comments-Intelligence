@@ -49,7 +49,7 @@ GEMINI_MODEL=...
 
 ### About the Gemini keys
 
-**Gemini is a debugging stand-in, not the product.** The shipping model is a local Qwen served by Ollama, so that no client material leaves the building and no run costs anything. The Gemini path exists because the swap has not landed yet. See workstream 2 in the [CHANGELOG](../CHANGELOG.md).
+**Gemini is a debugging stand-in, not the product.** The shipping model is a local Qwen served by Ollama, so that no client material leaves the building and no run costs anything. The Gemini path exists because the swap has not landed yet. See workstream 2 in the [PRD](../PRD.md).
 
 Two things follow from that. Do not build anything new against the Gemini client; `pipeline/llm.py` is the only file that should know a provider exists. And do not put confidential client material through it, because free-tier prompts may be used to train the provider's models.
 

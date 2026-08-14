@@ -1080,7 +1080,7 @@ def _execute(run_id: str) -> None:
         # brief.reconcile() keeps edited entries and stable ids verbatim,
         # refreshes unedited matches with the transcript-grounded
         # description, and appends transcript-only messages a Session
-        # with no User Inputs would otherwise have none of (CHANGELOG
+        # with no User Inputs would otherwise have none of (PRD
         # "No-input Sessions draft from transcripts").
         _push(run_id, "brief", "Reading the videos", 22)
         summary_str = "; ".join(

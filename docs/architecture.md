@@ -4,7 +4,7 @@ What the moving parts are, how they fit together, and where the boundaries are. 
 
 Product terms are defined in [README.md](../README.md). The code-identifier mapping is in [AGENTS.md](../AGENTS.md#terminology).
 
-Related: [Setup](setup.md), [API reference](api-reference.md), [CHANGELOG](../CHANGELOG.md).
+Related: [Setup](setup.md), [API reference](api-reference.md), [PRD](../PRD.md).
 
 ---
 
@@ -65,7 +65,7 @@ Labels are assigned per comment with no surrounding context, so sarcasm and meas
 
 Two figures result: an Emotion distribution across all comments, and a per-Key-Message Sentiment split.
 
-Current models are Indonesian-only, which is wrong for a mixed corpus. The replacement is workstream 3 in the [CHANGELOG](../CHANGELOG.md).
+Current models are Indonesian-only, which is wrong for a mixed corpus. The replacement is workstream 3 in the [PRD](../PRD.md).
 
 ### Thread safety in collect.py
 
@@ -79,7 +79,7 @@ Transient errors (socket, SSL) retry three times with backoff, discarding the th
 
 All model calls live in `pipeline/llm.py`. That is the only file a provider swap touches.
 
-The shipping target is a local Qwen model through Ollama. The code currently calls Gemini over the API, which is a debugging stand-in and not the product. See workstream 2 in the [CHANGELOG](../CHANGELOG.md).
+The shipping target is a local Qwen model through Ollama. The code currently calls Gemini over the API, which is a debugging stand-in and not the product. See workstream 2 in the [PRD](../PRD.md).
 
 ---
 
@@ -137,7 +137,7 @@ The adapter thread then:
 8. Copies outputs to `data/artifacts/{run_id}/` and inserts `run_artifacts` rows.
 9. Pushes `complete`. On exception, pushes `error` and sets the run to `failed`.
 
-Step 2 moves to upload time under workstream 6 in the [CHANGELOG](../CHANGELOG.md), which also adds a `key_messages` table keyed on `session_id`.
+Step 2 moves to upload time under workstream 6 in the [PRD](../PRD.md), which also adds a `key_messages` table keyed on `session_id`.
 
 ### Artifacts
 
@@ -261,7 +261,7 @@ The mockup drew a finished product. These are the honest disconnects that remain
 | Evidence filter pills | Derived from the emotion labels actually present in `report.evidence`, plus "Most liked". Demo keeps fixed pills. |
 | A new run overwrites the previous result | Live "Run analysis" confirms before starting when the Session already has a result. |
 | No live progress bar in the session list | The row shows a status pill and the latest run message. The server does not persist `pct`. |
-| `KEY_VISUALS` is always empty in the backend | The key-visual toggle is hidden. `_ser_asset()` always returns `isKeyVisual: false`. Unresolved; see the CHANGELOG. |
+| `KEY_VISUALS` is always empty in the backend | The key-visual toggle is hidden. `_ser_asset()` always returns `isKeyVisual: false`. Unresolved; see the PRD. |
 
 Never make a disabled control silently do nothing. If a control cannot do what it looks like it does, it must be visibly disabled and explain why.
 

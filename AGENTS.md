@@ -5,7 +5,7 @@ Repository conventions for agents and contributors. This file is about how to ch
 If you need:
 
 - What the product is, the user flow, the output files: [README.md](README.md).
-- What is planned and in what order: [CHANGELOG.md](CHANGELOG.md).
+- What is planned and in what order: [PRD.md](PRD.md).
 - Install, config, keys, GPU, troubleshooting: [docs/setup.md](docs/setup.md).
 - How pipeline, backend, and frontend fit together: [docs/architecture.md](docs/architecture.md).
 - HTTP contract, error codes, request and response shapes: [docs/api-reference.md](docs/api-reference.md).
@@ -18,7 +18,7 @@ Read the doc that matches the change you are making.
 
 Product terms are defined once, in [README.md](README.md). Use those words in prose, comments, commit messages, and docs.
 
-Code identifiers still carry older names. Do not rename them opportunistically; a rename touches the DB, the API, and the frontend at once, and is scheduled in [CHANGELOG.md](CHANGELOG.md). The mapping:
+Code identifiers still carry older names. Do not rename them opportunistically; a rename touches the DB, the API, and the frontend at once, and is scheduled in [PRD.md](PRD.md). The mapping:
 
 | Product term | Code identifier |
 |---|---|
@@ -53,20 +53,9 @@ Never in prose: "signal transfer", "codebook", "echoed", "affect", "campaign" as
 
 ### Minimalism
 
-The best code is the code never written. Before writing anything, stop at the first rung that holds:
+Global minimalism rules apply (YAGNI, stdlib and native features first, shortest working diff). In this repo, mark deliberate simplifications with a `# ponytail:` comment naming the ceiling and the upgrade path. Examples are in `server.py`.
 
-1. Does this need to exist at all?
-2. Does the standard library cover it?
-3. Does a native platform feature cover it? (CSS over JS, a DB constraint over app code.)
-4. Does an already-installed dependency solve it?
-5. Can it be one line?
-6. Only then: the minimum code that works.
-
-No unrequested abstractions. No interface with one implementation. No config for a value that never changes. No scaffolding for later. Deletion beats addition.
-
-Mark deliberate simplifications with a `# ponytail:` comment naming the ceiling and the upgrade path. Examples are in `server.py`.
-
-### What never gets simplified away
+What never gets simplified away here:
 
 - Input validation at trust boundaries. Server-side URL parsing (`_parse_youtube_url`), extension checks, size checks, article URL scheme checks. These stay on the server even when the frontend also validates.
 - Error handling that prevents data loss. `finally` blocks closing DB connections in `adapter.py`, timeouts on external calls.
@@ -87,7 +76,7 @@ Server errors go through the helpers in `server.py`:
 ```python
 _404("Session not found.")
 _409("This session already has a run in progress.")
-_422("kind must be one of …", "kind")
+_422("kind must be one of ...", "kind")
 _413("Files are limited to 10 MB.")
 ```
 
@@ -114,30 +103,23 @@ Read the relevant section of [docs/architecture.md](docs/architecture.md) before
 ## Verification
 
 - For non-trivial logic, leave one runnable check behind: an assert-based self-check in the same file, or a script under `tests/` alongside `test_classify.py` and `test_evidence.py`. No frameworks unless one already exists there.
-- If a bug is reported, reproduce it end to end before fixing.
-- Do not fabricate a passing test. If you did not run it, say so.
-
-Frontend: `node --check app/app.js`, then `app/self-check.html` in a browser. Full checklist in [docs/setup.md](docs/setup.md#verifying).
+- Frontend: `node --check app/app.js`, then `app/self-check.html` in a browser. Full checklist in [docs/setup.md](docs/setup.md#verifying).
+- Xabi specifies the exact checks to run; William runs them. Martin implements only and does not test.
 
 ---
 
-## Git and commits
+## Git
 
 - Never commit `config.py`, `.env`, or `data/`. All gitignored; keep them that way.
 - Never commit real API keys. `config-template.py` is the reference.
-- Never add agent names as commit co-authors.
-- Confirm before destructive git operations (`push --force`, `reset --hard`, `clean -f`, `branch -D`).
 
 ---
 
 ## When making changes
 
-- **Parallel work:** Prefer several small concurrent workflows over one large task or a serial task chain. If a subagent exceeds its estimated runtime, stop it before 40 minutes, collect its handoff, and split the remaining work into independent workflows that can run concurrently. Avoid concurrent edits to the same files.
-- Read the affected file before editing.
-- Read the relevant `docs/` file if the change touches an area you have not worked in.
+- Xabi owns repository discovery and doc selection, and hands down decision-complete packets.
+- Martin reads only the files listed in the packet.
 - Match the existing style and libraries. Do not introduce a new dependency or pattern for something the codebase already handles another way.
-- If a change spans multiple files, describe the plan before editing.
-- If an approach fails twice, stop and diagnose. A third attempt with a small variation of the same idea is usually the wrong move.
 
 ---
 
@@ -151,6 +133,7 @@ Never re-enable a disabled control without a backing route landing first. Never 
 
 ## Skills
 
+- `xabi-delivery-orchestration` for Xabi-only non-trivial delivery planning.
 - `compact-technical-writing` for commit messages, README edits, architecture notes, any technical prose.
 - `webapp-testing` for Playwright end-to-end checks of `app/`.
 - `tdd` only when explicitly asked for test-first work.
