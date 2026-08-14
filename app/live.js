@@ -240,8 +240,43 @@ const liveApi = {
     };
   },
 
+  /* getReport: adapts the server's ReportJson to the field names the results
+     renderer reads. The renderer was written against the demo fixture, which
+     uses different names (transfers/value/id) and carries prose the server
+     never produces. Mapping here keeps the renderer shape-agnostic and keeps
+     the demo/live boundary in this file.
+     ponytail: a one-way field map, not a general adapter layer; if the report
+     contract and the renderer converge later, delete this and pass through. */
   async getReport(runId) {
-    return apiJson("/api/runs/" + runId + "/report");
+    const raw = await apiJson("/api/runs/" + runId + "/report");
+    const keyMessages = Array.isArray(raw.keyMessages) ? raw.keyMessages : [];
+    const themes = Array.isArray(raw.themes) ? raw.themes : [];
+    const evidence = Array.isArray(raw.evidence) ? raw.evidence : [];
+    const flatEvidence = [];
+    for (const metric of evidence) {
+      const comments = Array.isArray(metric.comments) ? metric.comments : [];
+      for (const c of comments) {
+        flatEvidence.push({
+          metricId: metric.metricId,
+          text: c.text,
+          likes: c.likes,
+          emotion: null,
+        });
+      }
+    }
+    const themeCount = themes.length;
+    return {
+      ...raw,
+      title: "Results",
+      subtitle: `${keyMessages.length} Key Messages · ${themeCount} ${themeCount === 1 ? "theme" : "themes"}`,
+      transfers: keyMessages.map((m) => ({
+        id: m.metricId, label: m.label, value: m.percent,
+      })),
+      themes: themes.map((m) => ({
+        id: m.metricId, label: m.label, value: m.percent,
+      })),
+      evidence: flatEvidence,
+    };
   },
 
   /* getArtifact: the artifact id is known from run.artifacts list.

@@ -1334,20 +1334,27 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
   const usedLocal = new Set();
   const appended = [];
   for (const dm of draftMessages) {
+    let supersededByDirtyEdit = false;
     let local = dm.id && byId.has(dm.id) ? byId.get(dm.id) : null;
     if (!local) {
       const nl = kmNormLabel(dm.label);
       if (nl && byLabel.has(nl)) local = byLabel.get(nl);
     }
-    // A dirty, unmatched local row (typically id:null with a freshly edited
-    // label that no longer matches anything in the draft) is not this draft
-    // entry: it must not be replaced by, or merged with, an unrelated server
-    // row. Treat it as no match so it survives untouched in the pass below,
-    // and let this draft entry stand on its own.
+    // A dirty local row whose label diverged from this draft entry is not
+    // described by this draft entry: the local row already owns this id and
+    // survives untouched in the pass below. Drop the draft entry instead of
+    // appending it, because appending it would duplicate the server id that
+    // the surviving local row already owns and make the next save fail
+    // validation.
+    // ponytail: this merge reconciles by server id then by normalized label,
+    // so two rows that share a normalized label cannot be told apart; if Key
+    // Messages ever need duplicate labels, give every local row a stable
+    // client key at creation and merge on that instead.
     if (local) {
       const localKey = local.id || kmLocalKey(local);
       if (dirtyIds.has(localKey) && kmNormLabel(local.label) !== kmNormLabel(dm.label)) {
         local = null;
+        supersededByDirtyEdit = true;
       }
     }
     if (local) {
@@ -1363,16 +1370,25 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
         order: isDirty ? local.order : dm.order,
         _localKey: local._localKey,
       };
-    } else {
+    } else if (!supersededByDirtyEdit) {
       appended.push({ ...dm });
     }
   }
   // Local rows not present in the draft (e.g. freshly added, not yet drafted,
   // or dirty enough to no longer match any draft entry) survive as-is, in place.
+  // Exception: a row with no server id and no label can never be claimed by a
+  // draft entry, because its merge key is a local-only key the server never
+  // returns and an empty normalized label never enters the label index. Left
+  // in, it accumulates on every draft pass. Drop it instead.
   localRows.forEach((row, i) => {
     if (slots[i] === null) {
       const key = row.id || kmLocalKey(row);
-      if (!usedLocal.has(key)) slots[i] = { ...row };
+      if (usedLocal.has(key)) return;
+      if (!row.id && !kmNormLabel(row.label)) {
+        dirtyIds.delete(key);
+        return;
+      }
+      slots[i] = { ...row };
     }
   });
   const merged = slots.filter((s) => s !== null).concat(appended);
@@ -1666,7 +1682,11 @@ function openConfirm(message, onContinue) {
 async function requestKeyMessageDraft(sessionId, getRows, onAccepted) {
   const st = kmGetState(sessionId);
   st.requestedRevision += 1;
-  if (st.inFlight) { st.rerunRequested = true; return; }
+  // Remember the newest caller's callback: the coalesced rerun below must
+  // update whoever asked most recently, not the original caller, or a retry
+  // clicked during an in-flight draft never reaches the editor and the
+  // status stays "drafting" forever.
+  if (st.inFlight) { st.rerunRequested = true; st.pendingAccepted = onAccepted; return; }
   st.inFlight = true;
   const runOne = async () => {
     const myRevision = st.requestedRevision;
@@ -1696,6 +1716,7 @@ async function requestKeyMessageDraft(sessionId, getRows, onAccepted) {
     st.inFlight = false;
     if (st.rerunRequested || myRevision !== st.requestedRevision) {
       st.rerunRequested = false;
+      if (st.pendingAccepted) { onAccepted = st.pendingAccepted; st.pendingAccepted = null; }
       st.inFlight = true;
       await runOne();
     }
@@ -1716,6 +1737,7 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
   let serverError = initialDraft.error;
   let pendingPatch = false; // true while a structural PATCH (delete/include/reorder) is in flight
   let deferredRepaint = false; // background response landed while focus was inside the editor
+  let pointerDownInside = false; // a pointer press landed on a control inside the editor, so a deferred repaint must not replace that control before its click is delivered
   let saveInFlight = false; // guards Save's own fullPatch against a duplicate/rapid re-click
 
   function isFocusInside() {
@@ -1742,17 +1764,16 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
       included: r.included, order: i,
     }));
     const updated = await demoApi.updateKeyMessages(sessionId, payload);
-    // Replace null IDs with server IDs in place, preserving dirty flags by key.
-    const newDirty = new Set();
+    // Replace null IDs with server IDs in place, carrying over the local key.
     rows = updated.messages.map((m, i) => {
       const prev = rows[i];
-      const key = prev ? rowKey(prev) : null;
-      if (key && st.dirtyIds.has(key) && prev && kmNormLabel(prev.label) === kmNormLabel(m.label)) {
-        newDirty.add(m.id || key);
-      }
       return { ...m, _localKey: prev ? prev._localKey : undefined };
     });
-    st.dirtyIds = newDirty;
+    // The payload just sent carried every row's label and description, so a
+    // successful response means the server state matches local state exactly.
+    // Inputs are disabled while a patch is in flight, so no edit could have
+    // been made mid-request and silently discarded by clearing here.
+    st.dirtyIds = new Set();
     st.status = updated.status;
     serverError = null;
     return updated;
@@ -1847,7 +1868,7 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
         }
       });
       el.addEventListener("blur", () => {
-        if (deferredRepaint) { deferredRepaint = false; paint(); }
+        if (deferredRepaint && !pointerDownInside) { deferredRepaint = false; paint(); }
       });
     });
 
@@ -1903,6 +1924,8 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
       if (last) last.focus();
     });
     saveBtn.addEventListener("click", async () => {
+      // rows is authoritative: it holds the merged server state plus
+      // preserved dirty edits. The DOM may be one repaint behind.
       if (saveInFlight) return; // guards against a duplicate/rapid re-click re-entering fullPatch
       const focusedId = document.activeElement ? document.activeElement.id : null;
       let ok = true;
@@ -1935,14 +1958,40 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
     if (retryBtn) {
       retryBtn.addEventListener("click", () => {
         st.status = "drafting"; paint();
+        // Retry is the one deferred-repaint source that can never be flushed
+        // later: clicking it puts focus inside the container, so the usual
+        // isFocusInside() deferral would hold forever. The container click
+        // recovery has already run synchronously by the time this resolves,
+        // and the only other flush is an input blur. Repaint directly.
         requestKeyMessageDraft(sessionId, () => rows, (merged, status, error) => {
-          if (isFocusInside()) { rows = merged; deferredRepaint = true; return; }
-          rows = merged; serverError = status === "failed" || status === "stale" ? error : null;
+          rows = merged;
+          serverError = status === "failed" || status === "stale" ? error : null;
+          deferredRepaint = false;
           paint();
         });
       });
     }
   }
+
+  // ponytail: coordinates a deferred repaint against pointer and keyboard
+  // activation with two flags on the container; if the editor ever needs
+  // more deferred-update sources, replace the flags with a single explicit
+  // "safe to repaint" check.
+  container.addEventListener("mousedown", () => {
+    pointerDownInside = true;
+  });
+  container.addEventListener("keydown", (ev) => {
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target instanceof HTMLElement && ev.target.tagName === "BUTTON" && container.contains(ev.target)) {
+      pointerDownInside = true;
+    }
+  });
+  container.addEventListener("click", () => {
+    pointerDownInside = false;
+    if (deferredRepaint && !isFocusInside()) paint();
+  });
+  window.addEventListener("mouseup", () => {
+    pointerDownInside = false;
+  });
 
   paint();
 
@@ -2468,10 +2517,35 @@ async function renderRun(runId) {
     }
   }
 
+  // brief_pause paints twice when it has to. The first paint is synchronous,
+  // because a reopened paused run must have its persisted rows on screen
+  // before subscribeRun is called. The mount-time snapshot can be stale
+  // (captured from one getRun before the run reached brief_pause), and SSE
+  // never carries brief_points, so a refresh follows the paint and repaints
+  // only when it actually found points the first paint did not have.
+  function renderBriefReviewFresh(seedPoints) {
+    const seeded = seedPoints && seedPoints.length ? seedPoints : null;
+    const paintedCount = (seeded || briefPointsSnapshot || []).length;
+    renderBriefReview(seeded);
+    if (seeded) return Promise.resolve();
+    return Promise.resolve(demoApi.getRun(runId)).then((fresh) => {
+      const points = fresh && fresh.briefPoints ? fresh.briefPoints : [];
+      if (points.length && points.length !== paintedCount) {
+        briefPointsSnapshot = points.map((p) => ({ ...p }));
+        renderBriefReview(null);
+      }
+    }).catch(() => {
+      // Keep whatever the synchronous paint put on screen.
+    });
+  }
+
   function renderBriefReview(seedPoints) {
     // seedPoints (when supplied) is the persisted/pushed source of truth for
     // this paint call; otherwise fall back to the snapshot captured at mount.
-    const sourcePoints = (seedPoints || briefPointsSnapshot).slice().sort((a, b) => a.order - b.order);
+    // An empty array is truthy, so a seed of [] would silently win over a
+    // populated snapshot and paint zero rows. Treat empty as absent.
+    const seeded = seedPoints && seedPoints.length ? seedPoints : null;
+    const sourcePoints = (seeded || briefPointsSnapshot).slice().sort((a, b) => a.order - b.order);
     const points = sourcePoints.map((p) => ({ ...p })); // local working copy
     briefEl.hidden = false;
     let saving = false;
@@ -2632,9 +2706,11 @@ async function renderRun(runId) {
 
     if (e.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
-      // Use the pushed brief_points on the event when present; otherwise the
-      // captured snapshot (covers the demo engine, which does not push points).
-      renderBriefReview(e.brief_points || e.detail && e.detail.brief_points || null);
+      // Use the pushed brief_points on the event when present; otherwise
+      // re-fetch, because live SSE never carries brief_points. onEvent is
+      // synchronous, so this cannot be awaited here.
+      renderBriefReviewFresh(e.brief_points || e.detail && e.detail.brief_points || null)
+        .catch(() => {});
     }
     if (e.stage === "classify" && briefRendered) {
       briefEl.hidden = true;
@@ -2677,7 +2753,7 @@ async function renderRun(runId) {
   paintSteps();
   if (initialStage === "brief_pause") {
     briefRendered = true;
-    renderBriefReview();
+    renderBriefReviewFresh().catch(() => {});
   }
 
   const unsubscribe = demoApi.subscribeRun(runId, { onEvent, onDisconnect, onReconnect });
@@ -2927,12 +3003,13 @@ async function renderResults(runId) {
           </div>
         </section>
 
+        ${live ? "" : `
         <section class="read" aria-labelledby="read-h">
           <h2 id="read-h">What we heard</h2>
           ${report.interpretation.split("\n\n").map((p) => `<p>${esc(p)}</p>`).join("")}
           <blockquote class="quote">"${esc(report.quote.text)}"<span class="attr">${esc(report.quote.attr)}</span></blockquote>
           <div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>
-        </section>
+        </section>`}
 
         <section class="downloads" aria-labelledby="downloads-h">
           <h2 id="downloads-h">Files from this run</h2>
