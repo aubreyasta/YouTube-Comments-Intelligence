@@ -4,6 +4,14 @@ The only file you normally need to edit.
 Put your links in VIDEOS, set the YouTube API key, run `python run.py`.
 """
 
+import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass  # python-dotenv optional; env vars may be set by the shell
+
 # ---------------------------------------------------------------- inputs
 # One entry per video. "group" is how results get compared: give two videos
 # the same group name and they are treated as one campaign.
@@ -33,7 +41,10 @@ VIDEOS = [
 SESSION_NAME = ""
 
 # ---------------------------------------------------------------- keys
-YOUTUBE_API_KEY = "ENTER YOUTUBE DATA API KEY"
+# Put the key in a .env file next to this one:
+#   YOUTUBE_API_KEY=your-key-here
+# Never hardcode a key in this file.
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 # ---------------------------------------------------------- local Ollama/Qwen
 # Ollama must be running locally with both exact tags installed. The pipeline
