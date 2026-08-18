@@ -400,7 +400,7 @@ def ask_json(prompt: str, cfg: PipelineConfig, *, schema: dict,
             value = json.loads(raw)
             return validation(value) if validation else value
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            last_error = exc.__class__.__name__
+            last_error = f"{exc.__class__.__name__}: {exc}"
     raise OllamaResponseError(
         f"Ollama failed to return a valid structured response after {retries} attempts ({last_error}).")
 
