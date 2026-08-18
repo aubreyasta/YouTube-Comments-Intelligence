@@ -1439,6 +1439,11 @@ def proceed_run(run_id: str):
 # /api/runs/{id}/events  GET (SSE)
 # ---------------------------------------------------------------------------
 
+# Module level (not a _generate() local) so a test can patch it to a small
+# value instead of waiting 15 real seconds for a heartbeat.
+_SSE_HEARTBEAT_SECONDS = 15.0
+
+
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str):
     conn = db.get_conn()
@@ -1474,12 +1479,11 @@ async def run_events(run_id: str):
 
         q = adapter.get_queue(run_id)
         loop = asyncio.get_event_loop()
-        heartbeat_interval = 15.0
         last_event = loop.time()
 
         while True:
             elapsed = loop.time() - last_event
-            wait = max(0.0, heartbeat_interval - elapsed)
+            wait = max(0.0, _SSE_HEARTBEAT_SECONDS - elapsed)
 
             # Non-blocking poll with a short sleep to avoid CPU spin.
             item = None
@@ -1497,7 +1501,7 @@ async def run_events(run_id: str):
                     return
             else:
                 now = loop.time()
-                if now - last_event >= heartbeat_interval:
+                if now - last_event >= _SSE_HEARTBEAT_SECONDS:
                     yield ": heartbeat\n\n"
                     last_event = now
                 # If adapter thread is gone and terminal, close.
