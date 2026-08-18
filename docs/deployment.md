@@ -34,10 +34,15 @@ Get-PSDrive C
 
 Required:
 
-- NVIDIA RTX 4060 Ti with 16384 MiB VRAM.
+- NVIDIA RTX 4060 Ti. Record the `memory.total` figure exactly. `nvidia-smi`
+  reports dedicated VRAM only. Windows Task Manager adds a separate "Shared GPU
+  memory" line, which is system RAM the GPU may borrow over PCIe. Shared memory
+  is not usable VRAM for inference. A model that spills into it keeps running at
+  roughly CPU speed. Size every decision below against the `nvidia-smi` number,
+  never the Task Manager total.
 - Python 3.10 or newer. On Windows call `python`, never `py`.
-- Free disk for the repo, the virtual environment, Ollama, two model blobs
-  (roughly 11 GB together), Playwright Chromium (roughly 450 MB), uploads,
+- Free disk for the repo, the virtual environment, Ollama, one model blob
+  (roughly 3 GB), Playwright Chromium (roughly 450 MB), uploads,
   and reports. Measure and record the actual free space.
 
 Set the machine never to sleep while plugged in:
@@ -58,7 +63,7 @@ an application appears in a menu.
 | Date | | |
 | Windows edition/build | | |
 | CPU / RAM | | |
-| GPU / VRAM | | |
+| GPU / dedicated VRAM from `nvidia-smi` | | |
 | NVIDIA driver | | |
 | Free disk on C: | | |
 | Python version | | |
@@ -68,7 +73,7 @@ an application appears in a menu.
 
 ---
 
-## Step 2 - Install Ollama and pull the two models
+## Step 2 - Install Ollama and pull the model
 
 Install Ollama from <https://ollama.com/download/windows>. The Windows
 installer runs Ollama as a background service on `127.0.0.1:11434`. Accept
@@ -88,16 +93,18 @@ instance` means the client is installed but the service is not up. Start the
 Ollama app from the Start menu, or run `ollama serve` in its own window, then
 repeat the check.
 
-Pull exactly these two tags. The pipeline never pulls a model itself.
+Pull exactly this tag. The pipeline never pulls a model itself.
 
 ```powershell
-ollama pull qwen3:8b-q4_K_M
-ollama pull qwen3-vl:8b-instruct-q4_K_M
+ollama pull qwen3.5:4b
 ollama list
 ```
 
-The text model is roughly 5 GB, the vision model roughly 6 GB. Ollama loads
-one at a time, so 16 GB VRAM is never overcommitted. Do not run both at once.
+One multimodal model serves both text and image User Inputs. `preflight` in
+`pipeline/llm.py` checks this tag against `ollama list` before every run and
+aborts when it is missing. The tag in `ollama list` must match `MODEL` exactly,
+suffix for suffix; `qwen3.5:4b` and `qwen3.5:4b-q4_K_M` are different tags to
+that check.
 
 Keep one request in flight at a time. Set this once, as a user environment
 variable, then restart the Ollama service:
@@ -106,23 +113,51 @@ variable, then restart the Ollama service:
 [Environment]::SetEnvironmentVariable("OLLAMA_NUM_PARALLEL", "1", "User")
 ```
 
-Smoke test the text model and watch VRAM:
+### Size the context window to the card
+
+Model weights are not the whole VRAM cost. The KV cache is sized by the context
+window, and it is the larger variable. Budget for an 8 GB card:
+
+| Item | Approximate VRAM |
+|---|---|
+| `qwen3.5:4b` weights | 2.6 GB |
+| KV cache at `num_ctx` 32768 | 2.4 GB |
+| Windows desktop on the same GPU | 0.5 GB |
+| Total at the 32768 default | 5.5 GB |
+
+The 32768 default fits an 8 GB card with headroom, so no override is needed.
+Set `OLLAMA_NUM_CTX` in `.env` only if `ollama ps` shows a spill.
+
+These figures are estimates. `ollama ps` on the real machine is the
+measurement; the table is only for choosing a starting point.
+
+Smoke test the model and confirm it is fully on the GPU:
 
 ```powershell
 nvidia-smi --query-gpu=memory.used --format=csv
-ollama run qwen3:8b-q4_K_M "Reply with the single word: ready"
+ollama run qwen3.5:4b "Reply with the single word: ready"
+ollama ps
 nvidia-smi --query-gpu=memory.used --format=csv
 ```
+
+`ollama ps` prints a PROCESSOR column. `100% GPU` is the required result. Any
+CPU percentage means the model has spilled and the run will be slow. Lower
+`OLLAMA_NUM_CTX` and repeat.
+
+Note that `ollama run` uses its own context setting, not the pipeline's. Repeat
+this `ollama ps` check during the real run in Step 7, which is where the
+pipeline's own `num_ctx` and its 25-comment classification batch apply.
 
 ### Evidence
 
 | Item | Value | Recorded |
 |---|---|---|
 | Ollama version | | |
-| `qwen3:8b-q4_K_M` digest and size | | |
-| `qwen3-vl:8b-instruct-q4_K_M` digest and size | | |
+| `qwen3.5:4b` digest and size | | |
 | `nvidia-smi` used VRAM before inference | | |
 | `nvidia-smi` used VRAM after inference | | |
+| `ollama ps` PROCESSOR column | | |
+| `OLLAMA_NUM_CTX` value, or omitted | | |
 | Port 11434 reachable only on loopback | | |
 
 ---
@@ -167,13 +202,12 @@ The backend reads its configuration from the environment. `server.py` loads a
 `.env` file next to itself at import time, so a `.env` file is the simplest
 route. `.gitignore` already excludes it.
 
-Create `.env` in the repository root with these four lines:
+Create `.env` in the repository root with these lines:
 
 ```text
 YOUTUBE_API_KEY=<your YouTube Data API v3 key>
 APP_PASSWORD=<a long unique shared password>
-OLLAMA_TEXT_MODEL=qwen3:8b-q4_K_M
-OLLAMA_VISION_MODEL=qwen3-vl:8b-instruct-q4_K_M
+OLLAMA_MODEL=qwen3.5:4b
 ```
 
 Notes on each:
@@ -184,9 +218,11 @@ Notes on each:
 - The server refuses to start when `APP_PASSWORD` is missing, empty, or only
   whitespace. That is deliberate: a server that starts without a password
   publishes the whole workspace to whoever finds the tunnel URL.
-- `OLLAMA_TEXT_MODEL` must be set. `adapter.py` currently falls back to
-  `qwen3:14b-q4_K_M`, which is not the pinned model and is roughly 9 GB.
-  Setting it here pins the correct model regardless of that default.
+- `OLLAMA_MODEL` is the variable `adapter.py` reads. Its default is already
+  `qwen3.5:4b`, so the line is optional; setting it makes the pinned tag
+  explicit and survives a default changing later.
+- `OLLAMA_NUM_CTX` defaults to 32768, which fits an 8 GB card with this model.
+  Add it only if `ollama ps` shows a spill. See the sizing table in Step 2.
 - `config.py` is only used by the `run.py` command-line pipeline. The web
   backend never imports it. You do not need to create or edit it for this
   deployment.
@@ -204,6 +240,7 @@ git check-ignore -v .env config.py data/
 |---|---|---|
 | `YOUTUBE_API_KEY` set, non-empty | | |
 | `APP_PASSWORD` set, non-empty | | |
+| `OLLAMA_MODEL` matches a tag in `ollama list` | | |
 | `.env` ignored by Git | | |
 | `config.py` and `data/` ignored by Git | | |
 
@@ -378,6 +415,19 @@ be one of `joy`, `anger`, `sadness`, `fear`, `other_neutral`.
 Open `report.pdf`. The Theme, Key Message, Sentiment, and Emotion sections
 must render with no missing-field errors.
 
+While classification is running, check the split from a PowerShell window on
+the workstation:
+
+```powershell
+ollama ps
+```
+
+This is the check that matters. It uses the pipeline's own context setting and
+its 25-comment batch, unlike the Step 2 smoke test. The PROCESSOR column must
+read `100% GPU`. Any CPU percentage means the model has spilled into shared
+memory and the run is proceeding at roughly CPU speed. Let the run finish and
+record the number. Lower `OLLAMA_NUM_CTX` before the next run.
+
 Record the total comment count and the wall-clock duration. If the Session has
 roughly 3,000 comments, note how the duration compares to two hours. This is a
 sanity note only. There is no timing gate, and a slow run does not block
@@ -402,6 +452,7 @@ or schema to make a run succeed. Record the failure instead.
 | `comments.csv` header exact | | |
 | Affect labels inside locked sets | | |
 | PDF opens and renders every section | | |
+| `ollama ps` PROCESSOR during classification | | |
 | Total comments / duration | | |
 | Skip-pause Session reaches classify | | |
 
@@ -491,6 +542,12 @@ the service is not running. Launch the Ollama app, or run `ollama serve`.
 
 **Out-of-memory or CUDA errors during classification.** Something else is
 holding VRAM. Check `nvidia-smi`, and confirm `OLLAMA_NUM_PARALLEL` is `1`.
+
+**The run works but is far slower than expected.** The model has spilled into
+shared system memory. Run `ollama ps` during classification. If PROCESSOR shows
+any CPU percentage, lower `OLLAMA_NUM_CTX` in `.env` and restart the
+backend. Close other GPU consumers first, including a browser with hardware
+acceleration on. See the sizing table in Step 2.
 
 **The public URL stopped working.** `cloudflared` restarted and generated a
 new hostname. Read the current one from its window and share it again.

@@ -88,27 +88,16 @@ def run(meta_df, cfg: PipelineConfig, context_map=None,
     grounded, points = [], []
     context_map = dict(context_map or {})
 
-    images_submitted = any(images for images in (images_map or {}).values())
-    try:
-        for group, images in (images_map or {}).items():
-            if not images:
-                continue
-            observations = llm.extract_image_context(images, cfg)
-            if isinstance(observations, (list, tuple)):
-                observations = "\n".join(str(item) for item in observations)
-            existing = context_map.get(group, "")
-            context_map[group] = "\n\n".join(part for part in (
-                existing, "IMAGE OBSERVATIONS:\n" + str(observations)
-            ) if part)
-    finally:
-        # Best-effort: only unload the vision model if it was actually
-        # loaded (i.e. at least one image was submitted), and never let
-        # an unload failure mask the original extraction error.
-        if images_submitted:
-            try:
-                llm.unload(cfg.VISION_MODEL, cfg)
-            except Exception:
-                pass
+    for group, images in (images_map or {}).items():
+        if not images:
+            continue
+        observations = llm.extract_image_context(images, cfg)
+        if isinstance(observations, (list, tuple)):
+            observations = "\n".join(str(item) for item in observations)
+        existing = context_map.get(group, "")
+        context_map[group] = "\n\n".join(part for part in (
+            existing, "IMAGE OBSERVATIONS:\n" + str(observations)
+        ) if part)
 
     for group, sub in meta_df.groupby("group", sort=False):
         kinds = [k for k in sub["kind"].unique() if k in LENS]
@@ -222,17 +211,9 @@ def draft_from_inputs(text, images, cfg: PipelineConfig, *, id_factory=uuid.uuid
         return []
 
     material_parts = [text] if text else []
-    images_submitted = bool(images)
-    try:
-        if images:
-            observations = llm.extract_image_context(images, cfg)
-            material_parts.append("IMAGE OBSERVATIONS:\n" + str(observations))
-    finally:
-        if images_submitted:
-            try:
-                llm.unload(cfg.VISION_MODEL, cfg)
-            except Exception:
-                pass
+    if images:
+        observations = llm.extract_image_context(images, cfg)
+        material_parts.append("IMAGE OBSERVATIONS:\n" + str(observations))
 
     material = "\n\n".join(material_parts)
     result = llm.ask_json(

@@ -27,14 +27,8 @@ def _load_cfg() -> PipelineConfig:
         YOUTUBE_API_KEY=_config_module.YOUTUBE_API_KEY,
         OLLAMA_BASE_URL=getattr(
             _config_module, "OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        TEXT_MODEL=getattr(
-            _config_module, "TEXT_MODEL", "qwen3:14b-q4_K_M"),
-        VISION_MODEL=getattr(
-            _config_module, "VISION_MODEL", "qwen3-vl:8b-instruct-q4_K_M"),
-        OLLAMA_TEXT_NUM_CTX=getattr(
-            _config_module, "OLLAMA_TEXT_NUM_CTX", 32768),
-        OLLAMA_VISION_NUM_CTX=getattr(
-            _config_module, "OLLAMA_VISION_NUM_CTX", 8192),
+        MODEL=getattr(_config_module, "MODEL", "qwen3.5:4b"),
+        OLLAMA_NUM_CTX=getattr(_config_module, "OLLAMA_NUM_CTX", 32768),
         OLLAMA_TIMEOUT_SECONDS=getattr(
             _config_module, "OLLAMA_TIMEOUT_SECONDS", 600),
         OLLAMA_KEEP_ALIVE=getattr(_config_module, "OLLAMA_KEEP_ALIVE", "10m"),
@@ -190,11 +184,10 @@ def main():
         if cfg.KEEP_INTERMEDIATE:
             print("  debug/")
     finally:
-        for model in (cfg.VISION_MODEL, cfg.TEXT_MODEL):
-            try:
-                llm.unload(model, cfg)
-            except Exception:
-                pass
+        try:
+            llm.unload(cfg.MODEL, cfg)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

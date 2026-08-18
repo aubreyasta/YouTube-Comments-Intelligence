@@ -25,8 +25,7 @@ _KEY_MESSAGE_KEYS = {"id", "label", "description", "included", "order", "edited"
 def make_cfg():
     return PipelineConfig(
         YOUTUBE_API_KEY="test", OLLAMA_BASE_URL="http://127.0.0.1:11434",
-        TEXT_MODEL="qwen3:8b", VISION_MODEL="qwen3-vl:8b",
-        OLLAMA_TEXT_NUM_CTX=32768, OLLAMA_VISION_NUM_CTX=16384,
+        MODEL="qwen3.5:4b", OLLAMA_NUM_CTX=32768,
         OLLAMA_TIMEOUT_SECONDS=2, OLLAMA_KEEP_ALIVE="5m",
         VIDEOS=[], SESSION_NAME="test", OUTPUT_DIR="output",
         KEEP_LANGUAGES={"en"}, MIN_COMMENT_LETTERS=4,

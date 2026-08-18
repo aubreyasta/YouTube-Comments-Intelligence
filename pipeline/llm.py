@@ -13,8 +13,8 @@ from urllib import error, parse, request
 
 from pipeline.config_types import PipelineConfig
 
-# Exported so a text-only caller can check the version floor without
-# preflight(), which also requires VISION_MODEL.
+# Exported so a caller can check the version floor without preflight(),
+# which also requires the model tag to be installed.
 MIN_OLLAMA_VERSION = (0, 12, 7)
 
 
@@ -270,11 +270,11 @@ def _validated_base_url(cfg: PipelineConfig) -> str:
 
 def _validate_config(cfg: PipelineConfig) -> str:
     base_url = _validated_base_url(cfg)
-    for name in ("TEXT_MODEL", "VISION_MODEL"):
+    for name in ("MODEL",):
         model = getattr(cfg, name)
         if not isinstance(model, str) or not model.strip() or model.lower().endswith("-cloud"):
             raise ValueError(f"{name} must be a nonempty local model tag and must not end in -cloud")
-    for name in ("OLLAMA_TEXT_NUM_CTX", "OLLAMA_VISION_NUM_CTX", "OLLAMA_TIMEOUT_SECONDS"):
+    for name in ("OLLAMA_NUM_CTX", "OLLAMA_TIMEOUT_SECONDS"):
         value = getattr(cfg, name)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"{name} must be a positive integer")
@@ -319,7 +319,7 @@ def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predic
         raise ValueError("prompt must be a nonempty string")
     if isinstance(num_predict, bool) or not isinstance(num_predict, int) or num_predict <= 0:
         raise ValueError("num_predict must be a positive integer")
-    chosen_model = model or (cfg.VISION_MODEL if images else cfg.TEXT_MODEL)
+    chosen_model = model or cfg.MODEL
     if not isinstance(chosen_model, str) or not chosen_model.strip() or chosen_model.lower().endswith("-cloud"):
         raise ValueError("model must be a nonempty local tag and must not end in -cloud")
     encoded_images = []
@@ -338,7 +338,7 @@ def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predic
         "options": {
             "temperature": 0,
             "seed": 0,
-            "num_ctx": cfg.OLLAMA_VISION_NUM_CTX if images or chosen_model == cfg.VISION_MODEL else cfg.OLLAMA_TEXT_NUM_CTX,
+            "num_ctx": cfg.OLLAMA_NUM_CTX,
             "num_predict": num_predict,
         },
     }
@@ -373,7 +373,7 @@ def preflight(cfg: PipelineConfig) -> None:
         item.get("name", item.get("model")): item.get("size")
         for item in models if isinstance(item, dict)
     }
-    missing = [tag for tag in (cfg.TEXT_MODEL, cfg.VISION_MODEL)
+    missing = [tag for tag in (cfg.MODEL,)
                if tag not in local or isinstance(local[tag], bool)
                or not isinstance(local[tag], (int, float)) or local[tag] <= 0]
     if missing:

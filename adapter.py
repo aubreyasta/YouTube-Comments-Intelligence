@@ -332,13 +332,8 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
         YOUTUBE_API_KEY=os.environ.get("YOUTUBE_API_KEY", ""),
         OLLAMA_BASE_URL=os.environ.get(
             "OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        TEXT_MODEL=os.environ.get("OLLAMA_TEXT_MODEL", "qwen3:14b-q4_K_M"),
-        VISION_MODEL=os.environ.get(
-            "OLLAMA_VISION_MODEL", "qwen3-vl:8b-instruct-q4_K_M"),
-        OLLAMA_TEXT_NUM_CTX=int(os.environ.get(
-            "OLLAMA_TEXT_NUM_CTX", "32768")),
-        OLLAMA_VISION_NUM_CTX=int(os.environ.get(
-            "OLLAMA_VISION_NUM_CTX", "8192")),
+        MODEL=os.environ.get("OLLAMA_MODEL", "qwen3.5:4b"),
+        OLLAMA_NUM_CTX=int(os.environ.get("OLLAMA_NUM_CTX", "32768")),
         OLLAMA_TIMEOUT_SECONDS=int(os.environ.get(
             "OLLAMA_TIMEOUT_SECONDS", "600")),
         OLLAMA_KEEP_ALIVE=os.environ.get("OLLAMA_KEEP_ALIVE", "10m"),
@@ -1213,9 +1208,8 @@ def _execute(run_id: str) -> None:
         _push(run_id, "error", "Run failed", 0, detail=err_str)
     finally:
         if cfg is not None:
-            for model in (cfg.VISION_MODEL, cfg.TEXT_MODEL):
-                try:
-                    pipeline_llm.unload(model, cfg)
-                except Exception:
-                    logger.warning("could not unload Ollama model %s", model,
-                                   exc_info=True)
+            try:
+                pipeline_llm.unload(cfg.MODEL, cfg)
+            except Exception:
+                logger.warning("could not unload Ollama model %s", cfg.MODEL,
+                               exc_info=True)

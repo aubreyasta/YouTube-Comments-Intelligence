@@ -47,15 +47,13 @@ SESSION_NAME = ""
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 # ---------------------------------------------------------- local Ollama/Qwen
-# Ollama must be running locally with both exact tags installed. The pipeline
+# Ollama must be running locally with this exact tag installed. The pipeline
 # never pulls models automatically:
-#   ollama pull qwen3:14b-q4_K_M
-#   ollama pull qwen3-vl:8b-instruct-q4_K_M
+#   ollama pull qwen3.5:4b
+# One multimodal model serves both text and image inputs.
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-TEXT_MODEL = "qwen3:14b-q4_K_M"
-VISION_MODEL = "qwen3-vl:8b-instruct-q4_K_M"
-OLLAMA_TEXT_NUM_CTX = 32768
-OLLAMA_VISION_NUM_CTX = 8192
+MODEL = "qwen3.5:4b"
+OLLAMA_NUM_CTX = 32768
 OLLAMA_TIMEOUT_SECONDS = 600
 OLLAMA_KEEP_ALIVE = "10m"
 
