@@ -56,8 +56,7 @@ def make_cfg(batch_size=1):
         "KEEP_LANGUAGES": {"en"}, "MIN_COMMENT_LETTERS": 4,
         "MAX_COMMENTS_PER_VIDEO": 100, "CODEBOOK_SAMPLE_SIZE": 10,
         "CODEBOOK_SAMPLE_MAX": 50, "CLASSIFY_BATCH_SIZE": batch_size,
-        "UNCLASSIFIED_LIMIT": 30, "EMOTION_MODEL": "emotion",
-        "SENTIMENT_MODEL": "sentiment", "REPORT_LANGUAGE": "English",
+        "UNCLASSIFIED_LIMIT": 30, "REPORT_LANGUAGE": "English",
         "CAMPAIGN_CONTEXT": "",
     }
     parameters = inspect.signature(PipelineConfig).parameters

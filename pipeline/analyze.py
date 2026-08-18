@@ -10,7 +10,7 @@ labels to produce percentages.
   classify()  LLM labels every comment; pt__ columns track Key Message mentions.
   extend()    if "Other" is too large, one top-up pass over that subset.
   summarise() count labels -> the two tables the report reasons over.
-  affect()    local HuggingFace, runs both emotion and sentiment models.
+  affect()    count the sentiment/emotion labels classify() already wrote.
 """
 
 import re
@@ -57,12 +57,28 @@ THEMES (pick exactly one name, or "Other" if none fit):
 BRIEF POINTS for this video (list any the comment echoes):
 {points}
 
+SENTIMENT (pick exactly one):
+- positive: the comment expresses approval, liking, praise, or support.
+- negative: the comment expresses disapproval, dislike, complaint, or attack.
+- neutral: the comment is factual, mixed, or its polarity is unclear. Use
+  neutral rather than guessing.
+
+EMOTION (pick exactly one):
+- joy: happiness, delight, amusement, excitement.
+- anger: irritation, outrage, contempt.
+- sadness: disappointment, grief, regret.
+- fear: worry, anxiety, dread.
+- other_neutral: no clear emotion, or an emotion outside the four above
+  (surprise and disgust belong here).
+
 COMMENTS:
 {comments}
 
 Return a JSON array, one entry per comment:
 [{{"index": <int>, "theme": "<theme name or Other>",
-   "echoed": [<point labels that appear in the comment>]}}]
+   "echoed": [<point labels that appear in the comment>],
+   "sentiment": "<positive|negative|neutral>",
+   "emotion": "<joy|anger|sadness|fear|other_neutral>"}}]
 
 Every index must appear. Use "Other" when no theme fits.
 Valid theme names: {theme_names}
@@ -142,7 +158,8 @@ def build(df, summary, cfg: "PipelineConfig"):
 def classify(df, themes, points, cfg: "PipelineConfig" = None,
              on_progress: Callable[[int, int], None] | None = None):
     """
-    LLM labels every comment with a theme and mentioned Key Messages.
+    LLM labels every comment with a theme, mentioned Key Messages, a
+    sentiment, and an emotion.
 
     Returns (df_with_new_cols, columns) where columns maps
     pt__slug -> original label string.
@@ -152,6 +169,8 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
     """
     df = df.copy()
     df["theme"] = "Other"
+    df["sentiment"] = pd.NA
+    df["emotion"] = pd.NA
 
     theme_names = [t["name"] for t in themes]
 
@@ -258,6 +277,8 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
         if any(row.get("theme") not in theme_names + ["Other"]
                or not isinstance(row.get("echoed"), list)
                or not set(row["echoed"]).issubset(point_labels)
+               or row.get("sentiment") not in llm.SENTIMENT_LABELS
+               or row.get("emotion") not in llm.EMOTION_LABELS
                for row in results):
             raise ValueError("Classification batch returned invalid labels")
 
@@ -265,6 +286,8 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
         for row in results:
             idx = row["index"]
             df.at[idx, "theme"] = row["theme"]
+            df.at[idx, "sentiment"] = row["sentiment"]
+            df.at[idx, "emotion"] = row["emotion"]
             for label in row["echoed"]:
                 df.at[idx, label_to_col[label]] = True
 
@@ -311,6 +334,9 @@ def extend(df, themes, points, summary, cfg: "PipelineConfig",
     # Reclassify only the Other rows against the extended set.
     sub_df, _ = classify(leftover, extended, points, cfg)
     df = df.copy()
+    # Copy back theme and pt__ only. The top-up pass reclassifies one subset,
+    # so taking its sentiment/emotion would leave the corpus with affect
+    # labels from two different prompts. First-pass affect stands.
     df.loc[leftover.index, "theme"] = sub_df["theme"]
     # Update pt__ columns from the reclassified subset too.
     for col in [c for c in df.columns if c.startswith("pt__")]:
@@ -350,54 +376,38 @@ def summarise(df, columns):
 
 def affect(df, cfg: "PipelineConfig"):
     """
-    Runs both HuggingFace models locally over the full base. No tokens
-    consumed whatever the corpus size. First run downloads roughly 500 MB.
-
-    Both models run sequentially. Labels are the raw model labels with no
-    remapping. Weak evidence - per-comment inference with no context means
-    sarcasm and measured criticism both read as anger. The low_confidence_pct
-    and caveat travel with the numbers so the report cannot present them
-    without the disclaimer.
+    Count the sentiment and emotion labels the classification pass already
+    wrote. No model runs here: the labels arrive with the Theme and Key
+    Message labels from one Ollama request per batch.
 
     Returns:
-        (df, {"emotion": {"table": ..., "low_confidence_pct": ..., "caveat": ...},
-              "sentiment": {"table": ..., "low_confidence_pct": ..., "caveat": ...}})
+        (df, {"emotion": {"table": ..., "caveat": ...},
+              "sentiment": {"table": ..., "caveat": ...}})
 
-    # ponytail: two sequential local inference passes; if memory-bound,
-    # could share tokenizer or run lazily per model.
+    cfg is accepted because PipelineConfig is the pipeline contract, even
+    though this function reads nothing from it.
     """
-    from transformers import pipeline as hf
+    caveat = ("Labels were assigned per comment by the local Qwen "
+              "classification pass.")
+    allowed = {"sentiment": set(llm.SENTIMENT_LABELS),
+               "emotion": set(llm.EMOTION_LABELS)}
 
     df = df.copy()
     result = {}
 
-    for col_prefix, model_name in (("emotion", cfg.EMOTION_MODEL),
-                                   ("sentiment", cfg.SENTIMENT_MODEL)):
-        print(f"    loading {model_name}")
-        classifier = hf("text-classification", model=model_name)
-        preds = classifier(df["comment"].tolist(), truncation=True,
-                           max_length=128, batch_size=32)
+    for column in ("emotion", "sentiment"):
+        if column not in df.columns:
+            raise ValueError(
+                f"affect() requires the '{column}' column written by classify()")
+        values = df[column].dropna()
+        unknown = set(values) - allowed[column]
+        if unknown:
+            raise ValueError(
+                f"affect() found {column} values outside the locked set: "
+                f"{sorted(unknown)}")
 
-        df[col_prefix] = [r["label"] for r in preds]
-        df[f"{col_prefix}_confidence"] = [round(r["score"], 3) for r in preds]
-
-        low = float((df[f"{col_prefix}_confidence"] < 0.6).mean() * 100)
-        print(f"    {col_prefix}: {low:.0f}% of labels below 0.6 confidence")
-        if low > 40:
-            print(f"    WARNING ({col_prefix}): mostly low-confidence. "
-                  f"Directional at best.")
-
-        table = (pd.crosstab(df["group"], df[col_prefix], normalize="index")
+        table = (pd.crosstab(df["group"], df[column], normalize="index")
                  .mul(100).round(1))
-        result[col_prefix] = {
-            "table": table,
-            "low_confidence_pct": low,
-            "caveat": (
-                f"Model: {model_name}. {low:.0f}% of labels scored below "
-                f"0.6 confidence. Labels are assigned per comment with no "
-                f"context, so sarcasm and measured criticism are frequently "
-                f"misread."
-            ),
-        }
+        result[column] = {"table": table, "caveat": caveat}
 
     return df, result

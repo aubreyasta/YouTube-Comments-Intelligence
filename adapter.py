@@ -359,8 +359,6 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
         CODEBOOK_SAMPLE_MAX=500,
         CLASSIFY_BATCH_SIZE=25,
         UNCLASSIFIED_LIMIT=30,
-        EMOTION_MODEL="StevenLimcorn/indonesian-roberta-base-emotion-classifier",
-        SENTIMENT_MODEL="w11wo/indonesian-roberta-base-sentiment-classifier",
         REPORT_LANGUAGE="English",
         KEEP_INTERMEDIATE=False,
     )
@@ -1159,14 +1157,6 @@ def _execute(run_id: str) -> None:
               detail=f"other_share={other_share:.1f}")
 
         # --- 10. Emotion and sentiment ---------------------------------------
-        # Best-effort: free VRAM before the HuggingFace models load. A
-        # failure here must not abort the run; final cleanup below still
-        # retries the unload.
-        try:
-            pipeline_llm.unload(cfg.TEXT_MODEL, cfg)
-        except Exception:
-            logger.warning("could not unload Ollama model %s before "
-                           "emotion/sentiment", cfg.TEXT_MODEL, exc_info=True)
         _push(run_id, "emotion", "Running emotion and sentiment analysis", 67)
         base_df, affect_result = analyze.affect(base_df, cfg)
         _push(run_id, "emotion", "Emotion and sentiment analysis complete", 75,

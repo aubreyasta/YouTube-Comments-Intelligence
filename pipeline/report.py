@@ -494,8 +494,7 @@ def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None
 # comments.csv header, fixed order. key_message_<slug> columns are
 # appended after this, one per pt__ column, in Key Message order.
 COMMENTS_HEADER = ["video_id", "group", "comment", "likes", "language",
-                   "theme", "sentiment", "sentiment_confidence",
-                   "emotion", "emotion_confidence"]
+                   "theme", "sentiment", "emotion"]
 
 # lang is the code identifier for the language column; see AGENTS.md
 # terminology mapping.

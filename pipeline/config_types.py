@@ -23,13 +23,11 @@ class PipelineConfig:
     CODEBOOK_SAMPLE_MAX: int
     CLASSIFY_BATCH_SIZE: int
     UNCLASSIFIED_LIMIT: int       # percent, e.g. 30
-    EMOTION_MODEL: str
-    SENTIMENT_MODEL: str
     REPORT_LANGUAGE: str
     CAMPAIGN_CONTEXT: str | dict
     KEEP_INTERMEDIATE: bool = False
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
-    TEXT_MODEL: str = "qwen3:14b-q4_K_M"
+    TEXT_MODEL: str = "qwen3:8b-q4_K_M"
     VISION_MODEL: str = "qwen3-vl:8b-instruct-q4_K_M"
     OLLAMA_TEXT_NUM_CTX: int = 32768
     OLLAMA_VISION_NUM_CTX: int = 8192

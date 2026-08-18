@@ -13,9 +13,8 @@ from urllib import error, parse, request
 
 from pipeline.config_types import PipelineConfig
 
-# Exported so tests/bench_qwen.py's text-only preflight doesn't duplicate
-# this floor; that script cannot call preflight() itself since it also
-# requires VISION_MODEL, which bench_qwen.py never loads.
+# Exported so a text-only caller can check the version floor without
+# preflight(), which also requires VISION_MODEL.
 MIN_OLLAMA_VERSION = (0, 12, 7)
 
 
@@ -112,6 +111,10 @@ RESULTS_PROSE_SCHEMA = {
 }
 
 
+SENTIMENT_LABELS = ("positive", "negative", "neutral")
+EMOTION_LABELS = ("joy", "anger", "sadness", "fear", "other_neutral")
+
+
 def classification_schema(theme_names: list[str], point_labels: list[str]) -> dict:
     """Build the strict per-batch classification schema."""
     themes = list(dict.fromkeys([*theme_names, "Other"]))
@@ -133,8 +136,12 @@ def classification_schema(theme_names: list[str], point_labels: list[str]) -> di
                 "index": {"type": "integer"},
                 "theme": {"type": "string", "enum": themes},
                 "echoed": echoed_schema,
+                "sentiment": {"type": "string",
+                              "enum": list(SENTIMENT_LABELS)},
+                "emotion": {"type": "string",
+                            "enum": list(EMOTION_LABELS)},
             },
-            "required": ["index", "theme", "echoed"],
+            "required": ["index", "theme", "echoed", "sentiment", "emotion"],
             "additionalProperties": False,
         },
     }
@@ -219,7 +226,7 @@ def validate_classification(value: object, expected_indices: list[int],
     allowed_points = set(point_labels)
     seen = []
     for row in value:
-        row = _object(row, {"index", "theme", "echoed"}, "classification row")
+        row = _object(row, {"index", "theme", "echoed", "sentiment", "emotion"}, "classification row")
         index = row["index"]
         if isinstance(index, bool) or not isinstance(index, int):
             raise ValueError("classification index must be an integer, not a boolean")
@@ -230,6 +237,10 @@ def validate_classification(value: object, expected_indices: list[int],
             raise ValueError("echoed must be a list of strings")
         if len(echoed) != len(set(echoed)) or not set(echoed) <= allowed_points:
             raise ValueError("echoed must contain unique allowed Key Message labels")
+        if row["sentiment"] not in SENTIMENT_LABELS:
+            raise ValueError("classification contains an unknown sentiment")
+        if row["emotion"] not in EMOTION_LABELS:
+            raise ValueError("classification contains an unknown emotion")
         seen.append(index)
     if len(seen) != len(set(seen)) or set(seen) != set(expected_indices) or len(seen) != len(expected_indices):
         raise ValueError("classification indices must exactly cover the requested indices once")

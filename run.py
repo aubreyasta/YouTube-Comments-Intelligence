@@ -48,8 +48,6 @@ def _load_cfg() -> PipelineConfig:
         CODEBOOK_SAMPLE_MAX=_config_module.CODEBOOK_SAMPLE_MAX,
         CLASSIFY_BATCH_SIZE=_config_module.CLASSIFY_BATCH_SIZE,
         UNCLASSIFIED_LIMIT=_config_module.UNCLASSIFIED_LIMIT,
-        EMOTION_MODEL=_config_module.EMOTION_MODEL,
-        SENTIMENT_MODEL=_config_module.SENTIMENT_MODEL,
         REPORT_LANGUAGE=_config_module.REPORT_LANGUAGE,
         CAMPAIGN_CONTEXT=_config_module.CAMPAIGN_CONTEXT,
         KEEP_INTERMEDIATE=getattr(_config_module, "KEEP_INTERMEDIATE", False),
@@ -63,16 +61,11 @@ def preflight(cfg: PipelineConfig):
     Without this a missing PDF engine fails at the very last step, after
     five model calls and a model download have already been paid for.
     """
-    from importlib.util import find_spec
-
     problems = []
     if "PASTE" in cfg.YOUTUBE_API_KEY or not cfg.YOUTUBE_API_KEY:
         problems.append("YOUTUBE_API_KEY is not set in config.py")
     if not cfg.VIDEOS:
         problems.append("VIDEOS is empty in config.py")
-    if not find_spec("transformers"):
-        problems.append("transformers is not installed "
-                        "(pip install transformers torch)")
     if not report.pdf_engine():
         problems.append(
             "no PDF engine found. Install one:\n"
@@ -82,12 +75,6 @@ def preflight(cfg: PipelineConfig):
         raise SystemExit("Cannot start:\n  - " + "\n  - ".join(problems))
 
     llm.preflight(cfg)
-
-    if cfg.EMOTION_MODEL:
-        print(f"    emotion model:    {cfg.EMOTION_MODEL}")
-    if cfg.SENTIMENT_MODEL:
-        print(f"    sentiment model:  {cfg.SENTIMENT_MODEL}")
-    print("    (models download on first run, ~500 MB total)")
 
 
 def run_folder(cfg: PipelineConfig) -> str:
@@ -180,23 +167,8 @@ def main():
 
         theme_table, transfer_table = analyze.summarise(base, columns)
 
-        # Best-effort: free VRAM before the HuggingFace models load. A
-        # failure here must not abort the run; the finally block below
-        # still retries the unload at the end.
-        try:
-            llm.unload(cfg.TEXT_MODEL, cfg)
-        except Exception:
-            pass
         print("[4/5] Emotion and sentiment")
         base, affect_result = analyze.affect(base, cfg)
-
-        emotion_res = affect_result.get("emotion", {})
-        sentiment_res = affect_result.get("sentiment", {})
-        print(f"    emotion low-confidence:   {emotion_res.get('low_confidence_pct', 0):.0f}%")
-        print(f"    sentiment low-confidence: {sentiment_res.get('low_confidence_pct', 0):.0f}%")
-
-        if affect_result.get("emotion", {}).get("low_confidence_pct", 0) > 40:
-            print("    WARNING (emotion): mostly low-confidence. Directional at best.")
 
     # other_share is post-recalc from extend(); use it directly.
         if other_share > 40:

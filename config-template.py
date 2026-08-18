@@ -91,14 +91,6 @@ CLASSIFY_BATCH_SIZE = 25
 # schema, then reclassify only that subset. Set to 100 to disable.
 UNCLASSIFIED_LIMIT = 30
 
-# ---------------------------------------------------------------- emotion
-# Both models always run, locally via HuggingFace, so they cost nothing in
-# tokens, but they download ~500 MB the first time and are slow without a GPU.
-#   emotion   -> happy / anger / sadness / fear / love
-#   sentiment -> positive / neutral / negative
-EMOTION_MODEL = "StevenLimcorn/indonesian-roberta-base-emotion-classifier"
-SENTIMENT_MODEL = "w11wo/indonesian-roberta-base-sentiment-classifier"
-
 # Optional hints to steer the grounded brief. Keys must match "group".
 CAMPAIGN_CONTEXT = {
     # "Campaign A": "Indonesian launch, mid-size SUV, black special edition",
