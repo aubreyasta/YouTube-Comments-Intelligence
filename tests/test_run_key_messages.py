@@ -56,7 +56,7 @@ _RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
 _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order"}
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts",
+    "error", "briefPoints", "artifacts", "skipPause",
 }
 
 
@@ -97,8 +97,7 @@ def _fake_comments_df():
     return pd.DataFrame([
         {"video_id": "abcdefghijk", "group": "C", "comment": "Great value",
          "likes": 3, "reply_count": 0, "in_base": True, "theme": "Other",
-         "emotion": "neutral", "emotion_confidence": 0.9,
-         "sentiment": "positive", "sentiment_confidence": 0.9},
+         "emotion": "neutral", "sentiment": "positive"},
     ])
 
 
@@ -113,9 +112,26 @@ def _fake_meta_df():
 def _fake_affect_result():
     empty_table = pd.DataFrame()
     return {
-        "emotion": {"table": empty_table, "low_confidence_pct": 0.0, "caveat": ""},
-        "sentiment": {"table": empty_table, "low_confidence_pct": 0.0, "caveat": ""},
+        "emotion": {"table": empty_table, "caveat": ""},
+        "sentiment": {"table": empty_table, "caveat": ""},
     }
+
+
+def _terminate_stray_runs():
+    """The one-run guard in server.start_run() is global. A test that
+    fails before its run reaches proceed leaves that run in `running`
+    forever, and every later test then gets a 409 body with no `id` key.
+    Flipping strays to `failed` in teardown keeps one failure to one
+    test."""
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "UPDATE runs SET state = 'failed' "
+            "WHERE state IN ('queued', 'running')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _fake_render(markdown, out_dir, cfg, debug_dir, _df=None, _transfer=None):
@@ -664,6 +680,8 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"  ERROR {t.__name__}: {type(exc).__name__}: {exc}")
             failed += 1
+        finally:
+            _terminate_stray_runs()
 
     db._DB_PATH = _ORIG_DB_PATH
     storage._ROOT = _ORIG_STORAGE_ROOT

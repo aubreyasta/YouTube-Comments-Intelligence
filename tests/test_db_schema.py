@@ -196,6 +196,86 @@ def test_init_migrates_pre_stage_database():
           "NULL rejected, new rows default to 'queued'")
 
 
+def test_fresh_db_runs_skip_pause_column_shape():
+    _fresh_db()
+    conn = db.get_conn()
+    try:
+        cols = {row[1]: row for row in conn.execute("PRAGMA table_info(runs)")}
+    finally:
+        conn.close()
+    assert "skip_pause" in cols, "runs.skip_pause missing from a fresh database"
+    row = cols["skip_pause"]
+    # PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk)
+    assert row[2] == "INTEGER", row[2]
+    assert row[3] == 1, "runs.skip_pause is not NOT NULL"
+    assert row[4] == "0", row[4]
+    print("  ok  a fresh db.init() database has runs.skip_pause "
+          "INTEGER NOT NULL DEFAULT 0")
+
+
+def test_init_migrates_pre_skip_pause_database():
+    """A database created before `runs.skip_pause` existed (simulated
+    here by creating the `runs` table without that column, bypassing
+    db._SCHEMA) must gain `skip_pause INTEGER NOT NULL DEFAULT 0` the
+    next time db.init() opens it, without losing existing rows."""
+    tmp_dir = tempfile.mkdtemp()
+    path = __import__("pathlib").Path(tmp_dir) / "app.db"
+    saved_path = db._DB_PATH
+    db._DB_PATH = path
+    try:
+        pre_conn = sqlite3.connect(path)
+        pre_conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        pre_conn.execute(
+            "CREATE TABLE runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+            "state TEXT NOT NULL DEFAULT 'queued', stage TEXT NOT NULL DEFAULT 'queued', "
+            "started_at TEXT, finished_at TEXT, error TEXT)"
+        )
+        session_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        pre_conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) "
+            "VALUES (?, 'pre-skip-pause', 't', 't')", (session_id,))
+        pre_conn.execute(
+            "INSERT INTO runs (id, session_id) VALUES (?, ?)", (run_id, session_id))
+        pre_conn.commit()
+        pre_conn.close()
+
+        cols_before = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(runs)")}
+        assert "skip_pause" not in cols_before, "test setup already has a skip_pause column"
+
+        db.init()
+
+        conn = db.get_conn()
+        cols_after = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        assert "skip_pause" in cols_after, (
+            "db.init() did not add runs.skip_pause to a pre-skip_pause database")
+        row = conn.execute("SELECT skip_pause FROM runs WHERE id = ?", (run_id,)).fetchone()
+        assert row["skip_pause"] == 0, row["skip_pause"]
+        conn.close()
+    finally:
+        db._DB_PATH = saved_path
+    print("  ok  db.init() migrates a pre-skip_pause database by adding "
+          "runs.skip_pause INTEGER NOT NULL DEFAULT 0, existing row reads 0")
+
+
+def test_init_idempotent_on_skip_pause_column():
+    conn = _fresh_db()
+    conn.close()
+    db.init()
+    db.init()
+    conn = db.get_conn()
+    try:
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(runs)")]
+    finally:
+        conn.close()
+    assert cols.count("skip_pause") == 1, cols
+    print("  ok  calling db.init() repeatedly raises nothing and leaves "
+          "exactly one runs.skip_pause column")
+
+
 def test_key_messages_orphan_session_rejected():
     conn = _fresh_db()
     try:
@@ -218,6 +298,9 @@ if __name__ == "__main__":
         test_init_migrates_pre_stage_database,
         test_key_messages_status_default_and_check,
         test_key_messages_row_defaults_and_fk_cascade,
+        test_fresh_db_runs_skip_pause_column_shape,
+        test_init_migrates_pre_skip_pause_database,
+        test_init_idempotent_on_skip_pause_column,
         test_key_messages_orphan_session_rejected,
     ]
     failed = 0

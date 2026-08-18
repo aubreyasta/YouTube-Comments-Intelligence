@@ -39,10 +39,14 @@ POINTS = [
      "description": "The product is built to last."},
 ]
 CANNED = {
-    0: {"theme": "Quality", "echoed": []},
-    1: {"theme": "Price", "echoed": ["value for money"]},
-    2: {"theme": "Quality", "echoed": ["durability"]},
-    3: {"theme": "Price", "echoed": []},
+    0: {"theme": "Quality", "echoed": [], "sentiment": "positive",
+        "emotion": "joy"},
+    1: {"theme": "Price", "echoed": ["value for money"],
+        "sentiment": "positive", "emotion": "joy"},
+    2: {"theme": "Quality", "echoed": ["durability"],
+        "sentiment": "neutral", "emotion": "other_neutral"},
+    3: {"theme": "Price", "echoed": [], "sentiment": "negative",
+        "emotion": "anger"},
 }
 
 
@@ -211,8 +215,7 @@ def test_comments_csv_header_order_and_empty_input():
     df = pd.DataFrame([
         {"video_id": "video_1", "group": "G1", "comment": "Hello",
          "likes": 3, "lang": "en", "theme": "Quality",
-         "sentiment": "positive", "sentiment_confidence": 0.9,
-         "emotion": "joy", "emotion_confidence": 0.8},
+         "sentiment": "positive", "emotion": "joy"},
     ])
     meta_df = pd.DataFrame([{"group": "G1", "video_id": "video_1"}])
 
@@ -223,13 +226,11 @@ def test_comments_csv_header_order_and_empty_input():
             header = next(csv_module.reader(fh))
     assert header == [
         "video_id", "group", "comment", "likes", "language", "theme",
-        "sentiment", "sentiment_confidence", "emotion",
-        "emotion_confidence"], f"comments.csv header mismatch: {header}"
+        "sentiment", "emotion"], f"comments.csv header mismatch: {header}"
 
     empty_df = pd.DataFrame(columns=[
         "video_id", "group", "comment", "likes", "lang", "theme",
-        "sentiment", "sentiment_confidence", "emotion",
-        "emotion_confidence"])
+        "sentiment", "emotion"])
     empty_meta = pd.DataFrame(columns=["group", "video_id"])
     with tempfile.TemporaryDirectory() as out_dir:
         report.export(empty_df, themes, transfer, affect_result, empty_meta,
@@ -270,6 +271,51 @@ def test_classification_schema_empty_points_forbids_enum():
     else:
         raise AssertionError("validate_classification allowed an echoed "
                              "label with an empty point_labels list")
+
+
+def test_out_of_set_affect_label_fails_atomically():
+    """
+    analyze.classify re-checks every returned row against
+    llm.SENTIMENT_LABELS and llm.EMOTION_LABELS before writing any cell,
+    because tests replace llm.classify_batch wholesale and bypass the
+    real boundary's validation. A row carrying an affect label outside
+    the locked sets must raise, not be written or silently repaired.
+    """
+    original = llm.classify_batch
+
+    def bad_affect_batch(prompt, expected_indices, theme_names, point_labels, cfg):
+        rows = canned_batch(prompt, expected_indices, theme_names,
+                            point_labels, cfg)
+        rows[0] = {**rows[0], "emotion": "excitement"}
+        return rows
+
+    llm.classify_batch = bad_affect_batch
+    try:
+        try:
+            analyze.classify(DF, THEMES, POINTS, make_cfg(2))
+        except ValueError as exc:
+            assert "invalid labels" in str(exc).lower(), str(exc)
+        else:
+            raise AssertionError("an out-of-set emotion label was accepted")
+    finally:
+        llm.classify_batch = original
+
+    def bad_sentiment_batch(prompt, expected_indices, theme_names, point_labels, cfg):
+        rows = canned_batch(prompt, expected_indices, theme_names,
+                            point_labels, cfg)
+        rows[0] = {**rows[0], "sentiment": "mixed"}
+        return rows
+
+    llm.classify_batch = bad_sentiment_batch
+    try:
+        try:
+            analyze.classify(DF, THEMES, POINTS, make_cfg(2))
+        except ValueError as exc:
+            assert "invalid labels" in str(exc).lower(), str(exc)
+        else:
+            raise AssertionError("an out-of-set sentiment label was accepted")
+    finally:
+        llm.classify_batch = original
 
 
 if __name__ == "__main__":

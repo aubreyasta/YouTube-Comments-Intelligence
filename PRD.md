@@ -104,27 +104,42 @@ Full root-cause narration for each commit below lives in that commit's message. 
   - Task D.1 partial: `docs/deployment.md` created as the workstation setup guide and evidence record. It carries the ordered procedure for all eight deployment steps plus empty evidence tables. No step has run: the editing machine is an RTX 3050 Laptop with 4096 MiB, and `qwen3:8b-q4_K_M` needs roughly 5GB, so every model-dependent step waits for the RTX 4060 Ti workstation.
   - Defect found while writing the guide, not fixed: `adapter.py:335` passes `os.environ.get("OLLAMA_TEXT_MODEL", "qwen3:14b-q4_K_M")`, so the web backend falls back to the retired 9GB model rather than the pinned `qwen3:8b-q4_K_M`. Task B.3 corrected the `PipelineConfig` dataclass default but not this explicit override. `run.py:31` and `config-template.py:52,55` carry the same stale tag on the CLI path. The deployment guide pins `OLLAMA_TEXT_MODEL` in `.env` so a correct deployment is unaffected, but the code default is wrong and needs its own task.
 
+- Uncommitted working tree, 2026-08-19: Wave T Tasks T1.1, T1.2, and T1.3 done. Three stale test files repaired; no production code changed. The suite is green for the first time since Wave A.
+  - T1.1 `tests/test_classify.py`: every `CANNED` entry now carries a `sentiment` and an `emotion` from the locked sets, the header assertion lists the shipped eight columns, and the dead confidence values are gone from both the populated fixture and the empty-frame column list. Added `test_out_of_set_affect_label_fails_atomically`, which drives an out-of-set `emotion` and an out-of-set `sentiment` through `llm.classify_batch` and requires `analyze.classify` to raise. The strict validator had only an accidental test before.
+  - T1.2 `tests/test_run_concurrency_guard.py`: the file asserted the retired per-Session guard and leaked a `queued` row that poisoned its own later tests. Each test now clears the `runs` table first, so order does not change the result. Same-Session conflicts assert the same-Session message; conflicts from another Session assert the cross-Session message. Added the three assertions Task A.3 named and no test covered: two concurrent starts leaving exactly one success and exactly one active run, which is what `BEGIN IMMEDIATE` buys; a rejected request leaving the prior run's row and files intact; a terminal run in another Session neither blocking a new start nor being deleted by it.
+  - T1.3 `tests/test_run_key_messages.py`: `_RUN_SNAPSHOT_KEYS` omitted `skipPause`, which `_ser_run` emits. That one missing key failed the exact-key assertion before its run reached `proceed`, abandoned that run in `running`, and 409'd six later tests into `KeyError: 'id'`. Added the key, deleted the dead `low_confidence_pct` from `_fake_affect_result` and the two confidence columns from `_fake_comments_df`, and added a `_terminate_stray_runs()` teardown that flips any leftover `queued`/`running` row to `failed` after every test, so one failure can no longer cascade.
+  - Verified in full: `python -m py_compile` clean on all three files. `tests/test_classify.py` 8/8, `tests/test_run_concurrency_guard.py` 6/6, `tests/test_run_key_messages.py` 10/10. The concurrency guard was rerun a second time and produced the same 6/6, which proves the order independence. The other 11 backend files pass unchanged: `test_asset_extraction.py` 3/3, `test_brief_key_messages.py` 5/5, `test_db_schema.py` 5/5, `test_evidence.py` 27/27, `test_key_messages_draft.py` 9/9, `test_key_messages_patch.py` 9/9, `test_report_key_messages_csv.py` 2/2, `test_report_sentiment_emotions_csv.py` 2/2, `test_report_themes_csv.py` 2/2, `test_run_artifacts.py` 10/10. `tests/e2e_product_flow.py` 15/15 with zero console errors, page errors, and failed requests. `node --check` clean on `app/app.js` and `app/live.js`. `git diff --check` clean. `git status --short` shows exactly `PRD.md` and the three test files. `sentiment_confidence`, `emotion_confidence`, and `low_confidence_pct` appear in none of `tests/test_classify.py`, `tests/test_run_key_messages.py`, or `pipeline/report.py`.
+  - Recorded, not a failure: `tests/test_run_concurrency_guard.py` and `tests/test_run_key_messages.py` each emit one `StarletteDeprecationWarning` about `httpx` under `starlette.testclient`. It blocks no assertion and belongs to no Wave T task.
+
+- Uncommitted working tree, 2026-08-19: Wave T Tasks T2.1, T2.2, T2.3, and T2.4 done and verified in full. Four new test files exist, `tests/test_db_schema.py` gained the migration assertions, and `server.py` carries the one production edit Wave T authorizes.
+  - T2.1 `tests/test_article_fetch_guard.py`, 10 assertions: the SSRF rejection list, a redirect chain that revalidates every hop, the DNS-rebinding pin, and the timeout fallback that returns empty text rather than raising. `socket.getaddrinfo` and `httpx.Client` are both stubbed, so no DNS query and no request leave the process. The `file://` case asserts `server.add_article`'s own regex pre-filter message, which differs from the private-address message because the URL never reaches `assets.fetch_article`.
+  - T2.2 `tests/test_basic_auth.py`, 6 assertions: fail-closed startup with `APP_PASSWORD` unset, the 401 challenge on static, API, and SSE paths, and an authenticated request on each. The non-ASCII password case is the one that matters: `secrets.compare_digest` over two `str` values raises `TypeError`, so a byte comparison is what keeps that path a 401 instead of a 500.
+  - T2.3 `tests/test_skip_pause.py`, 7 assertions, plus 3 added to `tests/test_db_schema.py`: the omitted, false, and true request bodies, a 422 on a non-boolean, `skipPause` as a real `bool` rather than int `0`/`1` in every snapshot, the skip branch reaching `classify` with no `/proceed` call, and the zero-included override still pausing. The schema additions cover `runs.skip_pause` on a fresh database, on a pre-`skip_pause` database the guarded `ALTER TABLE` migrates, and on a second `init()` proving idempotence.
+  - T2.4 `server.py` and `tests/test_sse_keepalive.py`, 7 assertions: `heartbeat_interval` moved from a `_generate()` local to a module-level `_SSE_HEARTBEAT_SECONDS = 15.0`, with its two references updated and no other behavior changed. The tests patch that constant to `0.2`, so the idle heartbeat, the timer reset on a real event, the terminal close, and the no-leak-after-early-disconnect case all run in seconds rather than minutes.
+  - Verified in full on 2026-08-19: `tests/test_article_fetch_guard.py` 10/10, `tests/test_basic_auth.py` 6/6, `tests/test_sse_keepalive.py` 7/7, `tests/test_skip_pause.py` 7/7, `tests/test_db_schema.py` 8/8, `tests/test_classify.py` 8/8, `tests/test_run_concurrency_guard.py` 6/6, `tests/test_run_key_messages.py` 10/10, `tests/test_evidence.py` 27/27, `tests/e2e_product_flow.py` 15/15. 94 assertions, 10 files, every exit code 0, no run over 8.3 seconds. `node --check app/app.js` exit 0. `git diff --check` exit 0. `git diff -- server.py` is +7 -3 and contains only the constant extraction. `tests/test_skip_pause.py` and `tests/test_sse_keepalive.py` were each run twice back to back and produced identical results. `app/self-check.js` does not exist; that check was skipped rather than inferred.
+  - Three defects were found and fixed during verification, all in the new tests and none in production. Two of them asserted a `/proceed` that production correctly refuses with 422 when no Key Message is included, so the fix was to prove the refusal and then include a message. The third was a pair of SSE reads with no wall-clock bound against a non-terminal run, which hung the suite indefinitely rather than failing.
+
 Wave A is implemented end to end and verified nowhere. Every test file named by Tasks A.1-A.5 is deliberately unwritten, and Task A.7 (read-only QA, whose command list is those files) was skipped by the user's decision on 2026-08-18. Testing across the remaining waves is deferred as a batch, not abandoned: no wave should record a pass it did not earn, and Waves B and C carry the same standing decision unless the user reverses it. What did run before the Wave A commit: `python -m py_compile db.py server.py adapter.py assets.py` exits zero, `git diff --check` is clean, and no excluded path is tracked. That is syntax and hygiene, not behavior.
 
 ### Outstanding verification debt
 
-Waves A, B, and C are implemented and verified nowhere. The user deferred testing as a batch across all three, on 2026-08-18. Nothing below has run. Nothing below may be recorded as passing until it does.
+The user deferred testing as a batch across Waves A, B, and C on 2026-08-18. Wave T pays that debt. As of 2026-08-19, every owed test file exists and passes; what remains owed is the three skipped QA passes and the end-to-end skip-pause coverage. Nothing may be recorded as passing until it runs.
 
-**Test files that must be written.** Each was named by its task and deliberately left unwritten.
+**Test files that were owed.** Each was named by its task and deliberately left unwritten. Every one now exists and passes; the table is retained as the coverage record.
 
 | File | Owning task | Covers |
 |---|---|---|
-| `tests/test_article_fetch_guard.py` | A.1 | SSRF rejection list, redirect chain, rebinding, timeout fallback |
-| `tests/test_basic_auth.py` | A.2 | Fail-closed startup, 401 challenge on every path type, SSE streaming |
-| `tests/test_run_concurrency_guard.py` | A.3 | Same-Session and cross-Session conflict, two concurrent starts, no destructive reject |
-| `tests/test_skip_pause.py` | A.4 | Omitted/false/true bodies, zero-included override, boolean `skipPause` in every snapshot |
-| `tests/test_sse_keepalive.py` | A.5 | Idle heartbeat, timer reset, terminal close, no leaked task |
-| `tests/test_db_schema.py` additions | A.4 | `runs.skip_pause` default on new and migrated databases |
+| ~~`tests/test_article_fetch_guard.py`~~ | A.1 | Written and verified under T2.1 on 2026-08-19, 10/10. No longer owed. |
+| ~~`tests/test_basic_auth.py`~~ | A.2 | Written and verified under T2.2 on 2026-08-19, 6/6. No longer owed. |
+| ~~`tests/test_run_concurrency_guard.py`~~ | A.3 | Written under A.3, repaired and completed under T1.2 on 2026-08-19. No longer owed. |
+| ~~`tests/test_skip_pause.py`~~ | A.4 | Written and verified under T2.3 on 2026-08-19, 7/7. No longer owed. |
+| ~~`tests/test_sse_keepalive.py`~~ | A.5 | Written and verified under T2.4 on 2026-08-19, 7/7. No longer owed. |
+| ~~`tests/test_db_schema.py` additions~~ | A.4 | Added and verified under T2.3 on 2026-08-19, 8/8. No longer owed. |
 
 **Test files that will fail until rewritten.** Wave B changed the contract underneath them.
 
-- `tests/test_classify.py`, `tests/test_run_key_messages.py`, `tests/e2e_product_flow.py`: assert the old `comments.csv` header with both confidence columns, and pass `low_confidence_pct` into affect stubs. Both are gone.
-- `tests/e2e_product_flow.py`: also needs the C.1 assertions, which no longer exist anywhere.
+- `tests/test_classify.py` and `tests/test_run_key_messages.py`: repaired and passing as of Wave T Tasks T1.1 and T1.3 on 2026-08-19. No longer owed.
+- `tests/e2e_product_flow.py`: passes 15/15 but contains no `skipPause` reference, so the C.1 assertions still exist nowhere. Task T3.1 owns that gap.
 
 **QA passes that were skipped.** Each task lists its own command set; run them from the task text.
 
@@ -132,15 +147,17 @@ Waves A, B, and C are implemented and verified nowhere. The user deferred testin
 - Task B.5, merged-model QA, including the Ollama boundary inspection.
 - Task C.3, frontend and teardown QA, including `node --check` on both files and the browser self-check.
 
-**Highest unproven risk, in order.** Each is a first-run-only failure mode that no existing test reaches.
+**Highest unproven risk, in order.** Items 2 through 5 were offline-unreachable when this list was written and are now covered; item 1 needs a live model and stays open.
 
-1. Whether `qwen3:8b-q4_K_M` returns all five fields for every index under the strict schema at the configured batch size, and whether the added prompt sections push a large batch past the 80000-character bound.
-2. The `runs.skip_pause` migration against a pre-existing database.
-3. `BEGIN IMMEDIATE` under two simultaneous start requests.
-4. The `adapter._execute` skip branch reaching `classify` with no `proceed` call.
-5. The httpx `sni_hostname` anti-rebinding mechanism against a real redirect chain.
+1. Whether the pinned text model returns all five fields for every index under the strict schema at the configured batch size, and whether the added prompt sections push a large batch past the 80000-character bound. Open: needs Ollama and the workstation, so Wave D is the first place it can run.
+2. ~~The `runs.skip_pause` migration against a pre-existing database.~~ Covered by `tests/test_db_schema.py` under T2.3.
+3. ~~`BEGIN IMMEDIATE` under two simultaneous start requests.~~ Covered by `tests/test_run_concurrency_guard.py` under T1.2.
+4. ~~The `adapter._execute` skip branch reaching `classify` with no `proceed` call.~~ Covered by `tests/test_skip_pause.py` under T2.3.
+5. ~~The httpx `sni_hostname` anti-rebinding mechanism against a real redirect chain.~~ Covered against a stubbed transport by `tests/test_article_fetch_guard.py` under T2.1. A live redirect chain is still unexercised.
 
-Resume at Wave D Step 2 on the RTX 4060 Ti workstation, following `docs/deployment.md`. Task C.2 is closed. The verification debt above is unchanged and still owed. Wave B code is complete and unverified; the affect labels now come from the classification pass, so `torch` and `transformers` are no longer runtime dependencies. On 2026-08-18 the plan was re-scoped: benchmarking is removed entirely, models are pinned by decision (`qwen3:8b-q4_K_M` text, `qwen3-vl:8b-instruct-q4_K_M` vision), Cloudflare Access is replaced by an in-app HTTP Basic Auth password, and the public URL is a free Cloudflare quick tunnel. The old Waves 4, 5, and 6 are superseded by Waves A through E below and are preserved in git history (commit `b7472b5` and earlier); do not implement from them.
+Resume at Task T3.1. Wave T Tasks T1.1-T1.3 and T2.1-T2.4 are done and verified; 94 assertions across 10 files pass. Wave T pays this debt and runs before Wave D, because deploying first would publish an unproven security boundary. Task C.2 is closed.
+
+The debt above was re-measured on 2026-08-19 at commit `d12d32d`. Three of the six listed test files now exist; `tests/test_run_concurrency_guard.py` was written under Task A.3 rather than deferred. Three existing files fail, and each failure is a stale test rather than a production defect. The measured baseline and the root cause of each failure are recorded under Wave T. Wave B code is complete and unverified; the affect labels now come from the classification pass, so `torch` and `transformers` are no longer runtime dependencies. On 2026-08-18 the plan was re-scoped: benchmarking is removed entirely, models are pinned by decision (`qwen3:8b-q4_K_M` text, `qwen3-vl:8b-instruct-q4_K_M` vision), Cloudflare Access is replaced by an in-app HTTP Basic Auth password, and the public URL is a free Cloudflare quick tunnel. The old Waves 4, 5, and 6 are superseded by Waves A through E below and are preserved in git history (commit `b7472b5` and earlier); do not implement from them.
 
 The office RTX 4060 Ti 16GB is available. All Wave A, B, and C tasks are code and need no live model. Wave D (deployment) needs the workstation, Ollama, and the two model pulls. Wave E is documentation. No task is blocked on IT or DNS any more.
 
@@ -685,6 +702,167 @@ Wave C deletes the abandoned benchmark path and exposes the already-locked skip-
 - Search for active benchmark references and removed confidence columns. Allow removed names only in dated history and explicit migration assertions that prove absence.
 - Record exact results in Delivery state. Do not commit or push without explicit authorization.
 
+### Wave T - Clear the verification debt
+
+Wave T pays the testing debt that Waves A, B, and C deferred. It runs before Wave D, because deployment publishes an unproven security boundary otherwise. Every task is offline: no live model, no network, no real credential.
+
+Baseline measured on 2026-08-19 at commit `d12d32d`, clean tree:
+
+| File | Result |
+|---|---|
+| `tests/test_classify.py` | FAIL 5/7 |
+| `tests/test_run_concurrency_guard.py` | FAIL 2/3 |
+| `tests/test_run_key_messages.py` | FAIL 7/10 |
+| `tests/e2e_product_flow.py` | PASS 15/15 |
+| 10 other backend test files | PASS |
+| `node --check app/app.js`, `node --check app/live.js` | PASS |
+
+Every failure is a stale test. No production behavior is wrong. Wave T makes the suite green and makes it prove the Wave A security boundary, the Wave B label contract, and the Wave C skip-pause path.
+
+#### Wave T conventions
+
+- Keep the standalone-script harness. No pytest, no unittest discovery, no coverage tooling. Each file keeps the `if __name__ == "__main__"` runner, bare asserts, `print("  ok  ...")` on success, and `sys.exit(1)` on failure.
+- Reuse the header from `tests/test_run_concurrency_guard.py:1-39` verbatim in every new server-touching file: the `sys.path` insert, `db._DB_PATH` and `storage._ROOT` pointed at temp directories before `import server`, `os.environ.setdefault("APP_PASSWORD", "test-password")` before that import, an explicit `db.init()`, and `TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})`.
+- Stub every boundary. Make no live network request, load no model, and write no password to a file.
+
+#### One production change in this wave
+
+`server.py:1479` defines `heartbeat_interval = 15.0` as a local inside the nested `_generate()` of `run_events`. A test cannot patch a function local, so the heartbeat is reachable only by waiting 15 real seconds or by patching the event loop clock. Task T2.4 moves it to a module-level `_SSE_HEARTBEAT_SECONDS = 15.0` and references it from `_generate()`. No other executable line changes in Waves T1 and T2.
+
+#### Task T1.1 - Repair the classification test fixtures
+
+- Files: `tests/test_classify.py`.
+- Symbols: the `CANNED` stub near lines 41-46; `canned_batch` near lines 68-71; the header assertion near lines 224-227; the fixture DataFrame near lines 211-216; the empty-frame columns near lines 229-232.
+- Defect: `CANNED` returns the pre-`3ea628f` three-field shape `{theme, echoed}`. `pipeline/analyze.py:280-283` now raises `ValueError("Classification batch returned invalid labels")` for any row whose `sentiment` or `emotion` falls outside `llm.SENTIMENT_LABELS` and `llm.EMOTION_LABELS`. Four tests die there. The header assertion still lists `sentiment_confidence` and `emotion_confidence`, which `pipeline/report.py:496-497` removed.
+- Behavior: add a valid `sentiment` and `emotion` to every `CANNED` entry, drawn from the locked sets. Replace the header assertion with the shipped eight columns. Delete the dead confidence values from the fixture DataFrame and the empty-frame columns.
+- Add one assertion that a row carrying an out-of-set affect label raises. The strict validator currently has only an accidental test.
+- Verification:
+  - `python -m py_compile tests/test_classify.py`
+  - `python tests/test_classify.py`
+  - Acceptance: exits zero at 7/7 or better.
+- Stop: change no file other than the test. Do not weaken the validator to accept the old shape.
+
+#### Task T1.2 - Repair and complete the concurrency guard test
+
+- Files: `tests/test_run_concurrency_guard.py`.
+- Symbols: the module docstring near lines 1-6; `test_queued_run_blocks_second_start_with_409` near line 80; `test_running_run_blocks_second_start_with_409` near lines 105-111; `test_terminal_prior_run_allows_replacement` near lines 124-125.
+- Defect: the file asserts the retired per-Session contract. `server.py:1239-1259` queries `SELECT id, session_id FROM runs WHERE state IN ('queued', 'running')` with no `session_id` filter, which is the locked global guard. The first test leaves its `queued` row behind, so every later test matches that leaked row from a different Session and receives the cross-Session message.
+- Behavior: give each test a clean `runs` table. Assert the same-Session message only when the conflicting run belongs to the requesting Session, and the cross-Session message otherwise. Remove the order dependency.
+- Add the assertions Task A.3 named that no test covers: two concurrent start attempts where exactly one succeeds and exactly one active run survives; a rejected request that leaves the prior run's rows and files intact, which proves the `BEGIN IMMEDIATE` fix; a terminal run in another Session that does not block a new start.
+- Verification:
+  - `python -m py_compile tests/test_run_concurrency_guard.py`
+  - `python tests/test_run_concurrency_guard.py`
+  - Acceptance: exits zero, and running the tests in any order produces the same result.
+- Stop: do not restore a per-Session filter in `server.py`. The global guard is the locked contract.
+
+#### Task T1.3 - Repair the run Key Message test cascade
+
+- Files: `tests/test_run_key_messages.py`.
+- Symbols: `_RUN_SNAPSHOT_KEYS` near lines 57-60; `_fake_affect_result` near lines 113-118; `_run_to_brief_pause` near line 191; the `.json()["id"]` read near line 286; the exact-key assertion near line 359.
+- Defect: one stale key set causes a seven-test cascade. `_RUN_SNAPSHOT_KEYS` omits `skipPause`, which `_ser_run` emits at `server.py:453`. The exact-key assertion fails before its run reaches `proceed`, which abandons that run in `running` state. Every later test then trips the global one-run guard, receives a 409 error body, and dies on `KeyError: 'id'` while reading `.json()["id"]`.
+- Behavior: add `skipPause` to `_RUN_SNAPSHOT_KEYS`. Terminate abandoned runs in teardown so one failure cannot cascade. Delete the dead `low_confidence_pct` from `_fake_affect_result`.
+- Verification:
+  - `python -m py_compile tests/test_run_key_messages.py`
+  - `python tests/test_run_key_messages.py`
+  - Acceptance: exits zero at 10/10. Introducing one deliberate failure fails one test only.
+- Stop: change no file other than the test.
+
+#### Task T2.1 - Write the article-fetch guard test
+
+- Files: `tests/test_article_fetch_guard.py` (create).
+- Consumes: `assets.BlockedUrl` (`assets.py:21`), `_MAX_REDIRECTS` (25), `_FETCH_BUDGET_SECONDS` (26), `_is_public_ip` (30), `_resolve_public_ips` (58), `_validate_url` (81), `fetch_article` (196); `server.add_article` and its 422 conversion at `server.py:1152-1153`.
+- Stub seams: patch `socket.getaddrinfo` for resolution. `fetch_article` constructs `httpx.Client(follow_redirects=False)` inline at `assets.py:225` and does not accept an injected client, so patch `httpx.Client` with a fake whose `get()` records `url`, `timeout`, `headers`, and `extensions`.
+- Assert rejection with the exact 422 contract, and no asset row created: `127.0.0.1`, `localhost`, `10.0.0.1`, `172.16.0.1`, `192.168.1.1`, `169.254.169.254`, `0.0.0.0`, `[::1]`, `[fd00::1]`, an IPv4-mapped private IPv6, a credentialed URL, a `file://` URL, a non-default port including `11434`, a public host whose DNS answer mixes public and private, and a public host redirecting to `127.0.0.1`.
+- Assert acceptance: a public host fetches; a relative `Location` redirect between two public hosts fetches; six redirects fail safely through `_MAX_REDIRECTS`; a public-host timeout preserves the existing empty-text asset rather than returning 422.
+- Assert the anti-rebinding mechanism, which no test currently reaches: the recorded request URL carries the resolved literal address, while `headers["Host"]` and `extensions["sni_hostname"]` both carry the original hostname.
+- Assert the shared budget: patch `assets._FETCH_BUDGET_SECONDS` low and confirm the per-hop timeout shrinks across hops instead of resetting to the full budget.
+- Verification:
+  - `python -m py_compile assets.py server.py tests/test_article_fetch_guard.py`
+  - `python tests/test_article_fetch_guard.py`
+- Stop: make no live network request. Do not add an allowlist override or weaken any rule to make a test pass.
+
+#### Task T2.2 - Write the shared-password authentication test
+
+- Files: `tests/test_basic_auth.py` (create).
+- Consumes: `server._AUTH_CHALLENGE` (`server.py:49-51`), `_app_password` (54), `_startup` (59), `_basic_password` (71), `_require_basic_auth` (101), and the 401 response at `server.py:113-117`.
+- Assert startup: call `server._startup()` directly with `APP_PASSWORD` missing, empty, and whitespace-only. Each must raise `RuntimeError("APP_PASSWORD must be set before the server can start.")`.
+- Assert the 401 on every path type: `/`, one static asset, an API GET, an API mutation, an artifact download, and `/api/runs/{run_id}/events`. Each response carries `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"` and the body `Authentication required.`
+- Assert 401 for each malformed credential: missing header, wrong scheme, invalid Base64, non-UTF-8 bytes, missing colon, empty username, and wrong password.
+- Assert acceptance: valid credentials reach each route type, and the authenticated SSE response starts streaming rather than buffering.
+- Assert the non-ASCII password path returns 401 and not 500. `secrets.compare_digest` raises `TypeError` on a non-ASCII `str`, and the UTF-8 byte comparison at `server.py:107-109` fixed it. No test guards that fix.
+- Assert no submitted credential text appears in any response body.
+- Verification:
+  - `python -m py_compile server.py tests/test_basic_auth.py`
+  - `python tests/test_basic_auth.py`
+- Stop: patch the environment inside the test. Never write a real password to a file. Do not add a login page, cookie session, or bypass.
+
+#### Task T2.3 - Write the skip-pause test and the schema migration assertions
+
+- Files: `tests/test_skip_pause.py` (create), `tests/test_db_schema.py`.
+- Consumes: `server.StartRunBody` (`server.py:556-558`), the coercion at `server.py:1233`, `_ser_run` `skipPause` at `server.py:453`, the guarded ALTER in `db.init` at `db.py:121-123`, and the `adapter._execute` branch at `adapter.py:1093-1105`.
+- Assert request shapes: omitted body, `{}`, `{"skipPause": false}`, `{"skipPause": true}`, and a non-boolean that normalizes to the standard `ApiError` shape.
+- Assert snapshots: `skipPause` is a JSON boolean and never `0` or `1`, in the GET, start, and proceed responses.
+- Assert run behavior: `skip_pause` true with at least one included message pushes stage `brief` and reaches `classify` with no `proceed` call; `skip_pause` true with zero included messages still enters `brief_pause`; `skip_pause` false pauses unchanged.
+- Add to `tests/test_db_schema.py`: a fresh database carries `runs.skip_pause` with default `0`; a database created without the column migrates in place and backfills existing rows to `0`; a second `db.init()` is idempotent. This is the highest unproven risk in this plan and is a first-run-only failure mode.
+- Verification:
+  - `python -m py_compile db.py server.py adapter.py tests/test_skip_pause.py tests/test_db_schema.py`
+  - `python tests/test_skip_pause.py`
+  - `python tests/test_db_schema.py`
+- Stop: do not remove `brief_pause`, `POST /proceed`, or run-time Key Message editing.
+
+#### Task T2.4 - Extract the SSE heartbeat interval and test the stream
+
+- Files: `server.py`, `tests/test_sse_keepalive.py` (create).
+- Symbols: `run_events` (`server.py:1443`); the local `heartbeat_interval = 15.0` (1479); the heartbeat emit (1501); the three terminal-close paths (1456, 1496, 1503).
+- Production change, and the only one in Waves T1 and T2: move `heartbeat_interval = 15.0` to a module-level `_SSE_HEARTBEAT_SECONDS = 15.0` and reference it from `_generate()`. Change no other behavior.
+- Assert: an idle stream emits exactly `: heartbeat\n\n`; a real event resets the idle timer; the heartbeat is a comment frame that never parses as a `ProgressEvent`; a terminal stage closes the stream and drains the queue; disconnect cleanup leaks no task.
+- Seed state directly through `adapter.get_queue(run_id)` and `adapter._terminal`, in the same style the concurrency guard test seeds rows.
+- Verification:
+  - `python -m py_compile server.py tests/test_sse_keepalive.py`
+  - `python tests/test_sse_keepalive.py`
+  - Patch `_SSE_HEARTBEAT_SECONDS` to a small value. Do not wait 15 real seconds.
+- Stop: send no fake percentage or stage. Add no frontend ping handling. Run this task alone; no other Wave T task may hold `server.py` at the same time.
+
+#### Task T3.1 - Cover the skip-pause path end to end
+
+- Files: `tests/e2e_product_flow.py`.
+- Symbols: the patch list near lines 196-220; the `FAKES` switch near line 60; the test list near lines 812-827; the frontend control at `app/app.js:2057`.
+- Gap: the file passes 15/15 and contains no `skipPause` reference. Every run path it drives enters the pause, so the Wave C checkbox has no end-to-end coverage and the Task C.1 assertions exist nowhere.
+- Assert: an unchecked start sends `skipPause:false` and pauses; a checked start sends `skipPause:true` and reaches completion with no review screen; a checked start with zero included messages still shows the review screen, because the frontend renders the backend snapshot instead of predicting it; the checkbox is label-associated and keyboard operable; a failed start keeps the checked value, restores focus, and re-enables both controls.
+- Verification:
+  - `python tests/e2e_product_flow.py`
+  - Acceptance: exits zero at 20/20 or better, with zero console errors, page errors, and failed requests.
+- Stop: do not change `demoApi` method signatures. Do not remove the review UI.
+
+#### Task T3.2 - Run the three owed QA passes
+
+- QA files: every file changed in Waves T1-T3, read-only.
+- Run the command list from Task A.7, Task B.5, and Task C.3, plus:
+  - `python -m py_compile` over every changed file.
+  - Every file under `tests/`, each exiting zero.
+  - `node --check app/app.js`
+  - `node --check app/live.js`
+  - `app/self-check.html` served on a fresh loopback port through `webapp-testing`: every assertion passes, with zero console errors, page errors, and failed requests.
+  - `git diff --check`
+  - `git status --short`
+- Security inspection, as Task A.7 specifies: confirm every server path including static files, downloads, and SSE crosses the Basic Auth middleware; confirm no credential reaches a log; confirm article fetching cannot connect after a second uncontrolled hostname resolution; confirm `APP_PASSWORD`, `.env`, `config.py`, `data/`, `output/`, and generated reports are absent from Git.
+- Record exact assertion counts and exit codes in Delivery state. Mark anything unrun as `NOT RUN`. Owners fix defects in their own files.
+- Stop: do not edit, stage, or commit. Do not commit or push without explicit authorization.
+
+#### Task T4.1 - Align this plan with the shipped model contract
+
+- Files: `PRD.md`. Load `compact-technical-writing`.
+- Defect: commit `ca76b13` collapsed `TEXT_MODEL` and `VISION_MODEL` into one `MODEL`, collapsed `OLLAMA_TEXT_NUM_CTX` and `OLLAMA_VISION_NUM_CTX` into `OLLAMA_NUM_CTX`, deleted the vision-unload paths in `pipeline/brief.py`, and pinned `qwen3.5:4b`. This plan still names two models and sizes VRAM against 16 GB. The code is correct; the plan is stale.
+- Behavior:
+  - State one model: `PipelineConfig.MODEL` is `qwen3.5:4b`, one multimodal tag serving both text and image User Inputs. State one context setting: `OLLAMA_NUM_CTX`.
+  - Remove `qwen3:8b-q4_K_M`, `qwen3-vl:8b-instruct-q4_K_M`, `TEXT_MODEL`, and `VISION_MODEL` from Locked decisions, Shared contracts, and the Wave D and Wave E task text. Keep them in dated Revisions as history.
+  - Correct the VRAM target to 8 GB. Rewrite every sentence that reasons about headroom, one-model-at-a-time loading, or over-commitment against 8 GB. Wave D pulls one model, not two, so the two-model switching check is retired.
+  - Replace `Outstanding verification debt` with the measured result of Waves T1-T3. Record only checks that ran.
+  - Move the Wave A, B, and C outcomes into Delivery state, now that Task T3.2 has run.
+  - Append a dated entry to `## Revisions`.
+- Verification: `git diff --check`. Confirm no active task text names a retired model tag or a 16 GB figure.
+- Stop: change no executable code in this task.
+
 ### Wave D - Set up and prove the office workstation
 
 Wave D is an operations session on the RTX 4060 Ti 16GB workstation. It runs only after Waves A-C pass. It installs local software, starts the public quick tunnel, and proves the real user flow from another network. It does not modify product code to work around a failed setup step.
@@ -881,6 +1059,12 @@ Removed the background brief, where the model wrote what it knew about a campaig
 ## Revisions
 
 Detailed root-cause narration for each entry below lives in the matching commit message.
+
+- 2026-08-19: Completed Wave T Tasks T2.1-T2.4 and verified them in full. Four owed test files now exist, `tests/test_db_schema.py` carries the migration assertions, and the last unwritten file from the Wave A debt list is gone: 94 assertions across 10 files pass, every exit code is 0, and `node --check app/app.js` and `git diff --check` are clean. Wave T's one authorized production edit landed and nothing else did: `server.py` is +7 -3, moving the SSE `heartbeat_interval` out of a `_generate()` local into a module-level `_SSE_HEARTBEAT_SECONDS`, which is what lets a test patch it to `0.2` instead of waiting 15 real seconds. Three defects surfaced during verification and every one was in the new tests rather than in the code under test. Two of them asserted that `POST /runs/{id}/proceed` succeeds on a run whose Key Messages are all excluded; production correctly returns 422 there, so both tests now prove the refusal first and then include a message before proceeding. That refusal is worth an assertion in its own right, so the coverage improved rather than merely turning green. The third was two SSE reads with no wall-clock bound: `run_events._generate()` never returns for a non-terminal run, so a test that opens a stream must supply the terminal condition itself, and one that does not hangs the suite indefinitely instead of failing. Every stream read in both files is now bounded by a teardown timer and a hard `join`. One diagnosis was wrong before it was right, and the correction is the useful record: the first read of the zero-included failure blamed leaked proceed-event state, but instrumenting `adapter.get_proceed_event` showed the event was never set on any call, which pointed at the ignored 422 instead. Recorded and not acted on: `tests/test_sse_keepalive.py` emits the same `StarletteDeprecationWarning` about `httpx` under `starlette.testclient` that two other files already do. Resume at Task T3.1.
+
+- 2026-08-19: Completed Wave T Tasks T1.1-T1.3 and verified them in full. Three stale test files now match the shipped contract, and the suite is green for the first time since Wave A: 14 backend files pass, `tests/e2e_product_flow.py` passes 15/15 with zero console errors, and both Node checks are clean. No production code changed, which is the point: every one of the three baseline failures was a test asserting a contract the code had already left behind. Two of the three repairs also closed real coverage holes rather than only turning red green. `tests/test_run_concurrency_guard.py` asserted the retired per-Session guard and leaked a `queued` row into its own later tests, so it now clears the `runs` table per test and carries the three assertions Task A.3 named but never had: two concurrent starts leaving exactly one active run, which is the only check that exercises the `BEGIN IMMEDIATE` fix; a rejected request leaving the prior run's rows and files intact; and a terminal run in another Session neither blocking nor being deleted. `tests/test_classify.py` gained an out-of-set affect assertion, because the strict validator that Wave B added had only an accidental test. `tests/test_run_key_messages.py` needed one key: `_RUN_SNAPSHOT_KEYS` predated `skipPause`, and that single omission failed one assertion, abandoned its run in `running`, and 409'd six later tests into `KeyError: 'id'`; a teardown that terminates stray runs now bounds one failure to one test. Recorded and not acted on: two files emit a `StarletteDeprecationWarning` about `httpx` under `starlette.testclient`, which blocks no assertion and belongs to no Wave T task. Resume at Task T2.1.
+
+- 2026-08-19: Added Wave T and placed it before Wave D, so the deferred testing debt is paid before an unproven Basic Auth middleware fronts a public URL. Measured the suite instead of trusting the recorded debt list: three of the six owed test files already exist, because `tests/test_run_concurrency_guard.py` was written under Task A.3 rather than deferred with the rest. Three files fail (`test_classify.py` 5/7, `test_run_concurrency_guard.py` 2/3, `test_run_key_messages.py` 7/10), and every failure traces to a stale test rather than a production defect. `test_classify.py` still feeds the pre-`3ea628f` three-field classification stub into a validator that now demands five fields, and still asserts the two removed confidence columns. `test_run_concurrency_guard.py` asserts the retired per-Session guard and leaks a `queued` row that poisons its own later tests. `test_run_key_messages.py` fails on one omitted key: `_RUN_SNAPSHOT_KEYS` predates `skipPause`, the exact-key assertion fails before its run reaches `proceed`, that run stays `running` forever, and the global one-run guard then 409s six later tests into `KeyError: 'id'`. `tests/e2e_product_flow.py` passes 15/15 but contains no `skipPause` reference at all, so the Wave C checkbox has no end-to-end coverage despite the passing count. Wave T authorizes exactly one production edit: `server.py`'s SSE `heartbeat_interval` is a function local that no test can patch, so it moves to a module-level `_SSE_HEARTBEAT_SECONDS`. Also recorded two contradictions between this plan and the shipped code, both resolved in favour of the code: commit `ca76b13` collapsed the two-model setup into one `qwen3.5:4b` tag with one `OLLAMA_NUM_CTX`, and the deployment target is an RTX 4060 Ti with 8 GB, not 16 GB. Task T4.1 corrects both throughout. No project code changed in this session.
 
 - 2026-08-18: Closed Task C.2 and started Wave D. The user authorized deleting the three tracked benchmark files by name, so `tests/bench_qwen.py`, `tests/bench_classifiers.py`, and `docs/benchmark-runbook.md` are removed. Created `docs/deployment.md`: the ordered workstation procedure for machine inspection, Ollama and both model pulls, application install, secrets, local Basic Auth checks, the quick tunnel, one real end-to-end Session, and restart behavior, each with an empty evidence table to fill on the workstation. Nothing in it has run; the editing machine is an RTX 3050 Laptop with 4096 MiB and cannot hold a 5GB model, so Wave D executes on the RTX 4060 Ti. Reading the code to write the guide surfaced one defect the guide works around rather than fixes: `adapter.py:335` falls back to the retired `qwen3:14b-q4_K_M` when `OLLAMA_TEXT_MODEL` is unset, because Task B.3 changed the `PipelineConfig` default but not this explicit override; `run.py:31` and `config-template.py` carry the same stale tag on the CLI path. Pushed the accumulated Wave A, B, and C commits so the workstation can clone. They remain implemented and verified nowhere, by the user's standing decision, which now means an unproven Basic Auth middleware will front a public URL.
 
