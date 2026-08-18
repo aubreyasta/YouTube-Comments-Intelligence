@@ -10,24 +10,48 @@ Entry format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). T
 
 This is the execution brief for the final product. It is a contract, not a list of suggestions. An implementation agent reads `AGENTS.md`, one task below, and only that task's listed files and named prerequisite outputs. It does not scan the repository.
 
+### Goal
+
+Deploy the existing YouTube Intelligence web app on one office Windows workstation with an RTX 4060 Ti 16GB. Let any person who knows the shared password open a public HTTPS link from any browser, create or resume a Session, run the analysis on the office GPU, and download the six public artifacts. Keep YouTube credentials, model execution, Session data, and generated files on the workstation.
+
+Ship one deliberately simple operating shape: FastAPI serves the frontend and API on loopback; Ollama serves pinned local Qwen models on loopback; `cloudflared` publishes FastAPI through a free quick tunnel; HTTP Basic Auth protects every request; SQLite and local storage remain the shared system of record.
+
+Done is observable when an external client on another network authenticates through the generated `*.trycloudflare.com` URL, completes one real Session, restores it after closing the tab, downloads all six artifacts, and repeats access after a workstation reboot according to the recorded quick-tunnel startup procedure.
+
+### Out of scope
+
+- Model benchmarking, model comparison, F1 scoring, answer-key annotation, private benchmark corpora, benchmark result files, and benchmark-driven release gates.
+- Accounts, invitations, per-user ownership, roles, per-Session authorization, audit logs, password reset, and self-service password changes.
+- A permanent or branded hostname, DNS delegation, a named Cloudflare tunnel, Cloudflare Access, an `@innocean.co.id` email rule, and Vercel.
+- Router port forwarding, LAN binding, direct Ollama exposure, CORS, and a second frontend origin.
+- Multiple concurrent analyses, a run queue, cancellation, GPU scheduling, and per-user quotas.
+- Backups, replication, remote object storage, high availability, active-run recovery after backend/workstation restart, and automatic migration to another workstation.
+- Automatic distribution of a rotated quick-tunnel URL. The operator communicates the current URL out of band.
+- HuggingFace affect encoders, `torch`, `transformers`, calibrated confidence scores, and confidence columns in exports.
+- Key visuals, chat, global search, source discovery, OCR, custom lenses, cross-group reports, and run history.
+
 ### Locked decisions
 
-- A 3,000-comment Qwen run must finish within 2 hours to ship. This is a release threshold, not a forced run cancellation.
-- Closing a browser tab does not stop a run. Backend or computer restart recovery is out of scope.
+- Model selection is by decision, not by benchmark. There is no F1 scoring, no answer-key labelling, no private benchmark corpus, and no timing/quality gate in this product. Benchmarking was removed on 2026-08-18; see the matching Revisions entry.
+- The shipping text model is `qwen3:8b-q4_K_M` (~5GB), pinned by decision. It fits 16GB with room for KV cache on long comment batches. The vision model is `qwen3-vl:8b-instruct-q4_K_M`, loaded on demand for image User Inputs. Ollama loads one at a time, so 16GB is never over-committed.
+- Sentiment and emotion are produced by the merged Qwen classify pass, not by HuggingFace encoders. One model pass over each batch emits theme, echoed Key Messages, one sentiment, and one emotion per comment. `analyze.affect` reads those columns instead of running encoder inference. `torch` and `transformers` are removed as runtime dependencies.
+- `sentiment_confidence` and `emotion_confidence` are removed from `comments.csv`. An LLM's self-reported confidence is not a calibrated probability, and there is no encoder score to report.
+- Sentiment is one label per comment, not one per Key Message. A comment's single sentiment applies to every Key Message it mentions.
+- The merged classify pass emits resolved affect labels directly, constrained by the JSON schema `enum`, not single-character codes. Sentiment is one of `positive`, `negative`, `neutral`. Emotion is one of `joy`, `anger`, `sadness`, `fear`, `other_neutral`, where `other_neutral` is the catch-all when no clear emotion reads. The schema makes an out-of-set value unrepresentable, so there is no invalid-code path. `report.py` already recognizes `positive`/`negative`/`neutral` for sentiment aggregation; the emotion labels are counted as opaque strings. The benchmark's single-character code map is retired with benchmarking.
 - Product language support is Indonesian, English, and mixed Indonesian-English.
-- Macro F1 selects classifiers. Accuracy is reported second.
-- Benchmark hardware is one RTX 4060 Ti 16GB, 288 GB/s. The plain RTX 4060 ships 8GB and cannot hold `qwen3:14b-q4_K_M` without a CPU/GPU split.
-- Qwen runs in non-thinking mode. Reasoning traces do not fit the release threshold, and closed-set classification against a fixed Theme book and a fixed Key Message list does not need them.
-- Sentiment and emotion are one label per comment, not one label per Key Message. A comment's single sentiment applies to every Key Message it mentions.
-- The sentiment and emotion producer is selected by benchmark, not assumed. Qwen in the merged labelling prompt competes against the HuggingFace encoders on the same labels. Macro F1 selects.
-- If Qwen wins that benchmark, `sentiment_confidence` and `emotion_confidence` are removed from `comments.csv`. An LLM's self-reported confidence is not a calibrated probability, and a fabricated number is worse than an absent column.
+- Closing a browser tab does not stop a run. Backend or computer restart recovery is out of scope.
 - Users may add and delete Key Messages during setup and `brief_pause`. The server generates IDs for new rows.
-- The benchmark answer key is hand-authored, not discovered. `docs/benchmark-runbook.md` holds a fixed six-entry Theme book and a fixed five-entry Key Message list, and those are the source of every corpus row's `allowed_theme_labels` and `allowed_key_message_ids`. The benchmark therefore measures labelling against a fixed reasonable book, not against the book the product would build from a real Session. Recorded as a limitation, not a result.
-- Sentiment and Emotions codes are single characters resolved through a fixed map: `P` positive, `N` negative, `U` neutral; `A` anger, `F` fear, `J` joy, `S` sadness, `O` other_neutral. `neutral` takes `U` because `N` is negative Sentiment. An unmapped code is invalid and counts toward the matching invalid counter.
 - Transcript reconciliation preserves edited messages, updates case-insensitive generated matches without changing IDs, keeps unmatched existing messages, and appends transcript additions.
 - Label and description changes use an explicit Save control. Inclusion and ordering save immediately.
 - Key visuals, chat, global search, source discovery, OCR, custom lenses, cross-group reports, run history, and cancellation are not part of the final product.
-- Raw benchmark comments and predictions remain ignored under `benchmark-data/private/`. Only schemas, runbooks, and sanitized aggregate results are committed.
+- The product ships as one shared office instance reachable over the public internet, not a per-device install and not localhost-only. One workstation (RTX 4060 Ti 16GB) runs Ollama, the FastAPI backend, and the frontend. Every client is a browser anywhere. Recorded in full under Waves A and D.
+- Access control is one shared password, enforced in the app by HTTP Basic Auth middleware reading `APP_PASSWORD` from the workstation environment. The server is fail-closed: if `APP_PASSWORD` is unset or empty, the process refuses to serve rather than running open. No accounts, no per-user isolation, no per-Session authorization. Every authenticated person shares one workspace and reads and downloads every Session, upload, and report. Accepted.
+- The public URL is a free Cloudflare quick tunnel (`cloudflared tunnel --url http://127.0.0.1:8000`), which yields an anonymous `*.trycloudflare.com` hostname. A quick tunnel cannot carry a Cloudflare Access policy, which is why the password lives in the app. There is no branded hostname, no DNS delegation, and no IT dependency. Cloudflare Access and the `@innocean.co.id` email gate are dropped.
+- The backend keeps binding `127.0.0.1:8000` and keeps serving `app/` itself. No LAN bind, no router port forward, no CORS, no second origin. `cloudflared` connects outbound from the workstation and is the only path in.
+- No backups. The workstation disk holds the only copy of `data/`. Accepted.
+- `YOUTUBE_API_KEY` and `APP_PASSWORD` live in the workstation environment only, never on a client device and never in the repo.
+- A single GPU serves every run, so only one analysis runs at a time. `start_run` rejects a new run whenever any Session holds a `queued` or `running` run.
+- The 3,000-comment-in-2-hours figure is a one-time real-run sanity check recorded during deployment, not a release gate. Nothing in the product enforces it.
 
 ### Delivery state
 
@@ -47,7 +71,16 @@ Full root-cause narration for each commit below lives in that commit's message. 
   - Also fixed during verification: the classifier record labelled every system with a placeholder instead of the model identifier its prediction rows carry, which Task 4.4 needs to pin revisions. A prediction file whose rows disagree about `model` now fails loudly.
   - Two packet errors were mine and were corrected mid-task: a rule to preserve every existing assertion contradicted the deliberate rename of the Qwen record, and the batching algorithm that splits a corpus into per-prompt index spaces was never specified, which crashed the first attempt.
 
-Resume at Wave 4 Task 4.1 label production. Every offline prerequisite is in place; the blockers are hardware and labels, not code. The benchmark hardware is not available on the current machine: it carries an RTX 3050 Laptop with 4096 MiB, which holds neither Qwen candidate, and no Ollama daemon runs. `torch` and `transformers` are installed, so encoder scoring runs on CPU once labels exist. Wave 4 task order stays 4.1, then 4.3, then 4.2, because Task 4.2 scores Qwen predictions that Task 4.3 produces.
+- Uncommitted at time of writing: Tasks A.1, A.2, and A.6 implemented. **Nothing was verified.** The user scoped this session to implementation only, so no command ran - not the two named test files, not `py_compile`, not the existing suite. Treat every claim below as unproven code, not evidence.
+  - A.1: `assets.BlockedUrl`, `_is_public_ip`, `_resolve_public_ips`, `_validate_url`, and a rewritten `fetch_article` with a bounded manual redirect loop. Rebinding is closed by requesting the resolved literal address while preserving the hostname through the `Host` header and the httpx `sni_hostname` extension (httpcore 1.0.9 reads it at `_sync/connection.py:107`), so the connection cannot follow a second uncontrolled resolution. One 15-second monotonic budget spans DNS, all hops, and body reading. `server.add_article` converts `BlockedUrl` to the 422 contract and creates no asset.
+  - A.2: fail-closed `_startup`, `_app_password`, `_basic_password`, and the `_require_basic_auth` HTTP middleware, defined before the static mount so one check covers `/`, static files, every `/api/*`, downloads, and SSE. Credentials compare as UTF-8 bytes, because `secrets.compare_digest` raises `TypeError` on a non-ASCII `str` and would have turned a wrong password into a 500. The line 1 `UNAUTHENTICATED` comment now states the real boundary.
+  - A.2 test migration: the 7 files that drive `server.app` set `APP_PASSWORD` before importing `server` and carry the credential from one place - `TestClient(..., headers=...)` in the 6 direct-client files, and a Playwright `browser.new_context(http_credentials=...)` in `tests/e2e_product_flow.py`, which is what reaches navigations, XHR, EventSource, and downloads alike.
+  - A.6: `vercel.json` deleted and the three `!vercel.json` `.gitignore` lines reverted. Both were uncommitted working-tree additions, so `.gitignore` is back at its committed content.
+  - Deliberately not done: `tests/test_article_fetch_guard.py` and `tests/test_basic_auth.py` were not written. A.1 and A.2 stay open until a verification session writes them, runs them, and reruns the 7 migrated files plus `tests/e2e_product_flow.py`.
+
+Resume at Wave A Task A.7 verification of A.1/A.2/A.6, then Tasks A.3, A.4, A.5. Task A.5 has a contract mismatch to settle first: `server.py` already emits `: heartbeat\n\n` near line 1400, while the A.5 contract specifies `: ping\n\n`. Both are SSE comments and no client parses either; pick one and make code and contract agree. On 2026-08-18 the plan was re-scoped: benchmarking is removed entirely, models are pinned by decision (`qwen3:8b-q4_K_M` text, `qwen3-vl:8b-instruct-q4_K_M` vision), Cloudflare Access is replaced by an in-app HTTP Basic Auth password, and the public URL is a free Cloudflare quick tunnel. The old Waves 4, 5, and 6 are superseded by Waves A through E below and are preserved in git history (commit `b7472b5` and earlier); do not implement from them.
+
+The office RTX 4060 Ti 16GB is available. All Wave A, B, and C tasks are code and need no live model. Wave D (deployment) needs the workstation, Ollama, and the two model pulls. Wave E is documentation. No task is blocked on IT or DNS any more.
 
 ### Cross-chat handoff
 
@@ -58,6 +91,56 @@ Resume at Wave 4 Task 4.1 label production. Every offline prerequisite is in pla
 - Keep completed task contracts in place. They remain the implementation record and interface reference for later tasks.
 
 ### Shared contracts
+
+#### Public deployment boundary
+
+```text
+External browser
+  -> HTTPS https://<random>.trycloudflare.com
+  -> Cloudflare quick tunnel
+  -> cloudflared outbound connection on the office workstation
+  -> http://127.0.0.1:8000
+  -> FastAPI HTTP Basic Auth middleware
+  -> static frontend or /api route
+
+FastAPI pipeline
+  -> http://127.0.0.1:11434
+  -> Ollama local models only
+```
+
+- `cloudflared` publishes only `http://127.0.0.1:8000`. It never publishes Ollama, a filesystem path, a second web server, or a LAN address.
+- FastAPI serves both `app/` and `/api/*`. The Basic Auth middleware runs before routing, so one check protects static files, APIs, downloads, and SSE.
+- Ollama remains loopback-only. `pipeline.llm._validated_base_url` rejects non-loopback `OLLAMA_BASE_URL` values.
+- The quick-tunnel hostname is runtime output. It is not stored as application config and may change after restart.
+- Every authenticated client sees the same SQLite database and local artifact store. Authentication answers "may this request enter?" It does not assign ownership.
+
+#### HTTP Basic Auth
+
+- Environment input: `APP_PASSWORD`, a non-empty shared secret. The username is not an identity; any non-empty username is accepted. User-facing examples use `office`.
+- Startup fails with `RuntimeError("APP_PASSWORD must be set before the server can start.")` when the value is missing, empty, or whitespace-only.
+- Every request requires `Authorization: Basic <base64(username:password)>`.
+- Missing, malformed, or wrong credentials return HTTP 401 and `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"`.
+- The server compares the password with `secrets.compare_digest`. It never logs the header, decoded username/password, or configured password.
+- There is no unauthenticated route, development bypass, cookie session, logout endpoint, account record, or role.
+
+#### Start-run request
+
+```ts
+type StartRunRequest = { skipPause?: boolean };
+```
+
+- `POST /api/sessions/{sessionId}/runs` accepts `StartRunRequest`. Omitted `skipPause` means `false`.
+- Only one `queued` or `running` run may exist across all Sessions.
+- A conflict in the requesting Session returns the existing same-Session 409 message.
+- A conflict in another Session returns `{"error":"RUN_IN_PROGRESS","message":"Another analysis is already running. Wait for it to finish.","field":null}`.
+- `skipPause:true` bypasses `brief_pause` only when reconciliation leaves at least one included Key Message. Zero included messages always enter `brief_pause`.
+
+#### Article-fetch boundary
+
+- Article URLs accept public HTTP/HTTPS hosts on default ports only.
+- The server resolves and pins a public destination before every connection and repeats validation for every redirect.
+- Any non-public or mixed public/non-public resolution returns HTTP 422 `{"error":"VALIDATION_ERROR","message":"That link points to a private address and cannot be fetched.","field":"url"}` and creates no asset.
+- Ordinary public-host timeout or extraction failure preserves the current empty-text asset behavior.
 
 #### HTTP errors
 
@@ -196,7 +279,7 @@ Metric ID collision rule: retain `m-t-*`/`m-is-*`; use `message` for empty slugs
 
 All CSVs use UTF-8, comma separators, a header, `\n` line endings, one-decimal percentages, and deterministic group-first ordering. Groups follow first appearance. Labels sort by count descending, then case-insensitive label. Empty results still write headers.
 
-- `comments.csv`: `video_id,group,comment,likes,language,theme,sentiment,sentiment_confidence,emotion,emotion_confidence`, followed by one `key_message_<stable-id>` boolean column in Key Message order. Missing source values are empty. No internal/debug columns are exported. Task 4.4 removes `sentiment_confidence` when Qwen wins sentiment and `emotion_confidence` when Qwen wins emotion, and rewrites this header line to the shipped result.
+- `comments.csv`: `video_id,group,comment,likes,language,theme,sentiment,emotion`, followed by one `key_message_<stable-id>` boolean column in Key Message order. The `sentiment_confidence` and `emotion_confidence` columns are removed, because the merged Qwen pass produces no calibrated score. Missing source values are empty; a null affect label from an unmapped code is an empty cell. No internal/debug columns are exported. Task B.4 rewrites this header to the shipped result.
 - `themes.csv`: `group,theme,count,percent,base_n`.
 - `sentiment.csv`: `group,sentiment,count,percent,base_n`.
 - `emotions.csv`: `group,emotion,count,percent,base_n`.
@@ -214,365 +297,503 @@ All CSVs use UTF-8, comma separators, a header, `\n` line endings, one-decimal p
 - Read-only evaluators report defects by owning task. They never edit, stage, or commit.
 - No edits outside `Files`. Stop after the listed verification and return changed files and exact results.
 
-### Wave 2 - Finish backend and outputs
+### Verified foundation - Waves 1-3 complete
 
-#### Task 2.1 - Validate run integration
+Waves 1-3 are implemented and verified. Their detailed execution packets were removed from the active plan on 2026-08-18 because the code, tests, Shared contracts above, Delivery state, and commit history are authoritative. Do not rerun or reimplement them as pending work.
 
-- Files: `db.py`, `server.py`, `adapter.py`, `pipeline/brief.py`, `tests/test_db_schema.py`, `tests/test_run_concurrency_guard.py`, `tests/test_run_key_messages.py`, `tests/test_brief_key_messages.py`.
-- Symbols: `db.init`; `server._ser_run`, `server.start_run`, `server.update_brief_points`, `server.proceed_run`; `adapter._set_run_stage`, `adapter._push`, `adapter._load_session_key_messages`, `adapter._replace_brief_points`, `adapter._execute`; `brief.reconcile`.
-- Consumes: ordered `key_messages` rows and `collect.fetch(...) -> (comments_df, meta_df)` where `meta_df` contains transcripts.
-- Produces: `runs.stage TEXT NOT NULL DEFAULT 'queued'`; immutable run `brief_points`; persisted `brief_pause`; the run/error contracts above.
-- Behavior: reject queued/running before deleting files or rows; terminal overwrite remains. Snapshot Session messages before collection. Reconcile after collection. Edited rows remain byte-for-byte except normalized order. Generated case-insensitive label matches retain IDs and receive transcript description updates. Unmatched existing rows remain. Additions append with server IDs. Empty setup may draft from transcripts. Atomically replace run rows before pause. Never write Session `key_messages` during a run. Session `updated_at` may change.
+- Foundation and setup (`6eaa00b`, `81bfe27`): local Ollama boundary, grounded User Inputs, Session Key Message schema, atomic full-list PATCH, draft coalescing, stale/failed states, extraction coverage, brief pipeline split, and initial harnesses.
+- Backend and outputs (`1a5a3e4`, `8a3de04`, `36e294b`, `1d38d34`, `8d07da3`): persisted run stages, active-run guard, immutable run `brief_points`, transcript reconciliation, persisted `brief_pause`, exact CSVs, deterministic Report JSON/evidence, seven stored/six public artifacts, Session comment count, and backend key-visual removal.
+- Frontend (`f695f37`, `46cd35a`): dropped controls removed, Session Key Message API parity, accessible setup editor, paused-run restore/edit/proceed, six ordered downloads, demo/live parity, honest console capture, retry-state fixes, and live results rendering.
+- Final Wave 3 evidence: `tests/e2e_product_flow.py` 15/15; browser self-check 188/188; zero console, page, and failed-request errors; both Node syntax checks pass.
+- Contracts that future work must preserve remain under Shared contracts. Full root-cause detail remains in the listed commit messages and git history.
+
+### Wave A - Secure the public backend boundary
+
+Wave A changes only backend behavior and backend tests. It closes the security and resource-control gaps created when a localhost tool becomes reachable through a public tunnel. Complete it before any public tunnel starts. No task in this wave needs Ollama, a browser, or external network access.
+
+#### Task A.1 - Guard article fetching against internal addresses
+
+- Files: `assets.py`, `server.py`, `tests/test_article_fetch_guard.py`.
+- Symbols: `assets.fetch_article` (function starts near `assets.py:96`; current unrestricted request is `httpx.get(url, follow_redirects=True)` near line 114); new `assets._resolve_public_ips`; new bounded redirect loop inside `fetch_article`; `server.add_article` URL validation near `server.py:1057-1059`.
+- Consumes: a user-supplied article URL from `POST /api/campaigns/{campaign_id}/assets/article`.
+- Produces: either the existing extracted article text for a public URL, the existing empty-text asset for an ordinary public-host fetch failure, or a `422 VALIDATION_ERROR` for a URL that can reach a non-public address.
+- Defect: the current code accepts any string matching `^https?://`, follows redirects automatically, and persists up to 20,000 response characters. Once the workstation is public, a password holder can request `http://127.0.0.1:11434/`, a private LAN service, or a public URL that redirects to one. The response then becomes readable through the shared workspace. This is server-side request forgery. The guard is new work; no equivalent guard exists in the current code.
+- URL rules:
+  - Accept only `http` and `https`.
+  - Reject embedded username or password components.
+  - Reject fragments before fetching; query strings remain allowed.
+  - Accept only default ports: 80 for HTTP and 443 for HTTPS. Reject every explicit non-standard port, including `11434`.
+  - Require a hostname. Normalize an international hostname through the URL parser before DNS resolution.
+  - Resolve every hostname before opening a connection. Reject the URL if resolution fails, returns no addresses, or returns any non-public address. Mixed public/non-public DNS answers are rejected, not filtered.
+  - Treat loopback, private, link-local, multicast, reserved, unspecified, IPv4-mapped private IPv6, and IPv6 unique-local addresses as non-public.
+  - Disable `httpx` automatic redirects. For each 3xx response, parse and resolve the next absolute URL (including relative `Location` values) through the same rules before requesting it.
+  - Follow at most five redirects. Preserve one 15-second total timeout budget across DNS, redirects, and response reading; do not reset the timeout to 15 seconds at each hop.
+  - Do not trust a validated DNS answer indefinitely. Connect only to the resolved public address for that hop while preserving the original hostname for TLS and the `Host` header, or use an `httpx` transport mechanism that prevents a second uncontrolled DNS resolution. A pre-check followed by a normal hostname request is vulnerable to DNS rebinding and does not satisfy this task.
+- Error contract: a rejected URL returns HTTP 422 with `{"error":"VALIDATION_ERROR","message":"That link points to a private address and cannot be fetched.","field":"url"}`. Do not create an asset for this case.
+- Existing failure contract: a syntactically valid public URL that times out, returns an ordinary network error, or cannot yield readable article text still creates the current empty-text asset. A security rejection is the only fetch failure promoted to a user input error.
 - Verification:
-  - `python -m py_compile db.py server.py adapter.py pipeline/brief.py`
-  - `python tests/test_db_schema.py`
+  - `python -m py_compile assets.py server.py tests/test_article_fetch_guard.py`
+  - `python tests/test_article_fetch_guard.py`
+  - Assert rejection of `127.0.0.1`, `localhost`, `10.0.0.1`, `172.16.0.1`, `192.168.1.1`, `169.254.169.254`, `0.0.0.0`, `[::1]`, `[fd00::1]`, IPv4-mapped private IPv6, a credentialed URL, a `file://` URL, a non-standard port, a public host with one private DNS answer, and a public host redirecting to `127.0.0.1`.
+  - Assert a public host fetches, a relative redirect between two public URLs fetches, six redirects fail safely, and a public-host timeout keeps the existing empty-text behavior.
+  - Use a stub resolver and stub transport. Make no live network request.
+- Stop: do not add an allowlist override. Do not weaken the rule for office hosts. Do not expose a raw resolver or transport error to the user.
+
+#### Task A.2 - Add fail-closed shared-password authentication
+
+- Files: `server.py`, `tests/test_basic_auth.py`.
+- Symbols: `server.app` near line 35; `server._startup`; new `server._require_basic_auth` HTTP middleware; static mount near line 1489; `run_events` SSE route near line 1341.
+- Environment contract: `APP_PASSWORD` is one non-empty shared password stored in the workstation environment. There is no username setting. Clients may send any non-empty username; only the password is authoritative. Documentation uses `office` as the example username and never as a secret.
+- Startup behavior: `_startup` reads `APP_PASSWORD`. If it is absent, empty, or whitespace-only, raise `RuntimeError("APP_PASSWORD must be set before the server can start.")`. Do not warn and continue. Do not define a development bypass, default password, query parameter, cookie fallback, IP allowlist, or unauthenticated health route.
+- Middleware behavior:
+  - Intercept every HTTP path before routing, including `/`, static assets, all `/api/*` routes, artifact downloads, and `/api/runs/{run_id}/events`.
+  - Require `Authorization: Basic <base64(username:password)>`.
+  - Reject a missing header, wrong scheme, malformed Base64, missing colon, empty username, or wrong password with HTTP 401.
+  - Return `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"` on every 401 so browsers show the native credential prompt.
+  - Return a small plain-text or JSON error body that contains no submitted credential data.
+  - Decode credentials as UTF-8. Treat decode failure as unauthenticated.
+  - Compare the supplied password to `APP_PASSWORD` with `secrets.compare_digest` over equal-type values. Never log the header, decoded credentials, or password.
+  - Let authenticated requests pass unchanged. Do not interfere with streaming response bodies; authenticating the initial SSE GET is sufficient.
+- Boundary comment: replace the obsolete line 1 claim (`UNAUTHENTICATED ... localhost-only`) with the actual boundary: loopback FastAPI, public `cloudflared` path, HTTP Basic Auth in this process, and no authorization between authenticated users.
+- Rationale: a free Cloudflare quick tunnel has no Cloudflare Access policy. HTTP Basic Auth is the smallest real gate that protects static files and APIs at one chokepoint. HTTPS terminates at Cloudflare, so credentials are encrypted in transit. The browser resends them on each request by design.
+- Verification:
+  - `python -m py_compile server.py tests/test_basic_auth.py`
+  - `python tests/test_basic_auth.py`
+  - Assert startup fails for missing, empty, and whitespace-only `APP_PASSWORD`.
+  - Assert unauthenticated `/`, a static asset, an API GET, an API mutation, an artifact download, and the SSE endpoint all return 401 with the exact `WWW-Authenticate` header.
+  - Assert malformed Basic headers and wrong passwords return 401 without credential text in logs or bodies.
+  - Assert valid Basic credentials reach each route. For SSE, assert the authenticated response starts streaming and is not buffered by the middleware.
+  - Patch the environment inside the test; never write a real password to a file.
+- Stop: do not build a login page, cookie session, logout route, account table, role system, password reset, rate limiter, or Cloudflare Access integration.
+
+#### Task A.3 - Enforce one analysis at a time
+
+- Files: `server.py`, `tests/test_run_concurrency_guard.py`.
+- Symbols: `server.start_run` active-run guard near line 1143.
+- Behavior: widen the existing per-Session guard to a global guard. Before deleting any prior run, artifact, or row, query for every `queued` or `running` run.
+- Same-Session conflict: preserve HTTP 409 `{"error":"RUN_IN_PROGRESS","message":"This session already has a run in progress.","field":null}`.
+- Cross-Session conflict: return HTTP 409 `{"error":"RUN_IN_PROGRESS","message":"Another analysis is already running. Wait for it to finish.","field":null}`.
+- Terminal behavior: a `complete` or `failed` run in another Session does not block. Starting a new run still overwrites the requesting Session's terminal prior run under the existing transaction semantics.
+- Race rule: perform the conflict check and new-run insertion under one transaction or lock that prevents two simultaneous requests from both passing the check. A check-then-insert gap does not satisfy the one-GPU invariant.
+- Rationale: one RTX 4060 Ti serves one Ollama model at a time. Parallel analyses contend for VRAM and YouTube quota. The shared UI has no queue, so reject rather than silently queue.
+- Verification:
+  - `python -m py_compile server.py tests/test_run_concurrency_guard.py`
   - `python tests/test_run_concurrency_guard.py`
-  - `python tests/test_run_key_messages.py`
-  - `python tests/test_brief_key_messages.py`
-- Stop: no command may call YouTube, Ollama, or HuggingFace. Stop if a listed symbol is absent.
+  - Assert same-Session and cross-Session errors exactly, terminal runs do not block, and rejected requests do not delete prior files or rows.
+  - Use two concurrent start attempts in the direct test and assert exactly one succeeds and exactly one active run exists afterward.
+- Stop: do not add a queue, cancellation, priority, per-user ownership, or GPU scheduler.
 
-#### Task 2.2 - Finish exports
+#### Task A.4 - Add optional skip of the Key Message pause (backend)
 
-- Files: `pipeline/report.py`, `tests/test_report_themes_csv.py`, `tests/test_report_sentiment_emotions_csv.py`, `tests/test_report_key_messages_csv.py`, `tests/test_classify.py`.
-- Symbols: `report.export`, `report._label_counts_csv`, `report._label_to_pt_col`, `report._key_messages_csv`.
-- Consumes: raw comment DataFrame columns named in the CSV contract and the ordered `transfer` rows `group,point,echoed_pct,n` used only to map applicable messages.
-- Produces: the five CSVs in the CSV contract. `report.pdf` remains `report.render` output.
-- Behavior: remove `summary.csv`, `chart_transfer.csv`, and `chart_themes.csv` generation. Make `comments.csv` match the exact schema. Update old assertions in `test_classify.py`.
+- Files: `db.py`, `server.py`, `adapter.py`, `tests/test_db_schema.py`, `tests/test_skip_pause.py`.
+- Symbols: `db.init`; `server.start_run`, `server._ser_run`; `adapter._execute` near line 996 and its transition to `brief_pause` near line 1098.
+- Schema: add `runs.skip_pause INTEGER NOT NULL DEFAULT 0`. Existing databases migrate in place and backfill existing rows to `0` through the SQLite default. Keep the migration idempotent.
+- Request contract: `POST /api/sessions/{sessionId}/runs` accepts optional JSON `{"skipPause": boolean}`. Omitted means `false`. Pydantic rejects non-booleans through the standard `ApiError` normalization.
+- Response contract: `RunSnapshot` gains `skipPause: boolean`. `_ser_run` converts the integer DB value to a JSON boolean. GET, start, proceed, and SSE-adjacent snapshot paths return the same field.
+- Run behavior:
+  - Snapshot and reconcile Key Messages exactly as today.
+  - Persist the full reconciled `brief_points` list before choosing the next stage.
+  - If `skip_pause` is false, enter persisted `brief_pause` unchanged.
+  - If `skip_pause` is true and at least one reconciled message is included, continue directly to `classify` without waiting for `POST /api/runs/{runId}/proceed`.
+  - If zero reconciled messages are included, enter `brief_pause` even when `skip_pause` is true. The user must include at least one before proceeding.
+  - Do not mutate Session `key_messages` during the run.
 - Verification:
-  - `python -m py_compile pipeline/report.py tests/test_report_themes_csv.py tests/test_report_sentiment_emotions_csv.py tests/test_report_key_messages_csv.py tests/test_classify.py`
-  - `python tests/test_report_themes_csv.py`
-  - `python tests/test_report_sentiment_emotions_csv.py`
-  - `python tests/test_report_key_messages_csv.py`
-  - `python tests/test_classify.py`
-- Stop: header, order, rounding, null, zero-denominator, and empty-input assertions must all exist before completion.
-
-#### Task 2.3 - Register artifacts
-
-- Files: `adapter.py`, `server.py`, `run.py`, `tests/test_run_artifacts.py`.
-- Symbols: `adapter._execute`; `server._ARTIFACT_TIER`, `server._ser_artifact`, `server._ser_run`, `server.download_artifact`, `server.get_report`; `run.main` output handling.
-- Consumes: seven files in the artifact contract.
-- Produces: seven `run_artifacts` rows and six ordered public `Artifact` objects.
-- Behavior: delete all `summary_csv`, `chart_transfer_csv`, and `chart_themes_csv` mappings. Keep internal report retrieval. Apply the exact missing-artifact error. CLI output uses final filenames.
-- Verification: create `tests/test_run_artifacts.py` as a direct assert script with `main()`, temporary DB/storage, and no framework; run `python -m py_compile adapter.py server.py run.py tests/test_run_artifacts.py` and `python tests/test_run_artifacts.py`. Assert seven rows, six public objects in fixed order, exact MIME/filenames, working report endpoint, and no old kinds.
-- Depends on: Task 2.2.
-- Stop: do not edit frontend artifact consumers.
-
-#### Task 2.4 - Finalize report JSON
-
-- Files: `adapter.py`, `tests/test_evidence.py`.
-- Symbols: `adapter._build_report_json`, `adapter._build_evidence`.
-- Consumes/Produces: deterministic DataFrames to exact `ReportJson`.
-- Behavior: use only the six exact top-level keys and nested fields above. Applicability comes from exact `transfer_table.group` values matched against trim/case-insensitive `point`; aggregate every applicable group per message; the denominator counts non-null applicability cells, the count is exact `True` cells; included messages with no applicability keep zero values as a shell row, not an omission. `overallTransfer` counts each Session comment once when it mentions at least one message applicable to its group, over all Session comments. Merge Theme and Emotion labels case-insensitively, keep the first-seen spelling, and use non-empty category labels as the denominator. Round every report percentage to one decimal. Sentiment `baseN` recognizes positive, negative, neutral; neutral counts toward the denominator; unknown/null does not. Evidence: drop empty text, coerce invalid likes to 0, leave missing video ID as an empty string; order by likes descending, then text length descending, then source order, capped at eight. Key Message Sentiment evidence takes up to four positive and four negative first, then backfills from the best unselected recognized comments including neutral. The same source comment may appear across different metrics but not twice inside one metric. Metric IDs retain existing `m-t-*`/`m-is-*` values; an empty slug falls back to `message`; colliding slugs get `-2`, `-3`, ... applied identically to both members of a paired ID.
-- Verification: `python -m py_compile adapter.py tests/test_evidence.py`; `python tests/test_evidence.py`. Assert the exact key set and nested types at every level (no extra/missing fields at any depth); fixed fixture numbers; unchanged metric IDs; absence of old keys; a message applicable to its own group counts correctly; a message with only unrelated-group rows produces a zero shell, not an omission; aggregation sums correctly across two or more applicable groups for one message; an all-null applicability column yields a zero denominator, not a crash or `null` percent; a comment applicable to two messages in `overallTransfer` counts once; Theme/Emotion labels differing only by case merge into one entry under the first-seen spelling; two slugs colliding produce suffixed IDs consistent across paired metrics; `baseN` includes neutral and excludes unknown/null; Key Message Sentiment evidence is balanced up to four/four and backfills without exceeding eight; empty-text comments are excluded from evidence; invalid likes normalize to 0 instead of erroring; tie-breaking on likes and text length is deterministic across repeated runs; every evidence list is capped at eight; and all emitted values are JSON-serializable (no NaN, no numpy types).
-- Depends on: Task 2.3, because both edit `adapter.py`.
-- Stop: do not add compatibility aliases or model-generated numbers.
-
-#### Task 2.5 - Remove backend key visuals
-
-- Files: `pipeline/config_types.py`, `adapter.py`, `run.py`, `config-template.py`, `server.py`, `pipeline/report.py`, `tests/test_asset_extraction.py`, `tests/test_report_themes_csv.py`, `tests/test_report_sentiment_emotions_csv.py`, `tests/test_report_key_messages_csv.py`.
-- Symbols: `PipelineConfig.KEY_VISUALS`; `adapter._build_config`; `run._load_cfg`; `server._ser_asset`, `server.set_key_visual`; `report.render` key-visual HTML/CSS and now-unused `base64` import.
-- Consumes/Produces: image User Inputs remain uploaded, stored, and passed to `brief.draft_from_inputs`; no image is selectable or embedded as a report key visual.
-- Behavior: remove every named backend symbol and config field. Do not remove image validation, paths, multimodal observations, or uploaded-image serving.
-- Verification:
-  - `python -m py_compile pipeline/config_types.py adapter.py run.py config-template.py server.py pipeline/report.py`
-  - `python tests/test_asset_extraction.py`
-  - Run the three report tests from Task 2.2.
-  - Search only these listed files for `KEY_VISUALS|isKeyVisual|keyvis`; zero matches are allowed.
-  - `test_asset_extraction.py` asserts the retired key-visual field is absent from the asset response by checking the response's key set, without spelling the retired key literal in the assertion.
-- Depends on: Tasks 2.2-2.4.
-- Stop: frontend compatibility methods are Wave 3 scope.
-
-#### Task 2.6 - Read-only QA and commit
-
-- QA files: every file changed by Tasks 2.1-2.5, read-only.
-- QA commands: every command listed in Tasks 2.1-2.5, then `python tests/test_asset_extraction.py`, `python tests/test_key_messages_patch.py`, `python tests/test_key_messages_draft.py`, `python tests/test_evidence.py`, `python tests/bench_qwen.py --self-check`, `python tests/bench_classifiers.py --self-check`, `git diff --check`, and `git status --short`.
-- QA rejects secrets, `.env`, `config.py`, `data/`, generated reports, old artifact names, old report keys, and backend key-visual references.
-- Owners fix reported defects in their own task files. After a complete rerun passes, an explicitly authorized integration agent creates one Wave 2 commit. It does not push.
-
-### Wave 3 - Frontend integration
-
-#### Task 3.1 - Remove dropped UI
-
-- Files: `app/index.html`, `app/app.js`, `app/live.js`, `app/style.css`, `app/self-check.html`.
-- Symbols to remove: `#sb-chat`; home `.hero-prompt`; Session/Files `.searchbox`; `.discovery` and `#discovery-h`; `ocrNotice`; lens cards; `[data-kv]`, `.kv-toggle`, key-visual copy and fixture fields.
-- Produces: no visible chat, search, discovery, OCR, lens, or key-visual surface.
-- Retain `demoApi.setKeyVisual(campaignId, assetId)` and matching live method with no caller. Both return `Promise.reject(ApiError)` using the locked unsupported-feature error.
-- Verification: `node --check app/app.js`; `node --check app/live.js`; search only the five listed files for the removed selectors/copy, allowing only the two compatibility method definitions. Serve `app/` with `python -m http.server 8765 --bind 127.0.0.1 --directory app`, open `http://127.0.0.1:8765/self-check.html` with `webapp-testing`, and require every displayed assertion to pass with no browser-console error.
-- Depends on: Wave 2 pass.
-- Stop: do not change any existing `demoApi` signature.
-
-#### Task 3.2 - Add Session Key Message methods
-
-- Files: `app/live.js`, `app/app.js`, `app/self-check.html`.
-- Symbols: `window.__liveApi`, `demoApi`, `wrapForLive`.
-- Produces identical methods:
-
-```ts
-getKeyMessages(sessionId: string): Promise<KeyMessageDraft>;
-draftKeyMessages(sessionId: string): Promise<KeyMessageDraft>;
-updateKeyMessages(sessionId: string, messages: KeyMessageInput[]): Promise<KeyMessageDraft>;
-```
-
-- `getKeyMessages` reads `GET /api/sessions/{id}` and returns `.keyMessages`; the others use the shared routes. Rejections carry `ApiError` fields directly.
-- Demo Session state adds `keyMessages:{status:"empty",messages:[],error:null,revision:0}`. User Input methods keep their current signatures and never call drafting.
-- Verification: `node --check app/live.js`; `node --check app/app.js`; self-check mocked fetch asserts exact methods, URLs, bodies, return shapes, and demo/live parity.
-- Depends on: Task 3.1.
-- Stop: do not render the editor in this task.
-
-#### Task 3.3 - Build setup editor
-
-- Files: `app/app.js`, `app/style.css`, `app/self-check.html`.
-- Symbols: `renderCampaign`, `uploadFiles`, the existing `#c-article` submit listener, the existing `[data-rm-asset]` click branch, and new functions `renderSetupKeyMessages`, `saveSetupKeyMessages`, `requestKeyMessageDraft`.
-- State: `{inFlight:boolean,requestedRevision:number,acceptedRevision:number,rerunRequested:boolean,dirtyIds:Set<string>,status:KeyMessageDraft.status}` per Session.
-- Flow: finish and render a successful asset mutation first, then request drafting. While drafting, another successful mutation increments `requestedRevision` and sets one `rerunRequested`; it does not start another call. Accept a response only when its request revision equals the latest requested revision. Otherwise run exactly one latest request. Preserve dirty label, description, included, and order fields. Failure with prior messages becomes stale; failure without messages becomes failed. Failed asset mutation never drafts.
-- Controls: Add appends `id:null`; Delete removes a row; Save validates and full-PATCHes label/description; include and Up/Down reorder full-PATCH immediately. Save is disabled while pending. Navigation with dirty text opens Continue/Cancel confirmation: `Unsaved Key Message changes will be lost. Continue?`
-- Copy: `Drafting Key Messages...`; `Key Messages may be out of date.`; `Key Message drafting failed.`; `Retry`; stale-run confirmation `Key Messages may be out of date. Continue and reconcile them with video transcripts?` with Continue/Cancel.
-- Accessibility: status region `aria-live="polite"`; editor `aria-busy`; invalid fields use `aria-invalid` and `aria-describedby`; background updates do not replace focused controls; Up/Down are buttons usable with Enter/Space; pending controls are disabled.
-- Verification: self-check covers first draft, save-before-draft, failed asset, one coalesced rerun, obsolete response rejection, stale/failed Retry, dirty preservation, add/delete, validation limits, immediate include/reorder PATCH, explicit text Save, all-excluded setup, dirty navigation, stale-run warning, keyboard and ARIA states.
-- Depends on: Task 3.2.
-- Stop: do not add transcript-change markers.
-
-#### Task 3.4 - Restore and edit `brief_pause`
-
-- Files: `app/live.js`, `app/app.js`, `app/self-check.html`.
-- Symbols: `window.__liveApi.getRun`, `renderRun`, `renderBriefReview`, `subscribeRun`, `updateBriefPoints`, `proceedRun`.
-- Behavior: render the initial `RunSnapshot`. If `stage==="brief_pause"`, show editable rows immediately. Add/delete uses `id:null`; Save sends the complete ordered run list, then Proceed. Enforce at least one included before Proceed. Disable pending controls. A failed save retains values, order, and focus. Apply the GET/SSE precedence contract. No transcript-change badges.
-- Verification: `node --check app/live.js`; `node --check app/app.js`; serve and open `app/self-check.html` with the Task 3.1 command and require checks for paused reopen with no SSE, add/edit/delete/reorder, all-excluded rejection, save/proceed, stale-SSE rejection, and edit retention after failure.
-- Depends on: Task 3.3 and Wave 2 persisted stage.
-- Stop: backend restart recovery is not added.
-
-#### Task 3.5 - Six downloads and demo parity
-
-- Files: `app/app.js`, `app/live.js`, `app/self-check.html`.
-- Symbols: `finalizeRun`, `renderResults`, `renderFiles`, `downloadBlob`, `demoApi.getArtifact`, `demoApi.listFiles`, `window.__liveApi.getArtifact`, `window.__liveApi.listFiles`.
-- Behavior: show the six public artifacts in contract order. Fetch every live blob before download. Use server `Content-Disposition`. Never expose `report_json`. Demo fixtures use exact names, MIME types, and deterministic header-valid CSV blobs. Missing artifact controls are disabled with `This file was not generated.` A failed download announces `Download failed. Try again.` in a live error region. Remove references to undefined Files variables and use the handler's artifact parameter.
-- Verification: `node --check app/live.js`; `node --check app/app.js`; serve and open `app/self-check.html` with the Task 3.1 command and require checks for six ordered controls/files, no old names or report JSON, blob flow, filenames/MIME, disabled missing state, and announced failure.
-- Depends on: Task 3.4.
-- Stop: do not invent unavailable artifacts.
-
-#### Task 3.6 - Frontend read-only QA and commit
-
-- QA files: all Wave 3 files plus new `tests/e2e_product_flow.py`, read-only after its owner writes it.
-- E2E owner files: `tests/e2e_product_flow.py` only. Use Playwright from `webapp-testing`; start the backend on `127.0.0.1` with a fresh port and temporary DB/storage; replace YouTube, Ollama, and classifier calls through explicit test mocks; no external network or real model.
-- Commands: `node --check app/app.js`; `node --check app/live.js`; serve `app/` with `python -m http.server 8765 --bind 127.0.0.1 --directory app`, open `http://127.0.0.1:8765/self-check.html` through `webapp-testing`, require every assertion and console check to pass, stop that server, then run `python tests/e2e_product_flow.py`.
-- E2E cases: Session creation, upload then draft, stale warning, setup add/edit/delete/order, run start, persisted pause reopen, run edit/proceed, completion fixture, six downloads, report JSON hidden, keyboard/focus/ARIA, reduced motion, and no dropped controls.
-- QA reports defects only. Owners fix them. After a full pass, an explicitly authorized integration agent creates one Wave 3 commit and does not push.
-- The E2E test exists and runs. It found four open defects that mix product faults with harness faults. Tasks 3.6a-3.6d below close them in order. `app/app.js` and `tests/e2e_product_flow.py` are uncommitted and are the baseline; do not discard or duplicate them.
-- Ordering is locked: repair the harness before the app. A harness whose console capture is inert cannot verify an app fix, and an assertion that fails on a non-leak must stop lying before it gates a commit.
-- One commit covers Tasks 3.6a-3.6c, created in Task 3.6d after every listed command passes. No push.
-
-##### Task 3.6a - Make the harness honest
-
-- Files: `tests/e2e_product_flow.py` only.
-- Console capture, line 744: `msg.text()` must read `msg.text`. `ConsoleMessage.text` is a string property in Playwright 1.61.0, so the call raises `TypeError: 'str' object is not callable` and `_CONSOLE_ERRORS` never fills, making `no_console_errors` pass vacuously. Line 745 already reads `msg.type` correctly as a property; leave it. Because the `TypeError` only fires inside the true branch, the lost events are exactly the error events the list exists to capture.
-- No diagnostic dump shares this fault. The two dump blocks at lines 778-794 and 804-820 are `page.evaluate()` JavaScript strings that read DOM properties and touch no Playwright event object. Change only line 744.
-- `report_json_never_exposed`, lines 664-666: replace the URL-only filter. `_REQUESTS` already records `kind` and `status` (`_register_network_capture`, lines 78-93), so the assertion can read them. A `GET /report` is not a leak in either direction: it returns 409 for an incomplete run (`server.py:1436-1437`), and it returns 200 for a completed one because `renderResults` fetches the report to draw the results screen (`app/app.js:2844` through `live.js:243`). Assert that no `report_json` artifact is exposed as a downloadable artifact: no public artifact carries kind `report_json` or filename `report.json`, and `RunSnapshot.artifacts` holds only the six public kinds. Keep the rendered-surface assertions at lines 653-662; they pass for real reasons.
-- Correction to an earlier version of this contract: an assertion that `GET /report` never returns 200 is wrong and would fail a healthy completed run. Do not write it.
-- Fix the uncheck loop at lines 515-517. `checked.count()` is evaluated once, but `paint()` rebuilds the whole subtree on every `change` (`app/app.js:2548`), so the loop bound and the live DOM can disagree. Re-query until no checked box remains.
-- Behavior: change no assertion that currently passes for a real reason. Do not weaken a case to make it pass.
-- Verification:
-  - `python -m py_compile tests/e2e_product_flow.py`
-  - `python tests/e2e_product_flow.py`
-  - Prove the console capture works: emit one deliberate console error, confirm the capture records it, then remove that probe.
-- Produces: `no_console_errors` that can fail, and `report_json_never_exposed` asserting exposure rather than traffic.
-- Stop: do not edit `app/app.js` or any Wave 3 frontend file in this task.
-
-##### Task 3.6b - Fix the `brief_pause` render defect
-
-- Files: `app/app.js`; `tests/e2e_product_flow.py` only for the count assertion named below.
-- Symbols: `briefPointsSnapshot` (`app/app.js:2387`), `renderBriefReview` (`2500`, source select `2503`, visibility `2505`, row markup `2518`), the `onEvent` brief branch (`2662-2667`), `briefRendered` (`2386`, `2663`, `2708`), the mount call site (`2707-2710`).
-- Defect: on `brief_pause` reopen, `#brief-review` becomes visible and renders zero `.brief-item` rows. `app/app.js:2505` sets `hidden = false` before any row exists, so an empty source array produces exactly this symptom. This blocks `brief_pause_all_excluded_rejected`, `brief_pause_edit_and_proceed`, `run_completes`, and `six_downloads_in_order`, because `POST /api/runs/{runId}/proceed` never fires and the run stays pinned at `brief_pause`.
-- The backend is correct. `server._ser_run` emits `briefPoints` in camelCase (`server.py:375`) with the five `_ser_brief_point` fields, and `live.getRun` (`app/live.js:187-189`) passes the JSON through untouched. Key casing is not a factor.
-- Traced root cause, three compounding faults:
-  - `briefPointsSnapshot` is captured once at mount (`app/app.js:2387`) from `run.briefPoints` and never refreshed. `demoApi.getRun` is called exactly once, at `app/app.js:2301`. A mount that happens before the run reaches `brief_pause` freezes an empty array, and the later paint renders zero rows from it. No code re-fetches `/api/runs/{runId}` after mount.
-  - `app/app.js:2503` reads `(seedPoints || briefPointsSnapshot)`. An empty array is truthy, so an empty seed silently wins over a populated snapshot.
-  - The SSE fallback at `app/app.js:2666` is dead in live mode. `adapter._push` (`adapter.py:135-143`) emits only `run_id`, `stage`, `message`, `pct`, and `detail`, never `brief_points`; at `brief_pause` `detail` is a bare count string (`adapter.py:1098-1100`) that `parseDetailStr` resolves to `null`. So live mode always falls back to the frozen snapshot.
-- Fix direction: `brief_pause` must render from a snapshot that is current at paint time, not at mount time. Re-fetch the run snapshot when entering `brief_pause`, and treat an empty array as absent when selecting the source. Do not rely on SSE carrying `brief_points`; the backend does not send it.
-- Test defect in the same case, fix it here: `tests/e2e_product_flow.py:508-510` asserts `.brief-item` count equals the *included* count from the snapshot. `app/app.js:2518` renders every point and marks excluded ones with the `excluded` class, which is the specified behavior. Assert against the total `briefPoints` count, and assert the excluded rows carry the class.
-- Correction to an earlier version of this contract: the suspected cause was a `briefPointIds` key present in the self-check fixture and absent from `_ser_run`. That is wrong. `briefPointIds` is returned only by the demo `getRun` (`app/app.js:876-887`) and no brief-path code reads it. The real reason `app/self-check.html` stays green is that its fixture always supplies populated `briefPoints` at mount, so the frozen-snapshot fault cannot appear.
-- Verification:
-  - `node --check app/app.js`
-  - `python -m py_compile tests/e2e_product_flow.py`
-  - Browser `app/self-check.html` through `webapp-testing`: every assertion passes, zero console errors, zero page errors, zero failed requests
-  - `python tests/e2e_product_flow.py`: `brief_pause_reopen_persisted`, `brief_pause_all_excluded_rejected`, `brief_pause_edit_and_proceed`, `run_completes`, and `six_downloads_in_order` all pass
-- Depends on: Task 3.6a, because its console capture is the evidence this task is verified against.
-- Stop: do not change the run/SSE precedence contract, do not add backend restart recovery, and do not add `brief_points` to the SSE payload.
-
-##### Task 3.6c - Fix the retry row count
-
-- Files: `app/app.js`; `tests/e2e_product_flow.py` only if the expected count below proves wrong after the app faults are fixed.
-- Symbols: `kmMergeDraft` (`app/app.js:1321`, append pass `1373-1375`, survivor pass `1379-1384`), `kmLocalKey` (`1313`), `kmNormLabel` (`1308`), `requestKeyMessageDraft` (`1673`, coalesce guard `1676`), the `#km-retry` handler (`1943-1953`), `deferredRepaint` (`1725`), `isFocusInside` (`1729`), `acceptDraft` (`1981-1992`).
-- Defect: `draft_failure_is_stale_then_retry` leaves three `.km-row` rows where two are expected after `#km-retry`, and the stale status message never clears.
-- Traced causes, both product faults, both independently sufficient:
-  - The retry repaint never runs. The `#km-retry` handler defers when focus sits inside the container (`app/app.js:1947-1951`). Clicking the button focuses it, and the button is inside the container, so `isFocusInside()` is true when the draft resolves. `rows` updates to the correct two, the DOM keeps the pre-retry three, and the "Drafting Key Messages..." message stays painted even though `st.status` was already overwritten at `1699`. Nothing flushes `deferredRepaint` for the retry button: the container `click` recovery at `1968-1971` fires synchronously before the await resolves, and the only other flush is the `blur` handler on `[data-km-f]` inputs (`1856-1858`).
-  - A blank local row survives the merge. `kmMergeDraft` keeps every local row a draft did not claim (`1379-1384`). A row added through `#km-add` (`1906-1911`) has `id: null` and an empty label, so its `byId` key is a `local-*` key the server never returns (`1325`) and `kmNormLabel("")` is falsy so it never enters `byLabel` (`1327-1328`). It can never be claimed, so two drafted rows append beside it and the count reaches three.
-- Also fix in the same task: `requestKeyMessageDraft` drops the retry's `onAccepted` when a draft is already in flight (`app/app.js:1676`). The coalesced rerun at `1704-1708` invokes the original caller's callback instead, so a retry clicked during an in-flight draft never updates the editor and `st.status` stays `"drafting"`.
-- Correction to an earlier version of this contract: this defect was recorded as unattributed and possibly a wrong test expectation. The deferred-repaint fault is a real user-visible defect, so the fix belongs in `app/app.js`. Re-examine the expected count of two only after both faults are fixed, because `setup_edit_add_delete_order` renames a row earlier in the flow and `PATCH /key_messages` writes `edited=1` for every row (`server.py:876`), which `_merge_key_messages` preserves (`server.py:663-667`). If the surviving edited row is legitimate product behavior, correct the test expectation and record why.
-- Verification:
-  - `node --check app/app.js`
-  - `python -m py_compile tests/e2e_product_flow.py` when the test changes
-  - Browser `app/self-check.html`: no regression
-  - `python tests/e2e_product_flow.py`: `draft_failure_is_stale_then_retry` passes
-- Depends on: Task 3.6a.
-- Stop: do not change the three baseline `app/app.js` fixes for the lost Save click, uncleared dirty state, or duplicate draft ID.
-
-##### Task 3.6d - Read-only QA and one commit
-
-- QA files: every file changed by Tasks 3.6a-3.6c, read-only.
-- Confirm the verification tooling executes before trusting any result. A search or shell command that returns unrelated output is a blocked check, not a pass.
-- QA commands:
-  - `node --check app/app.js`
-  - `node --check app/live.js`
-  - `python -m py_compile tests/e2e_product_flow.py`
-  - Browser `app/self-check.html` through `webapp-testing`: every assertion passes with zero console errors, zero page errors, and zero failed requests
-  - `python tests/e2e_product_flow.py`: 15 of 15 cases pass and the process exits 0
-  - `git diff --check`
-  - `git status --short`
-- QA rejects secrets, `.env`, `config.py`, `data/`, `output/`, `benchmark-data/private/`, and generated reports from Git. Remove the untracked `session-ses_004f.md` before the commit.
-- QA reports defects only. Owners fix them in their own task files. After a complete rerun passes, an explicitly authorized integration agent creates one Wave 3 QA commit. It does not push.
-
-### Wave 4 - Benchmarks and final verification
-
-#### Benchmark files and schemas
-
-- Files: `.gitignore`, `docs/benchmark-runbook.md`, `benchmark-results/classifiers.json`, `benchmark-results/qwen.json`, `benchmark-results/verification.md`.
-- Add `benchmark-data/private/` to `.gitignore`.
-- Private files: `labels.jsonl`, `sentiment-predictions.jsonl`, `emotion-predictions.jsonl`, `qwen-sentiment-predictions.jsonl`, `qwen-emotion-predictions.jsonl`, `qwen-corpus.jsonl`, `qwen-comparison.jsonl`.
-- Labels row: `{"id":string,"text":string,"language":"id"|"en"|"mixed","sentiment":"negative"|"neutral"|"positive","emotion":"anger"|"fear"|"joy"|"sadness"|"other_neutral","true_theme":string,"true_key_message_ids":string[]}`. `true_theme` is one exact label from the fixed Theme book. `true_key_message_ids` holds zero or more fixed Key Message IDs; an empty list is a valid and common answer. The Sentiment and Emotions loader validates the first five fields and ignores the last two, so one file serves both benchmarks.
-- Prediction row: `{"id":string,"sentiment":string,"confidence":number,"model":string}` or the same with `emotion`. The two Qwen prediction files use this identical row format, so they load through the existing prediction loader with no new schema.
-- Qwen prediction rows carry `confidence` as the constant `1.0` and `model` as the Qwen tag. That constant is a schema filler, not a calibrated probability. No acceptance rule, selection rule, or exported column may read it.
-- Qwen corpus row: `{"id":string,"video_id":string,"text":string,"allowed_theme_labels":string[],"allowed_key_message_ids":string[]}`. Both arrays are ordered, and that order is the index space the model emits against. Never reorder either array between the prompt and the decode.
-- Qwen comparison row: `{"id":string,"true_theme":string,"predicted_theme":string,"true_key_message_ids":string[],"predicted_key_message_ids":string[]}`. Comparison rows store resolved labels and IDs, never indices.
-- Files are UTF-8 JSONL, one object per line, unique non-empty IDs. Loaders reject duplicates, missing fields, invalid enums, and malformed JSON with file/line errors.
-- `other_neutral` is evaluation-only. Report its prevalence and coverage; exclude it from four-label Emotion Macro F1. It is not a shipping label.
-
-#### Task 4.1 - Prepare labels and runbook
-
-- Files: `.gitignore`, `docs/benchmark-runbook.md`; private files are local outputs and never staged.
-- Produce 150 resolved labels for the pilot: 50 `id`, 50 `en`, 50 `mixed`. Each stratum includes at least 25 short/emoji rows and at least 25 rows carrying negation, sarcasm, slang, or conflicting Sentiment and Emotions signals. One annotator labels in a single pass. The runbook records counts, not private text.
-- The pilot proves the tooling, the file formats, and the annotation protocol. It does not decide what ships. Task 4.2 compares variants on margins as narrow as 0.02 Macro F1, and at 50 rows per stratum that margin sits inside the sampling noise. A ship decision needs a larger set, two independent annotators, and a Theme book from a real Session.
-- Each labelled row also carries `true_theme` and `true_key_message_ids`, assigned against the fixed Theme book and Key Message list in `docs/benchmark-runbook.md`. Without them Task 4.3 has nothing to score `themeMacroF1` and `keyMessageMacroF1` against.
-- Produce `qwen-corpus.jsonl` and `qwen-comparison.jsonl` from the labelled rows. Corpus rows carry the fixed Theme book as `allowed_theme_labels` and the fixed Key Message IDs as `allowed_key_message_ids`, both in runbook order. Comparison rows carry the resolved true labels; Task 4.3 fills the predicted fields.
-- Every one of the five Key Message IDs must appear as a true label on at least 5 rows. Key Message Macro F1 averages one-vs-rest F1 across all five allowed IDs, so an ID that never appears scores `0.0` and lowers the mean. Two unmentioned IDs cap the score at 0.6, below the 0.70 floor, and the gate then fails on corpus composition rather than model quality.
-- These labels score three systems, not two: the encoder multilingual variant, the encoder routed variant, and Qwen in the merged prompt. No extra labelling work follows from the third system.
-- Symbols: add or validate `bench_classifiers.main` support for `--labels PATH --validate-only`; this mode loads and validates labels, prints counts by language and label, performs no model work, and exits zero only for a valid file.
-- Verification: `python tests/bench_classifiers.py --self-check`; `python tests/bench_classifiers.py --labels benchmark-data/private/labels.jsonl --validate-only`; `git status --short` must not list private files.
-- Stop: no benchmark runs before labels are locked.
-
-#### Task 4.2 - Sentiment and emotion benchmark
-
-- Files: `tests/bench_classifiers.py`, `benchmark-results/classifiers.json`.
-- Encoder candidates: sentiment multilingual `cardiffnlp/twitter-xlm-roberta-base-sentiment`; routed `id` `w11wo/indonesian-roberta-base-sentiment-classifier`, `en` `cardiffnlp/twitter-roberta-base-sentiment-latest`, `mixed` the multilingual candidate. Emotion multilingual `MilaNLProc/xlm-emo-t`; routed diagnostic `id` `StevenLimcorn/indonesian-roberta-base-emotion-classifier`, `en` `j-hartmann/emotion-english-distilroberta-base`, `mixed` the multilingual candidate.
-- Third candidate: Qwen in the merged labelling prompt, scored from the two Qwen prediction files Task 4.3 produces over the same `labels.jsonl` rows. It competes as one more `systems[]` entry against the same labels, strata, and metrics. This task runs no Ollama inference of its own.
-- CLI contract: `python tests/bench_classifiers.py --labels benchmark-data/private/labels.jsonl --sentiment-predictions benchmark-data/private/sentiment-predictions.jsonl --emotion-predictions benchmark-data/private/emotion-predictions.jsonl --qwen-sentiment-predictions benchmark-data/private/qwen-sentiment-predictions.jsonl --qwen-emotion-predictions benchmark-data/private/qwen-emotion-predictions.jsonl --output benchmark-results/classifiers.json`. The two Qwen arguments are optional. Omitting them scores encoders only and records the Qwen systems as not run.
-- Output fields: `generatedAt`, `hardware`, `systems[]` with `task,model,revision,license,downloadBytes,runtimeSeconds,gpuMemoryMiB,overallMacroF1,accuracy,strata,labels,confusion,coverage`, and `decision`. A Qwen system carries its Ollama tag as `model`, its digest as `revision`, and null for `downloadBytes` and `gpuMemoryMiB`, which belong to the Task 4.3 record.
-- Acceptance between encoder variants is unchanged: multilingual ships only when no `id`, `en`, or `mixed` stratum is more than 0.02 Macro F1 below routed, multilingual beats routed on `mixed`, and every required shipping label has F1 at least 0.60. Sentiment uses routing when multilingual fails. Emotion never ships incompatible routed vocabularies; select or train a shared four-label head instead. Missing or unclear redistribution license disqualifies shipping. Pin selected revisions.
-- Selection across all three systems uses Macro F1 per the locked rule, sentiment and emotion decided independently. Qwen wins a task only when it beats the best encoder variant on overall Macro F1 and is no more than 0.02 below that variant on any of the `id`, `en`, and `mixed` strata. A tie keeps the encoder, because Qwen already carries the run-time cost the encoders would add.
-- Never read `confidence` from any prediction file. Qwen's value is a constant filler.
-- `decision` names the selected producer for sentiment and for emotion, and states whether `sentiment_confidence` and `emotion_confidence` survive in `comments.csv`. They survive only when an encoder wins the matching task.
-- Verification: `python tests/bench_classifiers.py --self-check`; run the CLI with all five files; rerun and compare deterministic metrics. Assert that a Qwen system appears in `systems[]`, that omitting the two Qwen arguments still exits zero, and that no acceptance path reads `confidence`.
-- Depends on: Tasks 4.1 and 4.3.
-
-#### Task 4.3 - Qwen benchmark
-
-- Files: `tests/bench_qwen.py`, `benchmark-results/qwen.json`.
-- Candidates: `qwen3:14b-q4_K_M` primary and `qwen3:8b-q4_K_M` fallback challenger. `qwen3-vl:8b-instruct-q4_K_M` remains only for image User Inputs and is not part of the text benchmark. No larger Qwen3 option is a candidate: `qwen3:30b-a3b-q4_K_M` is 19 GB and `qwen3:32b-q4_K_M` is 20 GB, so both exceed 16 GB before any KV cache, and forcing a fit at Q3 would trade away the exact-label precision this task measures.
-- Merged prompt: one packed prompt per batch labels every comment in that batch with exactly one Theme, zero or more Key Messages, one sentiment, and one emotion. One model pass produces all four fields.
-- Non-thinking mode is required, not an optimization. Set it explicitly and record the exact mechanism in the output record.
-- Index encoding: the model emits a zero-based index into `allowed_theme_labels` and zero-based indices into `allowed_key_message_ids`, never label text and never UUIDs. Python resolves indices to exact labels and IDs. An out-of-range or non-integer index is invalid and counts in `invalidThemeCount` or `invalidKeyMessageIdCount`. Sentiment and emotion use single-character codes resolved through a fixed map, and an unmapped code is invalid.
-- `OLLAMA_NUM_PARALLEL` is 1, which is the Ollama default. The packed-prompt shape needs no concurrency, and Ollama scales KV cache by `OLLAMA_NUM_PARALLEL` times `OLLAMA_CONTEXT_LENGTH`. Record the effective value and the context length in the output record.
-- Timing gate before any full run: process exactly one packed 20-comment batch with all four fields, record wall-clock seconds and output token count, and project the 3,000-row time from it. Abort and report instead of starting the full run when the projection exceeds the threshold. Label this projection as a projection.
-- Output fields: `generatedAt,hardware,ollamaVersion,model,modelDigest,batchSize,thinkingMode,contextLength,numParallel,singleBatchSeconds,singleBatchOutputTokens,projectedFromSingleBatchSeconds,commentsProcessed,elapsedSeconds,measured3000,projected3000Seconds,gpuMemoryBeforeMiB,gpuMemoryAfterMiB,malformedFinalBatches,invalidThemeCount,invalidKeyMessageIdCount,invalidSentimentCount,invalidEmotionCount,themeMacroF1,keyMessageMacroF1,mixedThemeMacroF1,mixedKeyMessageMacroF1,passed`.
-- Key Message Macro F1 is the macro mean of one-vs-rest F1 across allowed IDs. Theme Macro F1 uses exact resolved Theme labels. A candidate passes only when an actual 3,000-row run is at most 7,200 seconds, malformed final batches are zero after retry, every invalid count is zero, Theme Macro F1 is at least 0.75, Key Message Macro F1 at least 0.70, and each mixed score is no more than 0.05 below its overall score. Among passing models choose higher quality, then lower elapsed time, then smaller model.
-- Affect prediction pass: run the selected model over every `labels.jsonl` row through the same merged prompt and write `qwen-sentiment-predictions.jsonl` and `qwen-emotion-predictions.jsonl` in the locked prediction row format. Task 4.2 consumes these two files and scores them.
-- Verification: `python tests/bench_qwen.py --self-check`; run the single-batch timing gate; run the exact 14B command; run `python tests/bench_qwen.py --model qwen3:8b-q4_K_M --corpus benchmark-data/private/qwen-corpus.jsonl --comparison benchmark-data/private/qwen-comparison.jsonl --limit 3000 --batch-size 20 --output benchmark-results/qwen-8b.json`; merge both sanitized records into `benchmark-results/qwen.json` with `candidates:[...]` and the selected `decision`; do not label a projection as measured. The self-check asserts index resolution against a fixture, out-of-range and non-integer index rejection, unmapped affect code rejection, and that no reordering of either allowed array occurs between prompt and decode.
-- CLI contract: `python tests/bench_qwen.py --model qwen3:14b-q4_K_M --corpus benchmark-data/private/qwen-corpus.jsonl --comparison benchmark-data/private/qwen-comparison.jsonl --limit 3000 --batch-size 20 --output benchmark-results/qwen.json`; repeat with the 8B model.
-- Depends on: Task 4.1.
-- Stop: when the merged prompt drops `themeMacroF1` below 0.75 or `keyMessageMacroF1` below 0.70 for both candidates, stop and report. Split affect back out of the prompt rather than shipping degraded Theme or Key Message quality. Never relax the threshold to make a candidate pass.
-
-#### Task 4.4 - Apply model decisions
-
-- Files: `pipeline/config_types.py`, `adapter.py`, `config-template.py`, `pipeline/analyze.py`, `pipeline/report.py`, `app/app.js`, `tests/test_classify.py`, `tests/test_model_labels.py`, and the three aggregate CSV tests when the export schema changes.
-- Symbols: `PipelineConfig.TEXT_MODEL`, `PipelineConfig.VISION_MODEL`, `PipelineConfig.SENTIMENT_MODEL`, `PipelineConfig.EMOTION_MODEL`; `adapter._build_config`; `analyze.affect`; `report.export` comment-column writer; `app.js` constants or literal arrays that populate the Sentiment and Emotion evidence filter pills; new direct-test `main()` in `tests/test_model_labels.py`.
-- Consumes: `benchmark-results/classifiers.json` and `benchmark-results/qwen.json`, both with `passed:true` decisions.
-- Produces: exact pinned defaults from results, no provider fallback or model tiers. Vision remains the named Qwen VL model while image User Inputs exist. `tests/test_model_labels.py` directly checks normalized Sentiment labels and the selected fixed Emotion labels.
-- Branch on the Task 4.2 `decision`, per task, sentiment and emotion independently:
-  - Encoder wins a task: pin its exact revision in the matching `PipelineConfig` field, keep `analyze.affect` running that encoder, and keep that task's confidence column in `comments.csv`.
-  - Qwen wins a task: delete the matching `PipelineConfig` field rather than pinning it, read that label from the merged Qwen pass in `analyze.affect` instead of running encoder inference, and remove that task's confidence column from `comments.csv` and from every test asserting the header.
-- Column removal is exact. `sentiment_confidence` goes only when Qwen wins sentiment, `emotion_confidence` only when Qwen wins emotion. A mixed outcome removes one column and keeps the other. Update the `comments.csv` schema in the CSVs contract above to match the shipped header.
-- Verification: `python -m py_compile pipeline/config_types.py adapter.py config-template.py pipeline/analyze.py pipeline/report.py tests/test_model_labels.py`; `python tests/test_model_labels.py`; `python tests/test_classify.py`; the three aggregate CSV tests when the export schema changes; `node --check app/app.js`; run Ollama preflight and one small real inference for each selected model and record it in `verification.md`. Assert the shipped `comments.csv` header matches the decision exactly, with no orphan confidence column and no removed column still asserted.
-- Stop: if either benchmark has no passing decision, do not change shipping defaults; report the blocker. Never keep a confidence column populated with a constant.
-
-#### Task 4.5 - Full verification record
-
-- Files: `benchmark-results/verification.md` only. Defects return to owning tasks.
-- Run and record pass/fail/not-run for:
+  - `python -m py_compile db.py server.py adapter.py tests/test_db_schema.py tests/test_skip_pause.py`
   - `python tests/test_db_schema.py`
+  - `python tests/test_skip_pause.py`
+  - Assert new and migrated databases carry default `0`; omitted/false pauses; true with included messages reaches `classify` without `proceed`; true with zero included messages pauses; every serialized snapshot has a boolean `skipPause`; and restart/reopen reads the persisted value.
+- Stop: do not remove `brief_pause`, `POST /proceed`, or run-time Key Message editing. Frontend control belongs to Task C.1.
+
+#### Task A.5 - Keep the progress stream alive
+
+- Files: `server.py`, `tests/test_sse_keepalive.py`.
+- Symbols: `server.run_events` near line 1341. The current function already has a 15-second heartbeat interval near line 1376; validate and finish that behavior rather than adding a second mechanism.
+- Behavior: when no `ProgressEvent` has been emitted for 15 seconds, emit exactly one SSE comment frame `: ping\n\n`. Reset the idle timer after any real event or ping. Continue until the stream reaches its existing terminal condition or disconnect cleanup.
+- Contract: ping frames are comments, not `data:` records. `EventSource.onmessage` never receives them. They do not change `RunSnapshot`, `ProgressEvent`, GET/SSE precedence, stage, percent, or message.
+- Rationale: classification may be quiet long enough for an intermediary to close an idle response. A comment frame keeps the public tunnel path alive without inventing progress.
+- Verification:
+  - `python -m py_compile server.py tests/test_sse_keepalive.py`
+  - `python tests/test_sse_keepalive.py`
+  - Assert an idle stream emits `: ping\n\n` at the configured interval, a real event resets the interval, ping never parses as a `ProgressEvent`, terminal streams close, and disconnect cleanup does not leak a task.
+  - Use a controllable clock or short injected interval in the direct test. Do not wait 15 real seconds.
+- Stop: do not send fake percentages or stages. Do not add frontend ping handling.
+
+#### Task A.6 - Retire Vercel configuration
+
+- Files: `vercel.json` (delete), `.gitignore`.
+- Behavior: delete `vercel.json`. Delete the `!vercel.json` negation from `.gitignore`. Keep every unrelated ignore rule unchanged.
+- Rationale: FastAPI serves the real frontend and API from one origin. A Vercel frontend would need CORS and still depend on the office tunnel, so it adds a second deployment with no product value.
+- Verification:
+  - `git status --short` shows `vercel.json` deleted or absent.
+  - Search current files for `vercel`; allow only historical text in `PRD.md` Revisions.
+  - `git diff --check`
+- Stop: change no executable code in this task.
+
+#### Task A.7 - Backend boundary QA
+
+- QA files: every file changed by Tasks A.1-A.6, read-only.
+- Run every command listed in Tasks A.1-A.6, then:
   - `python tests/test_asset_extraction.py`
-  - `python tests/test_key_messages_patch.py`
-  - `python tests/test_key_messages_draft.py`
-  - `python tests/test_brief_key_messages.py`
   - `python tests/test_run_concurrency_guard.py`
   - `python tests/test_run_key_messages.py`
   - `python tests/test_run_artifacts.py`
+  - `python tests/e2e_product_flow.py`
+  - `git diff --check`
+  - `git status --short`
+- Security inspection: confirm every server path, including static files, downloads, and SSE, crosses the Basic Auth middleware; confirm no credential reaches logs; confirm article fetching cannot connect after a second uncontrolled hostname resolution; confirm `APP_PASSWORD`, `.env`, `config.py`, `data/`, `output/`, and generated reports are absent from Git.
+- Result: record exact assertion counts and exit codes in Delivery state. Owners fix defects in their own files. Do not commit or push unless the user explicitly authorizes Git delivery.
+
+### Wave B - Merge affect labels into Qwen classification
+
+Wave B changes the classification contract and removes the HuggingFace runtime path. Complete it after Wave A and before deployment. The implementation uses the already-pinned `qwen3:8b-q4_K_M`; it does not compare models, score labels, or run a benchmark.
+
+#### Merged classification contract
+
+```ts
+type ClassificationRow = {
+  index: number;
+  theme: string;
+  echoed: string[];
+  sentiment: "positive" | "negative" | "neutral";
+  emotion: "joy" | "anger" | "sadness" | "fear" | "other_neutral";
+};
+```
+
+- `index` must cover every requested DataFrame index exactly once. A boolean is not an integer.
+- `theme` must be one supplied Theme name or `Other`.
+- `echoed` must contain unique supplied Key Message labels only. With no available messages, it must be empty.
+- `sentiment` and `emotion` use resolved labels, not codes. JSON Schema `enum` and Python validation enforce the exact sets.
+- One Ollama request produces all five fields for every row in its batch. There is no second LLM affect request and no encoder inference.
+- Batch application is atomic. Validate the complete response before writing any Theme, Key Message, Sentiment, or Emotion cell.
+
+#### Task B.1 - Extend the strict LLM classification boundary
+
+- Files: `pipeline/analyze.py`, `pipeline/llm.py`, `tests/test_classify.py`.
+- Symbols: `analyze.CLASSIFY_PROMPT` near line 52; `analyze.classify` near line 142 and its atomic apply loop near lines 265-269; `analyze.extend` near line 278; `llm.classification_schema` near line 115; `llm.validate_classification` near line 212; `llm.classify_batch` near line 397.
+- Prompt behavior:
+  - Ask for exactly one Theme, zero or more echoed Key Messages, one Sentiment, and one Emotion per comment.
+  - Define `positive`, `negative`, and `neutral` in plain language. Tell the model to use `neutral` for factual, mixed, or unclear polarity rather than inventing certainty.
+  - Define `joy`, `anger`, `sadness`, and `fear`. Tell the model to use `other_neutral` for no clear emotion, surprise, disgust, or an affect outside the four named classes. Do not silently map unknown words after generation.
+  - Keep existing Theme and Key Message grounding. The model may choose only labels supplied in the prompt.
+  - Keep exact original DataFrame indices in output.
+  - Request non-thinking mode through the existing Ollama request option used by this codebase. Do not add reasoning text to the JSON response or context.
+- Schema behavior: add `sentiment` and `emotion` properties with exact `enum` values. Add both to `required`. Keep `additionalProperties: false`.
+- Validator behavior: change `_object`'s expected key set from `{index, theme, echoed}` to all five keys. Reject out-of-set affect values, booleans as indices, duplicate/missing indices, unknown Themes, duplicate/unknown Key Messages, and any extra key.
+- Apply behavior: after the whole batch validates, write `theme`, `sentiment`, `emotion`, and matching `pt__*` booleans. If any row is invalid, write nothing from that batch.
+- `extend()` behavior: `extend()` reclassifies only rows whose Theme is `Other`. Its `classify()` call now returns affect columns too. During the top-up pass, copy back only `theme` and `pt__*` columns as today; preserve the original `sentiment` and `emotion` from the first full pass. Theme refinement must not silently relabel affect on only one subset.
+- Compatibility rule: retain `classify(df, themes, points, cfg=None, ...)` only as required by the existing direct test. Do not create a second legacy classification shape. Test stubs must return all five fields once this task lands.
+- Verification:
+  - `python -m py_compile pipeline/analyze.py pipeline/llm.py tests/test_classify.py`
+  - `python tests/test_classify.py`
+  - Assert schema exactness, all five fields, exact affect enums, no-extra-keys, complete unique index coverage, empty-message behavior, atomic no-write on one invalid row, successful writes for every field, and unchanged affect during `extend()` Theme top-up.
+  - Assert the prompt includes affect definitions and does not request codes, confidence, statistics, reasoning, or free-form labels.
+- Stop: do not add confidence values, per-Key-Message sentiment, language routing, fallback labels, a second model call, or benchmark hooks.
+
+#### Task B.2 - Remove encoder inference and preserve affect summaries
+
+- Files: `pipeline/analyze.py`, `adapter.py`, `run.py`, `tests/test_classify.py`, `tests/test_evidence.py`.
+- Symbols: `analyze.affect` near line 351; callers `adapter._execute` near line 1159 and `run.main` near line 191; report/evidence consumers of the returned affect summary.
+- New `affect(df, cfg)` behavior:
+  - Do not import `transformers` or load a model.
+  - Validate that `df` already has `sentiment` and `emotion` columns and that every non-null value belongs to the locked sets. Raise a clear `ValueError` for an internal contract violation; do not attempt to repair it.
+  - Preserve the function signature so both production callers stay small. `cfg` remains accepted because `PipelineConfig` is the pipeline contract, even though this function no longer reads a model name.
+  - Build the existing per-group percentage tables from the two columns with `pd.crosstab`, preserving the return shape consumed by report generation: `{"sentiment":{"table":...},"emotion":{"table":...}}` plus only fields current consumers demonstrably require.
+  - Delete `low_confidence_pct` and confidence-based caveat text. Replace any required caveat field with concise source text: `Labels were assigned per comment by the local Qwen classification pass.` Do not claim measured accuracy.
+  - Return a copy and never add `sentiment_confidence` or `emotion_confidence`.
+- Pipeline behavior: callers still run the affect stage to produce tables, but it becomes deterministic Python aggregation over labels already present. Do not rename stages or change progress contracts in this task.
+- Verification:
+  - `python -m py_compile pipeline/analyze.py adapter.py run.py tests/test_classify.py tests/test_evidence.py`
+  - `python tests/test_classify.py`
+  - `python tests/test_evidence.py`
+  - Add direct assertions that `affect()` performs no model import/call, keeps row labels unchanged, emits deterministic percentage tables, rejects missing/invalid columns, carries no confidence fields, and returns only JSON/report-compatible values expected by callers.
+- Stop: do not fold summary-table counting into the model. Do not remove `affect()` unless both production callers and all report consumers become simpler in the same bounded change.
+
+#### Task B.3 - Pin Qwen models and remove encoder configuration
+
+- Files: `pipeline/config_types.py`, `adapter.py`, `run.py`, `config-template.py`, `requirements.txt`, `tests/test_brief_key_messages.py`, `tests/test_classify.py`.
+- Symbols: `PipelineConfig.EMOTION_MODEL`, `PipelineConfig.SENTIMENT_MODEL`, `PipelineConfig.TEXT_MODEL`, `PipelineConfig.VISION_MODEL`; `adapter._build_config` near lines 362-363; the separate `PipelineConfig(...)` constructor in `run.py` near lines 51-52 and encoder preflight output near lines 86-89; test constructors.
+- Config contract:
+  - Delete required fields `EMOTION_MODEL` and `SENTIMENT_MODEL` from `PipelineConfig`.
+  - Set `TEXT_MODEL: str = "qwen3:8b-q4_K_M"`.
+  - Keep `VISION_MODEL: str = "qwen3-vl:8b-instruct-q4_K_M"`.
+  - Keep `OLLAMA_BASE_URL` loopback-only and every existing context, timeout, and keep-alive setting.
+  - Delete encoder settings from `config-template.py`.
+- Constructor migration: remove the two deleted keyword arguments from `adapter._build_config`, `run.py`, `tests/test_brief_key_messages.py`, and `tests/test_classify.py`. Search the full repository after editing; zero executable references to either field may remain.
+- Preflight behavior: remove encoder model prints/checks/download assumptions from `run.py`. Keep YouTube, Ollama, text-model, vision-model, PDF, and other existing preflight behavior.
+- Dependency behavior: remove `transformers>=4.40`, `torch>=2.0`, and their obsolete comment from `requirements.txt`. Do not add a replacement dependency; affect labels now come from existing Ollama calls.
+- Verification:
+  - `python -m py_compile pipeline/config_types.py adapter.py run.py config-template.py tests/test_brief_key_messages.py tests/test_classify.py`
+  - `python tests/test_brief_key_messages.py`
+  - `python tests/test_classify.py`
+  - Search executable Python for `EMOTION_MODEL|SENTIMENT_MODEL|transformers|torch`; allow no current runtime hit. Historical prose in `PRD.md` Revisions may remain.
+  - Instantiate `PipelineConfig` through both production constructors and assert exact model tags.
+- Stop: do not add configurable model tiers, provider fallbacks, automatic model selection, or environment overrides for values that never vary in this deployment.
+
+#### Task B.4 - Remove confidence columns from exports
+
+- Files: `pipeline/report.py`, `tests/test_classify.py`, `tests/test_run_key_messages.py`, `tests/e2e_product_flow.py`, `tests/test_report_sentiment_emotions_csv.py` if it asserts raw comment fixtures.
+- Symbols: `report.COMMENTS_HEADER` near lines 496-498; `report._comments_csv` near line 525; fixtures and header assertions that contain `sentiment_confidence` or `emotion_confidence`.
+- Exact shipped header: `video_id,group,comment,likes,language,theme,sentiment,emotion`, followed by `key_message_<slug>` boolean columns in existing Key Message order.
+- Behavior: delete only the two confidence columns. Keep all sort, encoding, line-ending, missing-value, boolean-column, and deterministic-order behavior unchanged. Do not insert replacement columns or constant scores.
+- Fixture migration: remove obsolete confidence values from direct-test DataFrames where they exist only to satisfy the old header. If a fixture uses them for a distinct assertion, rewrite that assertion against the actual label contract rather than leaving dead data.
+- Verification:
+  - `python -m py_compile pipeline/report.py tests/test_classify.py tests/test_run_key_messages.py tests/e2e_product_flow.py tests/test_report_sentiment_emotions_csv.py`
+  - `python tests/test_classify.py`
+  - `python tests/test_run_key_messages.py`
+  - `python tests/test_report_sentiment_emotions_csv.py`
+  - `python tests/e2e_product_flow.py`
+  - Assert exact header on populated and empty inputs; assert neither removed name appears in generated CSV text; assert key-message columns still follow `emotion`.
+- Stop: do not change aggregate CSV schemas, public artifact names, Report JSON, or evidence filters.
+
+#### Task B.5 - Merged-model QA
+
+- QA files: every file changed by Tasks B.1-B.4, read-only.
+- Run:
+  - `python -m py_compile pipeline/config_types.py pipeline/llm.py pipeline/analyze.py pipeline/report.py adapter.py run.py config-template.py`
+  - `python tests/test_brief_key_messages.py`
+  - `python tests/test_classify.py`
+  - `python tests/test_evidence.py`
   - `python tests/test_report_themes_csv.py`
   - `python tests/test_report_sentiment_emotions_csv.py`
   - `python tests/test_report_key_messages_csv.py`
-  - `python tests/test_classify.py`
-  - `python tests/test_evidence.py`
-  - `python tests/test_model_labels.py`
-  - `python tests/bench_qwen.py --self-check`
-  - `python tests/bench_classifiers.py --self-check`
+  - `python tests/test_run_key_messages.py`
+  - `python tests/e2e_product_flow.py`
+  - `git diff --check`
+  - `git status --short`
+- Inspect the exact Ollama boundary: one classification request per batch; strict five-field schema; no confidence; no encoder import; no model benchmark or scoring path.
+- Reject secrets, `.env`, `config.py`, `data/`, `output/`, generated reports, and model binaries from Git.
+- Record exact results in Delivery state. Do not run a real model in this wave; real-model evidence belongs to Wave D.
+
+### Wave C - Remove benchmark machinery and finish frontend integration
+
+Wave C deletes the abandoned benchmark path and exposes the already-locked skip-pause choice in the UI. Deletion is the main implementation. Do not replace benchmark files with new scripts, placeholders, or result schemas.
+
+#### Task C.1 - Add the skip-pause control
+
+- Files: `app/app.js`, `app/index.html`, `app/style.css`, `app/self-check.html`, `tests/e2e_product_flow.py`.
+- Symbols: `renderCampaign` near `app/app.js:2017`; existing run-start control and `demoApi`/live API method that posts a new run.
+- UI contract:
+  - Render one unchecked checkbox beside the start-analysis control.
+  - Label: `Skip the review step and run straight through`.
+  - Helper text: `We will not pause to ask you to confirm the Key Messages.`
+  - Keep unchecked as the default on every fresh Session render. Do not persist a global preference.
+  - Associate the visible label with the checkbox. Keep it keyboard reachable. Preserve the existing focus ring, 4.5:1 text contrast, reduced-motion behavior, and disabled state while start is pending.
+- Request behavior: pass `skipPause` as the checkbox's boolean value in `POST /api/sessions/{sessionId}/runs`. Demo and live implementations use the same method signature and body shape. Do not send a string or omit false inconsistently between modes.
+- Run behavior: the frontend does not predict whether zero included Key Messages will override the choice. Render the backend `RunSnapshot`; if it returns `brief_pause`, show the existing review UI regardless of the checkbox.
+- Error behavior: a failed start keeps the checkbox value and focus, announces the existing start error, and re-enables controls.
+- Verification:
   - `node --check app/app.js`
   - `node --check app/live.js`
-  - Browser `app/self-check.html`
+  - Serve `app/` on a fresh loopback port and open `app/self-check.html` with `webapp-testing`.
+  - Require every displayed assertion to pass with zero console errors, zero page errors, and zero failed requests.
   - `python tests/e2e_product_flow.py`
-- The E2E record explicitly covers real PDF creation, seven stored/six public artifacts, overwrite of a terminal prior run, active-run rejection, tab-close continuation, pause reopen, URL/playlist/duplicate validation, upload extension/10 MB validation, article scheme/timeout behavior, error shapes, and six downloads.
-- Record date, commit, OS, Python, Node, browser, GPU, commands, exit codes, and concise evidence. Never mark an unrun item passed.
+  - Assert default false body, checked true body, keyboard operation, label association, pending disabled state, failed-start retention, direct completion when true, and forced pause when true but zero messages are included.
+- Depends on: Task A.4.
+- Stop: do not remove the review UI, add a remembered preference, or change `demoApi` method signatures beyond the optional request field already required by the backend contract.
 
-### Wave 5 - Documentation and operations
+#### Task C.2 - Delete benchmark code, data contracts, and result paths
 
-Every task loads `compact-technical-writing` and consumes `benchmark-results/verification.md` plus only its listed documentation files. It does not inspect source.
+- Files: `tests/bench_qwen.py` (delete), `tests/bench_classifiers.py` (delete), `docs/benchmark-runbook.md` (delete), `.gitignore`, `pipeline/llm.py` (comment only), `PRD.md` read-only except Delivery state after completion.
+- Directory state: `benchmark-results/` has no tracked files at planning time. Delete it only if implementation finds files created by this repository and confirms they are disposable; do not delete unknown user data. `benchmark-data/private/` may contain ignored private files; leave local data untouched and remove only repo rules that exist solely for the abandoned benchmark after confirming they protect no other workflow.
+- Delete behavior:
+  - Delete both benchmark harnesses and the runbook.
+  - Remove `.gitignore` rules that exist only for benchmark inputs/results, including `!benchmark-results/*.json`, after verifying each exact line.
+  - Delete the obsolete `pipeline/llm.py` module comment that names `tests/bench_qwen.py`. Change no executable LLM code in this task.
+  - Remove benchmark commands from current QA/task text only where they are still presented as active work. Preserve dated Revisions and commit history references as historical facts.
+  - Do not create `tests/test_model_labels.py`; it never existed and belonged only to the superseded benchmark-selection task.
+- Verification:
+  - Search current executable code and active docs for `bench_qwen|bench_classifiers|benchmark-results|benchmark-data/private|benchmark-runbook|test_model_labels`; allow only dated historical entries in `PRD.md` Revisions.
+  - `python -m py_compile pipeline/llm.py`
+  - `git diff --check`
+  - `git status --short` shows the three tracked deletions and no private benchmark content.
+- Stop: do not delete user-created ignored data. Do not add a replacement benchmark, smoke benchmark, model selector, F1 metric, or output record.
 
-#### Task 5.1 - Product record
+#### Task C.3 - Frontend and teardown QA
 
-- Files: `README.md`, `PRD.md`, `benchmark-results/verification.md` read-only.
-- Update README sections for the final Session flow, setup drafting, transcript reconciliation, always-on Sentiment/Emotion, six downloads, local models, limits, and tab-close boundary. Remove all current-gap claims that verification marks complete.
-- Move completed Wave entries under a dated release while preserving this mission brief decisions and the July 2026 history.
-- Verification: `python tests/check_docs.py README.md PRD.md`.
+- QA files: every file changed by Tasks C.1-C.2, read-only.
+- Run:
+  - `node --check app/app.js`
+  - `node --check app/live.js`
+  - Browser `app/self-check.html` through `webapp-testing`: all assertions pass; zero console errors, page errors, and failed requests.
+  - `python tests/e2e_product_flow.py`
+  - `python tests/test_skip_pause.py`
+  - `git diff --check`
+  - `git status --short`
+- Search for active benchmark references and removed confidence columns. Allow removed names only in dated history and explicit migration assertions that prove absence.
+- Record exact results in Delivery state. Do not commit or push without explicit authorization.
 
-#### Task 5.2 - Setup and benchmark runbook
+### Wave D - Set up and prove the office workstation
 
-- Files: `docs/setup.md`, `docs/benchmark-runbook.md`, `requirements.txt`, `requirements-server.txt`, `benchmark-results/verification.md` read-only.
-- Document exact selected tags/revisions, Ollama pull/start/preflight, classifier first-run downloads, measured disk/GPU/runtime, YouTube key, environment fields, clean deletion of `data/`, server and CLI commands, PDF engine, every direct verification command, benchmark commands, and troubleshooting. Remove Gemini key/provider/fallback instructions. State that direct scripts are not a pytest suite.
-- Change dependency files only when `verification.md` names a required installed package absent from them.
-- Verification: `python tests/check_docs.py docs/setup.md docs/benchmark-runbook.md`; inspect staged diff for secrets.
+Wave D is an operations session on the RTX 4060 Ti 16GB workstation. It runs only after Waves A-C pass. It installs local software, starts the public quick tunnel, and proves the real user flow from another network. It does not modify product code to work around a failed setup step.
 
-#### Task 5.3 - Architecture
+#### Task D.1 - Inspect the workstation and record prerequisites
 
-- Files: `docs/architecture.md`, `benchmark-results/verification.md` read-only.
-- Document exactly eight tables; setup-time extraction; Session `key_messages`; draft coalescing and stale/failed states; immutable run `brief_points`; transcript reconciliation; persisted `brief_pause`; active-run guard and terminal overwrite; Ollama and HuggingFace boundaries; Python counting; seven stored/six public artifacts; report JSON; demo/live boundary; tab close versus backend restart. Remove key visuals, cross-group reports, and dropped/deferred feature sections.
-- Verification: `python tests/check_docs.py docs/architecture.md`.
+- Files: `docs/deployment.md` (create; user-approved path is this existing plan's named deployment record). Never place secrets in it.
+- Record the exact date, Windows edition/build, CPU, RAM, GPU name, NVIDIA driver, free disk, Python version, Git version, and whether administrator rights are available. Record commands and exit codes, not paraphrased claims.
+- Minimum conditions:
+  - NVIDIA reports an RTX 4060 Ti with 16GB VRAM.
+  - Python meets the repo's 3.10+ rule.
+  - Enough free disk exists for the repo, Python environment, Ollama, both model blobs, uploads, and reports. Record the measured free space; do not invent a universal threshold.
+  - The operator can install Ollama and `cloudflared` and configure startup behavior. If not, stop and report the exact permission blocker.
+- Power behavior: configure Windows to never sleep or hibernate while plugged in. If BIOS/UEFI exposes restore-after-power-loss and the operator can change it safely, enable it; otherwise record it as not configured, not passed.
+- Verification: capture command output and exit codes in `docs/deployment.md`. Never infer a pass from software appearing in a menu.
 
-#### Task 5.4 - API reference
+#### Task D.2 - Install dependencies and local models
 
-- Files: `docs/api-reference.md`, `benchmark-results/verification.md` read-only.
-- Copy the Shared HTTP, Key Message, Run/SSE, Artifact, report JSON, CSV, validation, and extraction contracts from this entry. Include exact routes, bodies, statuses, errors, casing rule, MIME, filenames, order, and failed article empty-text behavior.
-- Verification: `python tests/check_docs.py docs/api-reference.md`.
+- Files: `docs/deployment.md`; local environment and machine software only. Do not edit repo dependency files during setup.
+- Install Python dependencies from the final `requirements.txt` and `requirements-server.txt` into the project's chosen environment. Install Playwright Chromium if the PDF path requires it.
+- Install Ollama from its official distribution. Keep Ollama bound to loopback. Confirm no firewall rule exposes port 11434 and no tunnel points to it.
+- Pull exactly:
+  - `qwen3:8b-q4_K_M`
+  - `qwen3-vl:8b-instruct-q4_K_M`
+- Record Ollama version, each exact tag, digest, and reported size. Record `nvidia-smi` before and after one inference.
+- Run one real text inference through the product's `pipeline.llm` boundary using `qwen3:8b-q4_K_M` and the strict merged classification schema. Require one valid five-field row.
+- Run one real image-context inference through `pipeline.llm.extract_image_context` using a harmless local test image and `qwen3-vl:8b-instruct-q4_K_M`. Require valid structured output.
+- Confirm model switching/unload behavior does not leave both models resident beyond 16GB. Do not run both concurrently.
+- Stop on an invalid structured response, CUDA/VRAM failure, cloud-model fallback, or non-loopback Ollama URL. Record the blocker; do not swap models or loosen validation in this task.
 
-#### Task 5.5 - Contributor rules
+#### Task D.3 - Configure secrets and start the local application
 
-- Files: `AGENTS.md`, `benchmark-results/verification.md` read-only.
-- Update identifier mapping for `key_messages`, `brief_points`, `keyMessages`, and `keyMessageSentiment`. Add the final direct commands. Remove Gemini and backend key-visual rules. Preserve thread-local YouTube clients, grounded-only Key Messages, Python counting, required PDF, per-Session overwrite, `PipelineConfig`, frozen `demoApi` signatures, security, and accessibility.
-- Verification: `python tests/check_docs.py AGENTS.md`.
+- Files: `docs/deployment.md`; workstation environment only.
+- Set `YOUTUBE_API_KEY` and `APP_PASSWORD` in the account or service environment that will launch the backend. Use a strong unique shared password. Never pass either value on a command line that is recorded in shell history or the deployment document.
+- Confirm `.env`, `config.py`, and environment dumps containing either secret are untracked. Do not print values for evidence. Record only `set/non-empty`.
+- Start the backend through its supported command. Confirm it binds only `127.0.0.1:8000`.
+- Local authentication checks:
+  - Without credentials, `/`, one static asset, and one API route return 401 with the Basic challenge.
+  - With credentials, `/` serves the real UI and one API GET succeeds.
+  - A wrong password returns 401.
+  - Ollama remains reachable only on loopback.
+- Run one local golden path: open UI, authenticate, create a Session, add a small valid YouTube input, and reach at least setup state. If network/API quota prevents collection, record the exact external blocker rather than modifying code.
 
-#### Task 5.6 - Documentation QA and commit
+#### Task D.4 - Publish through a Cloudflare quick tunnel
 
-- Owner files: `tests/check_docs.py` only. Create a stdlib direct script with `main()` that accepts Markdown paths, checks local relative links and headings, and returns nonzero on broken links.
-- Read-only QA files: every Wave 5 file.
-- Commands: `python tests/check_docs.py README.md PRD.md AGENTS.md docs/setup.md docs/benchmark-runbook.md docs/architecture.md docs/api-reference.md`; `git diff --check`; `git status --short`.
-- Search current-product sections for `signal transfer|codebook|echoed|affect|Gemini|summary.csv|chart_transfer.csv|chart_themes.csv|transfers|ideaSentiment|KEY_VISUALS|key visuals`. Allowed matches are the unchanged July 2026 history, code identifiers inside backticks, and the explicit terminology mapping. `campaign` is allowed only as an internal identifier in backticks; user-facing prose uses Session.
-- Confirm `.env`, `config.py`, `data/`, `output/`, and `benchmark-data/private/` are absent from Git. QA reports defects only. Documentation owners fix them. After a complete pass, an explicitly authorized integration agent commits Wave 5 documentation separately and does not push.
+- Files: `docs/deployment.md`; workstation software only.
+- Install `cloudflared` from its official distribution and record the version.
+- Start exactly `cloudflared tunnel --url http://127.0.0.1:8000`. Do not create a named tunnel, DNS record, Cloudflare Access application, router port forward, or LAN bind.
+- Capture the generated `https://<random>.trycloudflare.com` hostname. Treat it as operational data, not a stable product contract: a quick-tunnel URL can change when restarted.
+- From a client on a different network (mobile data or another external connection):
+  - Open the generated HTTPS URL.
+  - Confirm the browser presents the Basic Auth prompt.
+  - Confirm wrong credentials fail and correct credentials load the UI.
+  - Confirm no mixed-content warning and no direct exposure of port 8000 or 11434.
+  - Create a Session and verify static assets, API calls, and SSE all work through one origin.
+- Security probe: submit a blocked article URL such as `http://127.0.0.1:11434/` and require the exact 422 contract. Use no real internal target beyond loopback.
+- Stop if any path is reachable without credentials, TLS is invalid, Ollama is exposed, or the tunnel points anywhere except `127.0.0.1:8000`.
+
+#### Task D.5 - Run one real end-to-end analysis
+
+- Files: `docs/deployment.md`; generated local `data/` and outputs remain ignored.
+- From the external client, authenticate and run one real Session through the product UI:
+  1. Create a Session.
+  2. Add valid YouTube input and at least one grounded User Input.
+  3. Review or generate Key Messages.
+  4. Start with `skipPause:false`; reach `brief_pause`, edit one message, save, and proceed.
+  5. Close the browser tab during processing, reopen the URL, authenticate again, and restore the run.
+  6. Reach `complete`.
+  7. Open the results screen and download all six public artifacts.
+  8. Confirm `report_json` is not offered as a download.
+- Inspect `comments.csv`: exact header is `video_id,group,comment,likes,language,theme,sentiment,emotion` plus Key Message columns; no confidence columns; labels fall inside locked enums.
+- Inspect one report: Theme, Key Message, Sentiment, and Emotion sections render without missing-field errors. PDF opens.
+- Record total comments and wall-clock duration. If the Session has approximately 3,000 comments, compare the measured duration to two hours as a sanity note only. Never write `passed:false` or block deployment because of that comparison; there is no timing gate.
+- Run a second small Session with `skipPause:true` and included Key Messages. Confirm it goes from reconciliation to classification without user intervention. Do not wait for a second full report if reaching `classify` proves the contract and cancelling remains out of scope; use a naturally small input when possible.
+- Record failures exactly. Do not change model, batch size, timeout, schema, or quality requirements during this operations task.
+
+#### Task D.6 - Configure restart behavior and record limitations
+
+- Files: `docs/deployment.md`; workstation service/task configuration only.
+- Configure Ollama and the FastAPI backend to start when the workstation boots or the operator signs in, using the least privileged mechanism available on the machine.
+- Quick-tunnel limitation: the generated hostname can change after `cloudflared` restarts. Because the user chose the free quick tunnel, do not claim one permanent URL. Choose one of these operational behaviors and record which the workstation supports:
+  - launch `cloudflared` at sign-in and let the operator copy the new URL from logs, or
+  - launch it manually when access is needed.
+- Do not add code, scrape logs, email the URL, publish it to a third party, or create a dynamic-discovery service. A stable URL requires a future named tunnel/domain decision and is out of scope.
+- Reboot the workstation. Without manually starting Ollama or the backend, confirm local Basic Auth and one API GET work. Start or verify `cloudflared` according to the selected quick-tunnel behavior, obtain the current URL, and repeat the external authenticated UI check.
+- Record service/task names, startup triggers, log locations, stop/restart commands, and the quick-tunnel URL rotation limitation.
+- Record accepted operational limits: shared workspace, shared password, no per-user audit, one run at a time, no backups, workstation outage stops service, backend restart loses active-run recovery, quick-tunnel URL may rotate.
+
+#### Task D.7 - Deployment verification record
+
+- Files: `docs/deployment.md` only. Defects return to their owning wave.
+- Record pass/fail/not-run, exact command, exit code, and concise evidence for:
+  - both real model inferences;
+  - backend loopback bind;
+  - Basic Auth over static/API/download/SSE paths;
+  - public HTTPS from a different network;
+  - SSRF rejection;
+  - one-run guard;
+  - SSE persistence through the tunnel;
+  - pause reopen and proceed;
+  - skip-pause path;
+  - one completed real Session;
+  - six public downloads and hidden `report_json`;
+  - exact `comments.csv` header and affect enums;
+  - reboot behavior.
+- Record versions: OS, Python, Node if used, browser, NVIDIA driver, GPU, Ollama, both model tags/digests, `cloudflared`, and current commit.
+- Redact secrets completely. Do not include Basic headers, API keys, passwords, `.env` content, private comments, or full artifact contents.
+- The record is evidence, not a gate fabrication. Mark anything unrun as `NOT RUN` and anything blocked with the exact blocker.
+
+### Wave E - Align documentation with the shipped office service
+
+Every Wave E task loads `compact-technical-writing`. Documentation consumes the final code and `docs/deployment.md`; it does not revive benchmark terminology or infer evidence that the deployment record lacks.
+
+#### Task E.1 - Product and setup documentation
+
+- Files: `README.md`, `docs/setup.md`, `requirements.txt`, `requirements-server.txt`, `docs/deployment.md` read-only.
+- README:
+  - Describe one shared office service reached by browser, not per-device installation.
+  - Document the Session flow, setup Key Messages, optional skip-pause, transcript reconciliation, merged Theme/Key Message/Sentiment/Emotion labelling, results, and six downloads.
+  - State shared-password access, shared workspace visibility, one run at a time, no backups, tab-close continuation, backend-restart limitation, and rotating quick-tunnel URL.
+  - Name `qwen3:8b-q4_K_M` and `qwen3-vl:8b-instruct-q4_K_M`. Do not mention benchmark selection.
+- Setup guide:
+  - Document Python/Ollama/`cloudflared` prerequisites, exact model pulls, `YOUTUBE_API_KEY`, `APP_PASSWORD`, server start, Basic Auth behavior, quick-tunnel command, PDF engine, verification commands, startup/reboot operations, and troubleshooting.
+  - State that `APP_PASSWORD` missing means startup failure.
+  - Explain that `*.trycloudflare.com` changes after restart and that a stable hostname needs a future named tunnel/domain.
+  - Remove HuggingFace encoder, torch, transformers, Gemini, Vercel, Cloudflare Access, DNS delegation, benchmark, and confidence-column instructions.
+- Dependency files: change only if final verified runtime imports disagree. Do not add optional packages for hypothetical deployments.
+- Verification: `python tests/check_docs.py README.md docs/setup.md` when that checker exists; otherwise validate local links manually and run `git diff --check`.
+
+#### Task E.2 - Architecture and API reference
+
+- Files: `docs/architecture.md`, `docs/api-reference.md`, `docs/deployment.md` read-only.
+- Architecture:
+  - Document one workstation, loopback Ollama, loopback FastAPI, outbound quick tunnel, HTTP Basic Auth middleware, shared DB/storage, and browser clients.
+  - Document the trust boundaries: internet client to Cloudflare HTTPS, Cloudflare to loopback tunnel target, middleware before static/API/SSE, SSRF guard before article connections, and no authorization inside the workspace.
+  - Document merged Qwen classification and Python aggregation. Remove the HuggingFace boundary and confidence path.
+  - Document global one-run guard, persisted `brief_pause`, optional skip-pause, tab-close continuation, backend-restart limitation, seven stored/six public artifacts, and quick-tunnel URL rotation.
+- API reference:
+  - Add HTTP Basic Auth as a requirement for every path, including static resources and SSE. Document exact 401 challenge behavior without including credentials.
+  - Add `skipPause` to start-run request and `RunSnapshot`.
+  - Add global-run conflict error and article private-address 422 error.
+  - Keep camelCase HTTP and snake_case SSE rules.
+  - Update `comments.csv` to the eight fixed columns plus Key Message columns.
+  - Preserve all other current route, artifact, Report JSON, validation, and extraction contracts.
+- Verification: `python tests/check_docs.py docs/architecture.md docs/api-reference.md` when available; inspect links and `git diff --check`.
+
+#### Task E.3 - Contributor rules and product record
+
+- Files: `AGENTS.md`, `PRD.md`, `docs/deployment.md` read-only.
+- AGENTS.md:
+  - Update terminology mapping so Sentiment and Emotions no longer name confidence columns.
+  - Add `APP_PASSWORD` to the never-commit rule.
+  - Record merged classify contract, one-run invariant, Basic Auth boundary, SSRF guard, and loopback Ollama rule under "Things that must not change without justification."
+  - Remove HuggingFace encoder, benchmark, Gemini, Vercel, and Cloudflare Access instructions from current guidance.
+  - Keep thread-local YouTube clients, grounded-only Key Messages, Python counting, required PDF, per-Session terminal overwrite, `PipelineConfig`, frozen `demoApi` signatures, accessibility, and exact verification ownership.
+- PRD.md:
+  - Preserve completed task contracts and Revisions.
+  - Move Waves A-E outcomes into Delivery state only after their QA actually passes. Never pre-mark work complete.
+  - Keep superseded benchmark/deployment detail only in dated history, not as active tasks.
+- Verification: `python tests/check_docs.py AGENTS.md PRD.md` when available; `git diff --check`.
+
+#### Task E.4 - Documentation QA
+
+- Owner files: `tests/check_docs.py` only if it does not yet exist. Create a stdlib direct script with `main()` that accepts Markdown paths, checks local relative links and duplicate/malformed headings, and exits nonzero on a defect. Do not add a documentation framework.
+- Read-only QA files: `README.md`, `PRD.md`, `AGENTS.md`, `docs/setup.md`, `docs/deployment.md`, `docs/architecture.md`, `docs/api-reference.md`.
+- Run:
+  - `python tests/check_docs.py README.md PRD.md AGENTS.md docs/setup.md docs/deployment.md docs/architecture.md docs/api-reference.md`
+  - `git diff --check`
+  - `git status --short`
+- Search current-product sections for stale active guidance: `bench_qwen|bench_classifiers|benchmark-results|benchmark-runbook|HuggingFace|transformers|torch|sentiment_confidence|emotion_confidence|Vercel|Cloudflare Access|analysis.innocean.co.id|DNS delegation|qwen3:14b`. Allow dated Revisions and explicit migration history only.
+- Confirm `.env`, `config.py`, `data/`, `output/`, private benchmark data, generated reports, model files, API keys, and passwords are absent from Git.
+- Record exact results in Delivery state. Do not commit or push without explicit authorization.
 
 ---
 
@@ -597,6 +818,12 @@ Removed the background brief, where the model wrote what it knew about a campaig
 ## Revisions
 
 Detailed root-cause narration for each entry below lives in the matching commit message.
+
+- 2026-08-18: Implemented Wave A Tasks A.1 (SSRF guard on article fetching), A.2 (fail-closed HTTP Basic Auth), and A.6 (Vercel removal), with no verification by the user's explicit scoping of the session to implementation only. Two design points were decided against the plan text, which named the requirement without naming a mechanism. The anti-rebinding rule ("do not trust a validated DNS answer indefinitely") is satisfied by connecting to the resolved literal address and carrying the original hostname in the `Host` header and the httpx `sni_hostname` extension; a pre-check followed by a by-name request would have re-resolved and failed the rule. The Playwright end-to-end harness needed `http_credentials` on a browser context rather than a request header, because its `new_page()` call at `tests/e2e_product_flow.py:795` has nowhere to attach one and navigations, EventSource, and downloads each need the credential. Corrected one defect in the auth middleware before it was recorded: `secrets.compare_digest` over two `str` values raises `TypeError` on any non-ASCII character, so a submitted password with one would have produced a 500 rather than a 401; both sides now compare as UTF-8 bytes. Left the two named test files unwritten rather than writing test code nobody would run.
+
+- 2026-08-18: Re-scoped remaining delivery around the available office RTX 4060 Ti 16GB and direct implementation. Removed model benchmarking, answer-key annotation, F1 gates, private benchmark corpus work, benchmark result records, and HuggingFace affect encoders from the active product. Pinned `qwen3:8b-q4_K_M` for text and `qwen3-vl:8b-instruct-q4_K_M` for image User Inputs. Locked one merged Qwen classification response per batch with Theme, Key Messages, Sentiment, and Emotion; removed both confidence columns from the shipping `comments.csv` contract. Replaced the branded Cloudflare Access deployment with a free rotating `*.trycloudflare.com` quick tunnel protected by fail-closed HTTP Basic Auth from `APP_PASSWORD`. Kept loopback FastAPI/Ollama, SSRF protection, one global active run, optional skip-pause, and SSE keepalive. Added detailed Waves A-E for backend boundary, merged model path, teardown/frontend, workstation deployment, and documentation. Recorded quick-tunnel URL rotation, shared-workspace exposure, one-run limit, no backups, and no backend-restart recovery as accepted limits. Compacted completed Waves 1-3 into one verified-foundation summary; their exact contracts remain in Shared contracts, Delivery state, tests, and git history. Deleted untracked `docs/deployment-brief.html` and `docs/deployment-brief.pdf` at the user's request.
+
+- 2026-08-15: Added Wave 6 (office deployment) and placed it before Wave 4. The RTX 4060 Ti is both the deployment target and the locked benchmark hardware, so it must be set up before Wave 4 can run. Locked the topology: one workstation runs Ollama, the backend, and the frontend; `pipeline/llm.py:239` rejects any non-loopback `OLLAMA_BASE_URL`, so co-location is a code requirement rather than a preference. The backend keeps its `127.0.0.1:8000` bind and keeps serving `app/` itself, with `cloudflared` publishing it and Cloudflare Access restricting login to `@innocean.co.id`. Dropped Vercel, because the backend already serves the real UI and a second origin would need CORS while reaching the same tunnel. Reversed the original per-device storage idea: all Sessions, uploads, and artifacts live on the one workstation, which the existing re-download endpoints (`server.py:1116`, `server.py:1466`) and Files page (`app/app.js:3044`) already serve unchanged. Accepted three consequences explicitly: no accounts, so every authenticated user reads every Session; no backups, so the workstation disk holds the only copy; and a plain error when Ollama is unreachable. Found one real defect that the deployment itself creates: `assets.fetch_article` (`assets.py:114`) follows redirects to any host passing the `^https?://` check at `server.py:1058` and persists the response body, which becomes server-side request forgery against the office network once the tunnel is open. Task 6.1 closes it with pre-connection resolution, per-redirect re-checking, and a 422 rather than the never-raise empty-text path. Added the global one-run guard, the optional skip of the Key Message pause with a zero-included-messages fallback, and a 15-second SSE keepalive for hour-long silent `classify` stages.
 
 - 2026-08-15: Prepared Wave 4 offline. Measured the machine instead of assuming it: an RTX 3050 Laptop with 4096 MiB holds neither Qwen candidate, and no Ollama daemon runs, so every model-dependent step is blocked on hardware. Closed two contract holes found by auditing the harnesses against their tasks. Task 4.1 produced only Sentiment and Emotions labels while Task 4.3 gated on `themeMacroF1` and `keyMessageMacroF1`, so those two gates had no answer key; the labels row now carries `true_theme` and `true_key_message_ids`. Nothing produced the `allowed_theme_labels` and `allowed_key_message_ids` arrays the index encoding needs; a hand-authored six-entry Theme book and five-entry Key Message list in `docs/benchmark-runbook.md` are now their source. Reduced the label set from 600 across two independent annotators to a 150-row single-annotator pilot, and recorded that this validates tooling rather than deciding what ships. Locked the single-character Sentiment and Emotions code map. Added the rule that every Key Message ID must appear on at least 5 rows, because an unmentioned ID scores `0.0` in a Macro F1 mean and would fail the 0.70 gate on corpus composition rather than model quality. Removed two plaintext API keys from `config.py`, which now reads `YOUTUBE_API_KEY` from the environment; the unused `GEMINI_API_KEY` was deleted rather than migrated. Both harnesses reached their locked CLI, loader, index-resolution, and output-record contracts with offline self-checks proving each. No model ran, no comments were collected, and no benchmark result was produced.
 

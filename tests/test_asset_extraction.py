@@ -39,13 +39,17 @@ db._DB_PATH = Path(_tmp_dir) / "app.db"
 # upload test never touches the real data/ tree.
 storage.uploads_dir = lambda: storage._ensure(os.path.join(_tmp_dir, "uploads"))
 
+# server refuses to start without APP_PASSWORD, and its Basic Auth
+# middleware guards every route. Set before import so the startup hook sees it.
+os.environ.setdefault("APP_PASSWORD", "test-password")
+
 import server
 from fastapi.testclient import TestClient
 
 # TestClient only runs FastAPI's startup event (which calls db.init())
 # inside a `with` block. Call it directly instead so a bare client works.
 db.init()
-client = TestClient(server.app)
+client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})
 
 
 def _make_session_and_campaign():

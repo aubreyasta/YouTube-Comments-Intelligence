@@ -33,6 +33,9 @@ import uvicorn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("YOUTUBE_API_KEY", "e2e-test-key")
+# server refuses to start without APP_PASSWORD, and its Basic Auth
+# middleware guards every route. Set before import so the startup hook sees it.
+os.environ.setdefault("APP_PASSWORD", "test-password")
 
 # db._DB_PATH and storage._ROOT are module globals dereferenced per
 # call (not read once at import time), so reassigning them here before
@@ -792,7 +795,12 @@ def main():
 
         pw = sync_playwright().start()
         browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
+        # http_credentials answers the Basic challenge for navigations,
+        # fetch/XHR, EventSource, and downloads from one place.
+        context = browser.new_context(
+            http_credentials={"username": "office", "password": "test-password"}
+        )
+        page = context.new_page()
         _register_network_capture(page)
         page.on("console", lambda msg: _CONSOLE_ERRORS.append(msg.text)
                if msg.type == "error" else None)

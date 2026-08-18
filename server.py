@@ -1,11 +1,18 @@
-# UNAUTHENTICATED - binds 127.0.0.1:8000, localhost-only by design. Single user, no auth.
+# Binds 127.0.0.1:8000. Reached from the public internet through a cloudflared
+# quick tunnel whose only target is that loopback address, so this process is
+# the security boundary: HTTP Basic Auth below guards every path, including
+# static files, downloads, and SSE. Authentication is the whole model - every
+# authenticated client shares one workspace and there is no authorization.
 
 import asyncio
+import base64
+import binascii
 import csv
 import json
 import logging
 import os
 import re
+import secrets
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -19,7 +26,7 @@ except ImportError:
     pass
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -35,12 +42,83 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="YouTube Comment Intelligence")
 
 
+# ---------------------------------------------------------------------------
+# HTTP Basic Auth - the only gate, applied before routing
+# ---------------------------------------------------------------------------
+
+_AUTH_CHALLENGE = {
+    "WWW-Authenticate": 'Basic realm="YouTube Intelligence", charset="UTF-8"'
+}
+
+
+def _app_password() -> str:
+    """The configured shared password. Empty means unconfigured."""
+    return (os.environ.get("APP_PASSWORD") or "").strip()
+
+
 @app.on_event("startup")
 def _startup():
+    # Fail closed. A server that starts without a password is a server that
+    # publishes every Session to whoever finds the tunnel URL.
+    if not _app_password():
+        raise RuntimeError("APP_PASSWORD must be set before the server can start.")
     db.init()
     for key in ("YOUTUBE_API_KEY",):
         if not os.environ.get(key):
             logger.warning("%s is not set - runs will fail without it", key)
+
+
+def _basic_password(header: str):
+    """Extract the password from an Authorization header, or None.
+
+    None covers every malformed case: wrong scheme, bad Base64, non-UTF-8
+    bytes, no colon, empty username. The caller treats them all the same.
+    """
+    if not header:
+        return None
+
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return None
+
+    try:
+        raw = base64.b64decode(encoded.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+    username, sep, password = decoded.partition(":")
+    if not sep or not username:
+        return None
+
+    return password
+
+
+@app.middleware("http")
+async def _require_basic_auth(request: Request, call_next):
+    """Guard every path. Runs before routing, so it also covers the static
+    mount, artifact downloads, and the SSE stream."""
+    expected = _app_password()
+    supplied = _basic_password(request.headers.get("authorization", ""))
+
+    # Compare bytes, not str: secrets.compare_digest rejects a non-ASCII str
+    # with TypeError, which would turn a wrong password into a 500.
+    if supplied is None or not secrets.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
+        # No credential detail in the body or the log: an error message that
+        # echoes a submitted password writes it into every access log.
+        return PlainTextResponse(
+            "Authentication required.",
+            status_code=401,
+            headers=_AUTH_CHALLENGE,
+        )
+
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -1058,10 +1136,15 @@ def add_article(campaign_id: str, body: ArticleBody):
         if not re.match(r"^https?://", url, re.I):
             _422("Articles need a full http:// or https:// link.", "url")
 
-        # Fetch runs on successful save, not deferred to run start.
-        # assets.fetch_article() never raises; a failed fetch returns
-        # empty text and the asset is still saved (see Risks table).
-        fetched = assets.fetch_article(url)
+        # Fetch runs on successful save, not deferred to run start. An
+        # ordinary fetch failure returns empty text and the asset is still
+        # saved (see Risks table). A URL that can reach a non-public
+        # address is the one failure promoted to a user input error, and
+        # creates no asset.
+        try:
+            fetched = assets.fetch_article(url)
+        except assets.BlockedUrl:
+            _422("That link points to a private address and cannot be fetched.", "url")
 
         aid = str(uuid.uuid4())
         conn.execute(
