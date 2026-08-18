@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- report brief_pause after a tab reopen with no SSE connection to
     -- replay from.
     stage       TEXT NOT NULL DEFAULT 'queued',
+    -- 1 when the user asked to skip the Key Message review pause. The
+    -- pause still happens when reconciliation leaves zero included
+    -- messages, so this is a request, not a guarantee.
+    skip_pause  INTEGER NOT NULL DEFAULT 0,
     started_at  TEXT,
     finished_at TEXT,
     error       TEXT
@@ -114,6 +118,9 @@ def init() -> None:
         if "stage" not in cols:
             conn.execute(
                 "ALTER TABLE runs ADD COLUMN stage TEXT NOT NULL DEFAULT 'queued'")
+        if "skip_pause" not in cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()

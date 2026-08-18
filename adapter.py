@@ -1094,13 +1094,25 @@ def _execute(run_id: str) -> None:
               detail=str(len(reconciled)))
 
         # --- 7. Replace brief points with the reconciled list; brief pause --
+        # The reconciled list is persisted before the stage decision either
+        # way, so a run that skips the pause still leaves the same auditable
+        # brief_points rows a paused run does.
         _replace_brief_points(run_id, campaign["id"], reconciled)
-        _push(run_id, "brief_pause",
-              "Brief ready for review. Waiting for approval.", 40,
-              detail=str(len(reconciled)))
 
-        # Block until server.py calls proceed (sets the event).
-        get_proceed_event(run_id).wait()
+        # skip_pause is a request, not a guarantee: with zero included
+        # messages there is nothing to classify against, so the run pauses
+        # regardless and the user must include at least one (PRD Task A.4).
+        any_included = any(pt.get("included") for pt in reconciled)
+        if run_row["skip_pause"] and any_included:
+            _push(run_id, "brief", "Brief ready - skipping review", 40,
+                  detail=str(len(reconciled)))
+        else:
+            _push(run_id, "brief_pause",
+                  "Brief ready for review. Waiting for approval.", 40,
+                  detail=str(len(reconciled)))
+
+            # Block until server.py calls proceed (sets the event).
+            get_proceed_event(run_id).wait()
 
         # --- 8. Re-read included brief points ---------------------------------
         # video_id is always NULL on these rows (Session-level Key

@@ -450,6 +450,7 @@ def _ser_run(row, conn) -> dict:
         "pct": 100 if state == "complete" else 0,
         "message": "",
         "error": row["error"],
+        "skipPause": bool(row["skip_pause"]),
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
         "artifacts": [_ser_artifact(a) for a in public_arts],
     }
@@ -550,6 +551,11 @@ class SaveKeyMessagesBody(BaseModel):
 class BriefPointsBody(BaseModel):
     """BriefPointInput == KeyMessageInput (PRD "Runs and SSE")."""
     messages: list[KeyMessageIn]
+
+class StartRunBody(BaseModel):
+    """StartRunRequest (PRD "Start-run request"). Omitted means False:
+    the run pauses for Key Message review as it always has."""
+    skipPause: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1223,22 +1229,34 @@ def get_asset_file(asset_id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/sessions/{session_id}/runs", status_code=202)
-def start_run(session_id: str):
+def start_run(session_id: str, body: StartRunBody | None = None):
+    skip_pause = 1 if (body is not None and body.skipPause) else 0
     conn = db.get_conn()
     try:
         if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
             _404("Session not found.")
+
+        # One GPU serves every run, so the guard is global, not per-Session
+        # (PRD "Locked decisions"). BEGIN IMMEDIATE takes SQLite's write
+        # lock before the check, so the check and the INSERT are one
+        # transaction and two simultaneous requests cannot both pass it.
+        # Manual transaction control: get_conn() leaves pysqlite's implicit
+        # BEGIN in charge, which would open the transaction too late.
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
 
         # Reject a second concurrent run BEFORE deleting anything: overwrite
         # (below) is only safe once we know no run is currently in flight,
         # otherwise this would nuke a running adapter thread's brief_points
         # and artifacts out from under it.
         active = conn.execute(
-            "SELECT id FROM runs WHERE session_id = ? AND state IN ('queued', 'running')",
-            (session_id,)
+            "SELECT id, session_id FROM runs WHERE state IN ('queued', 'running')"
         ).fetchone()
         if active:
-            _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
+            if active["session_id"] == session_id:
+                _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
+            _409("Another analysis is already running. Wait for it to finish.",
+                 "RUN_IN_PROGRESS")
 
         # Overwrite: clear prior runs for this session before inserting the new one.
         # ponytail: hard overwrite, no run history; if history is wanted later, keep rows
@@ -1250,13 +1268,13 @@ def start_run(session_id: str):
         for old_id in old_ids:
             storage.clear_run(old_id)
         conn.execute("DELETE FROM runs WHERE session_id=?", (session_id,))
-        conn.commit()
 
         rid = str(uuid.uuid4())
         now = _now()
         conn.execute(
-            "INSERT INTO runs (id, session_id, state, started_at) VALUES (?,?,?,?)",
-            (rid, session_id, "queued", now)
+            "INSERT INTO runs (id, session_id, state, started_at, skip_pause) "
+            "VALUES (?,?,?,?,?)",
+            (rid, session_id, "queued", now, skip_pause)
         )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
