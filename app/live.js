@@ -188,8 +188,8 @@ const liveApi = {
     return apiJson("/api/runs/" + id);
   },
 
-  async startRun(sessionId) {
-    return apiJson("/api/sessions/" + sessionId + "/runs", { method: "POST" });
+  async startRun(sessionId, skipPause = false) {
+    return apiJson("/api/sessions/" + sessionId + "/runs", json({ skipPause: !!skipPause }));
   },
 
   async updateBriefPoints(runId, messages) {

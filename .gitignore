@@ -18,15 +18,6 @@ output/
 # comment CSVs with PII). None of it belongs in git regardless of extension.
 data/
 
-# ── Benchmark data and results ────────────────────────────────────────────────
-# Raw benchmark comments, labels, and per-row model predictions are private:
-# they hold real comment text and client-adjacent data. Never staged.
-benchmark-data/private/
-
-# Sanitized aggregate benchmark results ARE committed. They need an explicit
-# negation because the *.json rule above would otherwise swallow them.
-!benchmark-results/*.json
-
 # ── HuggingFace model cache ───────────────────────────────────────────────────
 # The emotion models download here on first run (~500 MB each).
 .cache/

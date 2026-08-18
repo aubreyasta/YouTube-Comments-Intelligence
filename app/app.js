@@ -836,7 +836,7 @@ const demoApi = {
    * Always creates a fresh run ID, even for a session that already ran.
    * @param {string} sessionId @returns {Promise<object>} the new Run
    */
-  async startRun(sessionId) {
+  async startRun(sessionId, skipPause = false) {
     const s = store.sessions.get(sessionId);
     if (!s) throw demoError("not_found", "Session not found.");
     for (const r of store.runs.values()) {
@@ -849,7 +849,8 @@ const demoApi = {
     }
     const run = {
       id: uid(), sessionId, status: "queued", stage: "connecting",
-      pct: 0, message: "Queued", briefPointIds: [], error: null, createdAt: nowIso(),
+      pct: 0, message: "Queued", briefPointIds: [], error: null,
+      skipPause: !!skipPause, createdAt: nowIso(),
     };
     // Fresh brief points per run, seeded from the campaign's assets/brief.
     const campaign = store.campaigns.get(s.campaignIds[0]);
@@ -2034,6 +2035,13 @@ async function renderCampaign(sessionId, campaignId) {
       </nav>
     </div>
     <div class="topbar-right">
+      ${runningRun ? "" : `<div class="skip-pause">
+        <input type="checkbox" id="chk-skip-pause">
+        <label for="chk-skip-pause">
+          Skip the review step and run straight through
+          <span class="hint">We will not pause to ask you to confirm the Key Messages.</span>
+        </label>
+      </div>`}
       <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>
     </div>`);
   const runBtn = document.getElementById("btn-run");
@@ -2045,10 +2053,18 @@ async function renderCampaign(sessionId, campaignId) {
       const st = kmGetState(sessionId);
       const startTheRun = () => {
         const proceedOverwrite = async () => {
+          const chk = document.getElementById("chk-skip-pause");
+          const skipPause = !!(chk && chk.checked);
+          runBtn.disabled = true;
+          if (chk) chk.disabled = true;
           try {
-            const run = await demoApi.startRun(sessionId);
+            const run = await demoApi.startRun(sessionId, skipPause);
             location.hash = `#/runs/${run.id}`;
-          } catch (err) { alert(err.message); }
+          } catch (err) {
+            runBtn.disabled = false;
+            if (chk) { chk.disabled = false; chk.focus(); }
+            alert(err.message);
+          }
         };
         // Live mode: confirm overwrite when session is not fresh (a previous result exists).
         if (live && session.status !== "ready") {
