@@ -714,6 +714,29 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   .ev-drawer.overlay { width: min(400px, 88vw); flex-basis: auto; }
 }
 
+/* ---------- Motion ---------- */
+/* Route change, stage advance, and drawer entry all animate on DOM insertion,
+   so no JS drives them. Every rule below is switched off by the reduced-motion
+   block that follows. */
+@keyframes view-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes step-advance { from { transform: scale(.72); } to { transform: none; } }
+@keyframes drawer-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* These five selectors are every top-level child #view ever receives, so
+   animating them (not #view itself) keeps the fixed-position drawer and
+   modal overlays out of a transformed containing block. */
+/* .report-scroll, not .report-layout: the wide-viewport evidence drawer is a
+   position:fixed sibling inside .report-layout, and a transform there would
+   make it that drawer's containing block. */
+.view-pad, .run-layout, .setup-wrap, .campaign-layout,
+.report-scroll { animation: view-rise .22s cubic-bezier(.22, .61, .36, 1) both; }
+
+.step-row.advanced .step-dot { animation: step-advance .3s cubic-bezier(.34, 1.4, .64, 1) both; }
+
+.ev-drawer { animation: drawer-in .22s cubic-bezier(.22, .61, .36, 1) both; }
+.ev-backdrop { animation: backdrop-in .18s ease both; }
+
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -723,4 +746,8 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   }
   .step-dot.current { animation: none; border-color: var(--pink); }
   .spinner { animation: none; border-color: var(--pink); }
+  .view-pad, .run-layout, .setup-wrap, .campaign-layout,
+  .report-scroll { animation: none; }
+  .step-row.advanced .step-dot { animation: none; }
+  .ev-drawer, .ev-backdrop { animation: none; }
 }

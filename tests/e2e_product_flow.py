@@ -8,9 +8,9 @@ YouTube, LLM/Ollama, classifier, and article-fetch boundaries are
 replaced with process-global fakes; everything else (routes, DB,
 storage, frontend JS) runs for real.
 
-This file covers Session creation through run start only. A second
-packet adds the post-brief_pause cases (proceed, completion,
-downloads, report JSON, ARIA sweep).
+This file covers Session creation through run start, the post-brief_pause path
+(proceed, completion, downloads, report JSON, ARIA sweep), and the skip-pause
+control.
 
 Run: python tests/e2e_product_flow.py
 """
@@ -58,7 +58,7 @@ from playwright.sync_api import sync_playwright
 
 # Mutable control switch read on every draft_from_inputs call, so
 # behavior can flip mid-run without stopping/restarting patches.
-FAKES = {"draft_fails": False}
+FAKES = {"draft_fails": False, "reconcile_all_excluded": False}
 
 _FIXED_PROPOSALS = [
     ("Lower price", "Cheaper than before."),
@@ -82,8 +82,16 @@ def _register_network_capture(page):
     def on_request(request):
         if "/api/" not in request.url:
             return
+        # post_data decodes the body as UTF-8 and raises on a binary one.
+        # The upload route posts raw PNG bytes, and an exception raised
+        # inside a Playwright event listener poisons the page connection.
+        try:
+            post_data = request.post_data
+        except Exception:
+            post_data = None
         _REQUESTS.append({"kind": "request", "method": request.method,
-                           "url": request.url, "t": time.monotonic()})
+                           "url": request.url, "t": time.monotonic(),
+                           "post_data": post_data})
 
     def on_response(response):
         if "/api/" not in response.url:
@@ -190,6 +198,8 @@ def _fake_reconcile(existing, meta_df, cfg, context_map=None, images_map=None,
              "included": True, "order": i, "edited": False}
             for i, (lbl, desc) in enumerate(_FIXED_PROPOSALS)
         ]
+    if FAKES["reconcile_all_excluded"]:
+        reconciled = [dict(row, included=False) for row in reconciled]
     return ("# grounded", reconciled)
 
 
@@ -280,6 +290,102 @@ def _wait_count(page, selector, expected, timeout_ms=5000):
             return
         time.sleep(0.05)
     _expect(False, f"{selector} count never became {expected}, last was {last}")
+
+
+def _last_start_body(session_id):
+    """Return the parsed JSON body of the most recent POST to this Session's
+    runs route, or None if no such request was captured."""
+    for entry in reversed(_REQUESTS):
+        if (entry["kind"] == "request" and entry["method"] == "POST"
+                and entry["url"].endswith(f"/api/sessions/{session_id}/runs")):
+            raw = entry.get("post_data")
+            return json.loads(raw) if raw else None
+    return None
+
+
+def _goto_campaign_at(page, base):
+    page.goto(base + "/#/sessions/" + _STATE["session_id"] +
+              "/campaigns/" + _STATE["campaign_id"])
+    page.wait_for_selector("#btn-run")
+
+
+def _dismiss_confirm_modals(page, limit=2):
+    """Click through any confirmation modals the start path raises. Two can
+    stack: the stale-Key-Message confirm and the overwrite confirm."""
+    for _ in range(limit):
+        cont = page.locator("#overlay-root [data-confirm-continue]")
+        deadline = time.time() + 1.0
+        found = False
+        while time.time() < deadline:
+            if cont.count() > 0:
+                found = True
+                break
+            time.sleep(0.05)
+        if not found:
+            return
+        cont.first.click()
+        page.wait_for_timeout(100)
+
+
+def _start_run_from_campaign(page, base, checked):
+    """Set the skip-pause checkbox, press start, clear any confirm modal, and
+    return the new run id read from the URL hash."""
+    _goto_campaign_at(page, base)
+    box = page.locator("#chk-skip-pause")
+    _expect(box.count() == 1,
+            "#chk-skip-pause was not rendered on the campaign screen, so the "
+            "skip-pause path cannot be exercised")
+    box.set_checked(checked)
+    _expect(box.is_checked() is checked,
+            f"#chk-skip-pause checked state was {box.is_checked()}, expected {checked}")
+    page.click("#btn-run")
+    _dismiss_confirm_modals(page)
+    deadline = time.time() + 15.0
+    last = None
+    while time.time() < deadline:
+        last = page.evaluate("location.hash")
+        match = re.match(r"^#/runs/([^/]+)$", last)
+        if match:
+            return match.group(1)
+        time.sleep(0.05)
+    _expect(False, f"hash never reached #/runs/<id> after start, last was {last!r}")
+
+
+def _poll_run_snapshot_for(page, base, run_id, predicate, deadline_s, label):
+    """Same contract as _poll_run_snapshot, but for an explicit run id rather
+    than _STATE['run_id']."""
+    deadline = time.time() + deadline_s
+    snap = None
+    while time.time() < deadline:
+        snap = page.request.get(base + "/api/runs/" + run_id).json()
+        if predicate(snap):
+            return snap
+        time.sleep(0.2)
+    _expect(False, f"{label}; last snapshot: {snap!r}")
+    return snap
+
+
+def _drain_paused_run(page, base, run_id):
+    """Take a run that is sitting at brief_pause through to a terminal status,
+    so the global one-run guard does not block the next case."""
+    snap = page.request.get(base + "/api/runs/" + run_id).json()
+    messages = []
+    for i, bp in enumerate(snap.get("briefPoints", [])):
+        messages.append({"id": bp["id"], "label": bp["label"],
+                         "description": bp["description"],
+                         "included": i == 0, "order": i})
+    _expect(messages, f"run {run_id} paused with no briefPoints to include")
+    resp = page.request.patch(base + "/api/runs/" + run_id + "/brief_points",
+                              data=json.dumps({"messages": messages}),
+                              headers={"content-type": "application/json"})
+    _expect(resp.status == 200,
+            f"PATCH /brief_points returned {resp.status}: {resp.text()}")
+    resp = page.request.post(base + "/api/runs/" + run_id + "/proceed")
+    _expect(resp.status == 200,
+            f"POST /proceed returned {resp.status}: {resp.text()}")
+    _poll_run_snapshot_for(page, base, run_id,
+                           lambda s: s.get("status") in ("complete", "failed"),
+                           120.0, f"run {run_id} never reached a terminal status")
 
 
 # --- cases -------------------------------------------------------------
@@ -770,6 +876,175 @@ def aria_and_keyboard(page, base):
             f"after: {[page.input_value('#km-label-0'), page.input_value('#km-label-1')]!r}")
 
 
+def skip_pause_control_is_accessible(page, base):
+    _goto_campaign_at(page, base)
+    box = page.locator("#chk-skip-pause")
+    _expect(box.count() == 1, "#chk-skip-pause was not rendered")
+    _expect(box.get_attribute("type") == "checkbox",
+            "#chk-skip-pause is not an input of type checkbox")
+    _expect(box.is_checked() is False,
+            "#chk-skip-pause was checked on a fresh render; unchecked is the "
+            "locked default")
+
+    label = page.locator('label[for="chk-skip-pause"]')
+    _expect(label.count() == 1,
+            'no label[for="chk-skip-pause"] found, so the control is not '
+            "label-associated")
+    label_text = label.first.text_content()
+    _expect("Skip the review step and run straight through" in label_text,
+            f"label text was {label_text!r}")
+    _expect("We will not pause to ask you to confirm the Key Messages."
+            in label_text,
+            f"helper text missing from label, text was {label_text!r}")
+
+    box.focus()
+    is_active = page.evaluate(
+        "() => document.activeElement === document.getElementById('chk-skip-pause')")
+    _expect(is_active, "#chk-skip-pause did not become document.activeElement")
+    page.keyboard.press("Space")
+    _expect(box.is_checked() is True,
+            "#chk-skip-pause did not toggle on when Space was pressed")
+    page.keyboard.press("Space")
+    _expect(box.is_checked() is False,
+            "#chk-skip-pause did not toggle off when Space was pressed again")
+
+
+def skip_pause_failed_start_retains_state(page, base):
+    _goto_campaign_at(page, base)
+    page.locator("#chk-skip-pause").check()
+
+    def _fail(route):
+        route.fulfill(status=500, content_type="application/json",
+                      body=json.dumps({"error": "SERVER_ERROR",
+                                       "message": "Injected start failure.",
+                                       "field": None}))
+
+    page.route("**/api/sessions/*/runs", _fail)
+    try:
+        page.click("#btn-run")
+        _dismiss_confirm_modals(page)
+        deadline = time.time() + 10.0
+        recovered = False
+        while time.time() < deadline:
+            if (page.locator("#chk-skip-pause").count() == 1
+                    and page.get_attribute("#btn-run", "disabled") is None
+                    and page.get_attribute("#chk-skip-pause", "disabled") is None):
+                recovered = True
+                break
+            time.sleep(0.05)
+        _expect(recovered,
+                "#btn-run and #chk-skip-pause were not both re-enabled after a "
+                "failed start")
+        _expect(page.locator("#chk-skip-pause").is_checked() is True,
+                "#chk-skip-pause lost its checked value after a failed start")
+        is_active = page.evaluate(
+            "() => document.activeElement === "
+            "document.getElementById('chk-skip-pause')")
+        _expect(is_active,
+                "focus was not returned to #chk-skip-pause after a failed start")
+        _expect(page.evaluate("location.hash").startswith("#/sessions/"),
+                "the app navigated away from the campaign screen after a failed "
+                f"start; hash is {page.evaluate('location.hash')!r}")
+    finally:
+        page.unroute("**/api/sessions/*/runs", _fail)
+
+    # The failure path raises a native alert, which the module dialog handler
+    # records. It is expected here, so clear it rather than letting
+    # no_console_errors report it as an unexplained dialog.
+    _expect(any("Injected start failure." in m for m in _DIALOG_MESSAGES),
+            f"no alert carrying the injected start error was raised; dialogs "
+            f"were {_DIALOG_MESSAGES!r}")
+    _DIALOG_MESSAGES.clear()
+
+    # Chromium logs the injected 500 as a console error. It is this case's own
+    # fixture, not an app defect, so assert it arrived and then clear it rather
+    # than letting no_console_errors report it.
+    injected = [m for m in _CONSOLE_ERRORS if "500" in m]
+    _expect(injected,
+            "no console error recorded for the injected 500 response; "
+            f"console errors were {_CONSOLE_ERRORS!r}")
+    for message in injected:
+        _CONSOLE_ERRORS.remove(message)
+
+
+def skip_pause_unchecked_sends_false_and_pauses(page, base):
+    run_id = _start_run_from_campaign(page, base, checked=False)
+    body = _last_start_body(_STATE["session_id"])
+    _expect(body is not None, "no POST body was captured for the start request")
+    _expect(body.get("skipPause") is False,
+            f"start body was {body!r}, expected skipPause exactly False")
+
+    snap = _poll_run_snapshot_for(
+        page, base, run_id, lambda s: s.get("stage") == "brief_pause", 60.0,
+        "an unchecked start never reached stage brief_pause")
+    _expect(snap.get("skipPause") is False,
+            f"RunSnapshot.skipPause was {snap.get('skipPause')!r}, expected "
+            "the JSON boolean False")
+
+    page.goto(base + "/#/runs/" + run_id)
+    page.wait_for_selector("#brief-review:visible")
+
+    _drain_paused_run(page, base, run_id)
+
+
+def skip_pause_checked_runs_straight_through(page, base):
+    run_id = _start_run_from_campaign(page, base, checked=True)
+    body = _last_start_body(_STATE["session_id"])
+    _expect(body is not None, "no POST body was captured for the start request")
+    _expect(body.get("skipPause") is True,
+            f"start body was {body!r}, expected skipPause exactly True")
+
+    seen_stages = []
+    deadline = time.time() + 120.0
+    snap = None
+    while time.time() < deadline:
+        snap = page.request.get(base + "/api/runs/" + run_id).json()
+        stage = snap.get("stage")
+        if stage not in seen_stages:
+            seen_stages.append(stage)
+        _expect(stage != "brief_pause",
+                "a run started with skipPause:true entered stage brief_pause; "
+                f"stages observed: {seen_stages!r}")
+        if snap.get("status") in ("complete", "failed"):
+            break
+        time.sleep(0.1)
+    _expect(snap is not None and snap.get("status") == "complete",
+            f"a skipPause:true run did not complete without intervention; last "
+            f"snapshot: {snap!r}, stages observed: {seen_stages!r}")
+    _expect(snap.get("skipPause") is True,
+            f"RunSnapshot.skipPause was {snap.get('skipPause')!r}, expected "
+            "the JSON boolean True")
+    _expect(page.locator("#brief-review:visible").count() == 0,
+            "#brief-review was visible after a skipPause:true run completed")
+
+
+def skip_pause_checked_zero_included_still_pauses(page, base):
+    FAKES["reconcile_all_excluded"] = True
+    try:
+        run_id = _start_run_from_campaign(page, base, checked=True)
+        body = _last_start_body(_STATE["session_id"])
+        _expect(body is not None,
+                "no POST body was captured for the start request")
+        _expect(body.get("skipPause") is True,
+                f"start body was {body!r}, expected skipPause exactly True")
+
+        snap = _poll_run_snapshot_for(
+            page, base, run_id, lambda s: s.get("stage") == "brief_pause", 60.0,
+            "a skipPause:true run whose reconciled Key Messages are all "
+            "excluded never reached brief_pause; the backend must override the "
+            "skip rather than classify with nothing included")
+        _expect(all(not bp.get("included") for bp in snap.get("briefPoints", [])),
+                f"the reconcile fake did not exclude every point: "
+                f"{snap.get('briefPoints')!r}")
+
+        page.goto(base + "/#/runs/" + run_id)
+        page.wait_for_selector("#brief-review:visible")
+
+        _drain_paused_run(page, base, run_id)
+    finally:
+        FAKES["reconcile_all_excluded"] = False
+
+
 def no_console_errors(page, base):
     _expect(_CONSOLE_ERRORS == [], f"console errors: {_CONSOLE_ERRORS}")
     _expect(_PAGE_ERRORS == [], f"page errors: {_PAGE_ERRORS}")
@@ -823,6 +1098,11 @@ def main():
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
             ("aria_and_keyboard", aria_and_keyboard),
+            ("skip_pause_control_is_accessible", skip_pause_control_is_accessible),
+            ("skip_pause_failed_start_retains_state", skip_pause_failed_start_retains_state),
+            ("skip_pause_unchecked_sends_false_and_pauses", skip_pause_unchecked_sends_false_and_pauses),
+            ("skip_pause_checked_runs_straight_through", skip_pause_checked_runs_straight_through),
+            ("skip_pause_checked_zero_included_still_pauses", skip_pause_checked_zero_included_still_pauses),
             ("no_console_errors", no_console_errors),
         ]
 

@@ -85,6 +85,14 @@ function requireName(value, fieldLabel) {
 
 /* ============================== Fixture content ============================== */
 
+/* The two real demo videos, resolved by exact ID. Any other ID keeps the
+   hash placeholder, so a mistyped URL on stage degrades to a generic title
+   instead of raising. */
+const DEMO_VIDEOS = {
+  "Rl-sPdzYlXc": { title: "Indomie Cabe Ijo balik lagi!\u{1F6A8}", channel: "Indomie", commentCount: 169 },
+  "bvtSIAULS88": { title: "Indomie Cabe Ijo udah balik lagi sekarang!", channel: "Indomie", commentCount: 12 },
+};
+
 const DEMO_TITLES = [
   "Bola Rakyat — full film (60s)",
   "Kampung derby — behind the scenes",
@@ -94,6 +102,8 @@ const DEMO_TITLES = [
 const DEMO_CHANNELS = ["Nike Indonesia", "Nike Indonesia", "Bung Kicau", "Garuda Select"];
 
 function demoVideoMeta(videoId, kind) {
+  const known = DEMO_VIDEOS[videoId];
+  if (known) return { ...known };
   let h = 0;
   for (const ch of videoId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const comments = 180 + (h % 3200);
@@ -105,110 +115,11 @@ function demoVideoMeta(videoId, kind) {
 }
 
 const FIXTURE_POINTS = [
-  { label: "Every kampung is a stadium", description: "The neighbourhood pitch framed as the real heart of Indonesian football." },
-  { label: "Boots built for concrete, not turf", description: "Durability claim: outsole and upper engineered for street pitches." },
-  { label: "Play like the whole city is watching", description: "Pressure and pride of playing in front of your own people." },
-  { label: "Sepatu untuk semua — priced for the street", description: "Affordability promise: professional-grade boots within reach." },
-  { label: "Made with recycled tarpaulin", description: "Materials story: upcycled tarpaulin panels in the upper." },
+  { label: "Authentic green chili flavor", description: "The relaunch tastes like the original green chili recipe." },
+  { label: "Bolder, upgraded taste", description: "Spicier and more savoury than the flavour people remember." },
+  { label: "Real green chili", description: "Made with actual green chili, not a synthetic flavouring." },
+  { label: "Jumbo Size Variant", description: "The relaunch arrives in a larger jumbo portion." },
 ];
-
-const FIXTURE_TRANSFERS = [
-  { label: "Every kampung is a stadium", value: 47 },
-  { label: "Play like the whole city is watching", value: 24 },
-  { label: "Boots built for concrete, not turf", value: 14 },
-  { label: "Sepatu untuk semua — priced for the street", value: 9 },
-  { label: "Made with recycled tarpaulin", value: 2 },
-];
-const FIXTURE_THEMES = [
-  { label: "Nostalgia for street football", value: 22 },
-  { label: "Price and value", value: 18 },
-  { label: "Will they survive concrete?", value: 15 },
-  { label: "Casting and cameos", value: 12 },
-  { label: "Craft and the music", value: 9 },
-  { label: "Doubt about the brand's motive", value: 8 },
-  { label: "Other", value: 16 },
-];
-
-const FIXTURE_EVIDENCE = {
-  "Every kampung is a stadium": [
-    { emotion: "Joy", author: "@raka_bdg", text: "lapangan depan rumah gue lebih rame dari GBK kalau sore 😂", likes: 1204 },
-    { emotion: "Joy", author: "@tania.jkt", text: "bener sih, kita gak butuh rumput mahal buat main bola", likes: 612 },
-    { emotion: "Joy", author: "@footyindo", text: "finally an ad that gets it. gang sempit pun jadi arena", likes: 488 },
-    { emotion: "Neutral", author: "@dimas_sby", text: "tiap sore lapangan voli disulap jadi lapangan bola, itu kita banget", likes: 331 },
-    { emotion: "Skeptical", author: "@nadriana", text: "bagus sih, tapi kampung gue lapangannya ya segitu-gitu aja dari dulu", likes: 96 },
-  ],
-  "Play like the whole city is watching": [
-    { emotion: "Joy", author: "@angga92", text: "main bola di kampung tuh tekanannya lebih gede dari liga 😭", likes: 902 },
-    { emotion: "Joy", author: "@kopitesub", text: "the whole gang watching you take a penalty, no pressure at all", likes: 410 },
-    { emotion: "Neutral", author: "@lia.mks", text: "kalau kalah, diomongin seminggu sama tetangga", likes: 288 },
-    { emotion: "Joy", author: "@pendekar_bola", text: "ini kenapa anak kampung mentalnya kuat", likes: 176 },
-    { emotion: "Skeptical", author: "@rendra.f", text: "romantis banget narasinya, padahal ya main ya main aja", likes: 54 },
-  ],
-  "Boots built for concrete, not turf": [
-    { emotion: "Skeptical", author: "@futsaljak", text: "beton itu pembunuh sepatu, bertahan berapa lama nih?", likes: 744 },
-    { emotion: "Neutral", author: "@oktavian_d", text: "kalau outsole-nya beneran tahan beton gue beli", likes: 502 },
-    { emotion: "Skeptical", author: "@winger11", text: "my last pair lasted two months on the same pitch lol", likes: 233 },
-    { emotion: "Neutral", author: "@salsa.m", text: "ada yang udah nyoba di lapangan futsal semen?", likes: 121 },
-    { emotion: "Joy", author: "@gerry.t", text: "solnya tebel banget pas close up, keliatan niat", likes: 88 },
-  ],
-  "Sepatu untuk semua — priced for the street": [
-    { emotion: "Skeptical", author: "@harga.jujur", text: "sepatu untuk semua tapi harganya 2 juta 🙂", likes: 1880 },
-    { emotion: "Skeptical", author: "@rakyatfc", text: "kalau bener buat rakyat, harganya jangan gaji sebulan", likes: 964 },
-    { emotion: "Neutral", author: "@diskonhunter", text: "nunggu diskon 11.11 aja deh", likes: 402 },
-    { emotion: "Skeptical", author: "@bang_jefri", text: "worth it kalau tahan setahun, kalau nggak ya mahal", likes: 190 },
-    { emotion: "Joy", author: "@mamah_muda_fc", text: "anak gue langsung minta, semoga harganya masuk akal", likes: 76 },
-  ],
-  "Made with recycled tarpaulin": [
-    { emotion: "Joy", author: "@kreative.id", text: "wait ini dari bahan terpal? keren juga", likes: 96 },
-    { emotion: "Skeptical", author: "@harga.jujur", text: "recycled material tapi harga premium, klasik", likes: 74 },
-    { emotion: "Joy", author: "@desainlokal", text: "gak nyangka terpal bisa jadi sepatu", likes: 51 },
-    { emotion: "Neutral", author: "@nontonaja", text: "is the tarpaulin thing in the film? i missed it", likes: 12 },
-  ],
-  "Nostalgia for street football": [
-    { emotion: "Joy", author: "@genz_bola", text: "jadi kangen main bola pakai sandal jepit", likes: 1410 },
-    { emotion: "Joy", author: "@kampungfc", text: "gawangnya batu, garisnya pakai kapur, mantap", likes: 890 },
-    { emotion: "Joy", author: "@melbournefc", text: "this is my childhood exactly, no notes", likes: 655 },
-    { emotion: "Neutral", author: "@sedih_dikit", text: "sekarang lapangannya udah jadi ruko 😔", likes: 402 },
-    { emotion: "Skeptical", author: "@tua_nonton", text: "nostalgia mulu, giliran liga kampung gak ditonton", likes: 143 },
-  ],
-  "Price and value": [
-    { emotion: "Skeptical", author: "@dompettipis", text: "niatnya bagus, dompetnya yang gak sanggup", likes: 733 },
-    { emotion: "Neutral", author: "@bandingin", text: "mending nabung 3 bulan atau beli yang lokal?", likes: 315 },
-    { emotion: "Skeptical", author: "@reviewjujur", text: "di market place pasti banyak KW seminggu lagi", likes: 204 },
-    { emotion: "Joy", author: "@firstpair", text: "sepatu bola pertamaku dulu juga yang penting bisa main", likes: 158 },
-  ],
-  "Will they survive concrete?": [
-    { emotion: "Skeptical", author: "@betonwarior", text: "3 bulan mentok di lapangan semen, catat", likes: 521 },
-    { emotion: "Neutral", author: "@tanyadulu", text: "ada review abis dipakai semusim gak?", likes: 246 },
-    { emotion: "Skeptical", author: "@jebolterus", text: "jahitan depan pasti jebol duluan, selalu begitu", likes: 187 },
-    { emotion: "Joy", author: "@optimis_fc", text: "kalau bener tahan beton ini game changer sih", likes: 95 },
-  ],
-  "Casting and cameos": [
-    { emotion: "Joy", author: "@tangerangpride", text: "yang jadi kiper itu anak Tangerang kan? kenal banget mukanya", likes: 512 },
-    { emotion: "Joy", author: "@realpeople", text: "casting-nya real people, bukan model, respect", likes: 388 },
-    { emotion: "Joy", author: "@egyfans", text: "kirain bakal ada Egy, ternyata anak kampung semua, lebih bagus", likes: 244 },
-    { emotion: "Neutral", author: "@scout_amatir", text: "who is the kid in the yellow jersey, he carried the ad", likes: 130 },
-  ],
-  "Craft and the music": [
-    { emotion: "Joy", author: "@playlistgue", text: "backsound-nya nagih, ada di spotify gak?", likes: 622 },
-    { emotion: "Joy", author: "@editorjakarta", text: "editingnya rapi banget buat iklan lokal", likes: 340 },
-    { emotion: "Joy", author: "@dronestuff", text: "the drone shot over the gang, chef's kiss", likes: 201 },
-    { emotion: "Neutral", author: "@audio_phile", text: "sound design-nya bikin merinding", likes: 88 },
-  ],
-  "Doubt about the brand's motive": [
-    { emotion: "Skeptical", author: "@klapsindiran", text: "peduli kampung tapi jual sepatu 2 juta, oke deh 👏", likes: 1102 },
-    { emotion: "Skeptical", author: "@kritisdulu", text: "brand baru sadar ada lapangan kampung setelah 30 tahun", likes: 540 },
-    { emotion: "Skeptical", author: "@csr_watch", text: "nice ad, but the CSR budget would build an actual pitch", likes: 318 },
-    { emotion: "Neutral", author: "@netralaja", text: "cuma marketing, tapi gue tetep suka filmnya", likes: 145 },
-  ],
-};
-
-const FIXTURE_INTERPRETATION = [
-  "The film's cultural claim landed almost intact. Nearly half of the conversation repeated the idea that the neighbourhood pitch is the real stadium, often unprompted and in the audience's own words — the strongest transfer we have measured in this demo.",
-  "The product did not travel with it. Only 14% engaged the concrete-boot claim, and where they did, the tone flipped to a question: how long will these last on a real street pitch? Price talk took 18% of the conversation without the brief inviting it, which suggests the \"for everyone\" line was heard as a promise about cost, not access.",
-];
-const FIXTURE_QUOTE = { text: "lapangan depan rumah gue lebih rame dari GBK kalau sore 😂", attr: "Nostalgia · joy · 1,204 likes" };
-const FIXTURE_CAVEAT = "Sarcasm is the label to trust least — Indonesian comment humour reads as praise to the model more often than we would like. Treat the \"joy\" share on the doubt theme as a floor, not a ceiling. All figures in this local demo are fixture data, not a real analysis.";
 
 /* ============================== Run engine ============================== */
 
@@ -316,69 +227,48 @@ const PUBLIC_ARTIFACT_ORDER = PUBLIC_ARTIFACTS.reduce((m, a, i) => (m[a.kind] = 
 
 function finalizeRun(engine) {
   const run = engine.run;
-  const points = run.briefPointIds
-    .map((id) => store.briefPoints.get(id))
-    .filter(Boolean)
-    .sort((a, b) => a.order - b.order);
-  const included = points.filter((p) => p.included);
-  const total = engine.counts.total || 8412;
+  const fx = (window.__demoFixture || {});
+  const rj = fx.reportJson || {};
+  const prose = fx.prose || {};
+  const total = engine.counts.total || 0;
 
-  // Transfer metrics come from the user's confirmed brief points. Values are
-  // demo fixtures; labels follow whatever the user kept.
-  const transfers = included.map((p, i) => {
-    const fx = FIXTURE_TRANSFERS[i % FIXTURE_TRANSFERS.length];
-    const known = FIXTURE_EVIDENCE[p.label] ? p.label : fx.label;
-    return {
-      id: "m-t-" + p.id,
-      label: p.label,
-      value: Math.max(2, fx.value - i),
-      evidenceCount: 0,
-      _evidenceKey: known,
-    };
+  // The fixture is the only source of truth for demo numbers. Python counted
+  // every one of them from the hand-labelled corpus; nothing here recomputes.
+  // All four Key Message rows always render, because fixture numbers exist
+  // only for those four labels.
+  const asRender = (m) => ({
+    id: m.metricId,
+    label: m.label,
+    value: m.percent,
+    evidenceCount: m.count,
   });
-  const overall = transfers.length
-    ? Math.round(transfers.reduce((a, m) => a + m.value, 0) / transfers.length) + 12
-    : 0;
-  const themes = FIXTURE_THEMES.map((t, i) => ({
-    id: "m-th-" + i,
-    label: t.label,
-    value: t.value,
-    evidenceCount: 0,
-    _evidenceKey: t.label,
-  }));
+  const transfers = (rj.keyMessages || []).map(asRender);
+  const themes = (rj.themes || []).map(asRender);
 
   const evidence = [];
-  const attach = (metric) => {
-    const list = FIXTURE_EVIDENCE[metric._evidenceKey] || [];
-    metric.evidenceCount = Math.round((metric.value / 100) * total);
-    for (const e of list) {
+  for (const group of (rj.evidence || [])) {
+    for (const c of (group.comments || [])) {
       evidence.push({
         id: "ev-" + evidence.length,
-        metricId: metric.id,
-        emotion: e.emotion,
-        author: e.author,
-        text: e.text,
-        likes: e.likes,
+        metricId: group.metricId,
+        emotion: c.emotion,
+        sentiment: c.sentiment,
+        text: c.text,
+        likes: c.likes,
       });
     }
-  };
-  transfers.forEach(attach);
-  themes.filter((t) => t.label !== "Other").forEach(attach);
+  }
 
-  const top = transfers[0] || { label: "your brief", value: 0 };
   const report = {
     runId: run.id,
-    title: "The street heard you.\nThe shoe did not.",
-    subtitle: `${fmtNum(total)} comments · ${engine.counts.videos || 1} videos · ${themes.length - 1} themes · Indonesian / English`,
-    overallTransfer: overall,
+    title: prose.title || "Results",
+    subtitle: prose.subtitle || "",
+    overallTransfer: rj.overallTransfer || 0,
     transfers,
     themes,
-    interpretation: FIXTURE_INTERPRETATION.join("\n\n").replace(
-      "the neighbourhood pitch is the real stadium",
-      `the idea that "${top.label.toLowerCase()}"`,
-    ),
-    quote: FIXTURE_QUOTE,
-    caveat: FIXTURE_CAVEAT,
+    interpretation: prose.interpretation || "",
+    quote: prose.quote || { text: "", attr: "" },
+    caveat: prose.caveat || "",
     evidence,
   };
   store.reports.set(run.id, report);
@@ -386,110 +276,24 @@ function finalizeRun(engine) {
   const session = store.sessions.get(run.sessionId);
   const campaignId = session && session.campaignIds[0];
   const addedAt = nowIso();
-  const mkArtifact = (kind, content) => {
-    const meta = PUBLIC_ARTIFACTS.find((p) => p.kind === kind);
+
+  // Artifacts are the committed files under app/demo/, generated offline by
+  // pipeline/report.py from the same labels. getArtifact fetches them.
+  for (const meta of PUBLIC_ARTIFACTS) {
     const a = {
-      id: uid(), runId: run.id, campaignId, kind,
+      id: uid(), runId: run.id, campaignId, kind: meta.kind,
       filename: meta.filename, contentType: meta.contentType,
-      downloadUrl: "#demo-artifact/" + kind,
-      size: new Blob([content]).size, addedAt, content,
+      downloadUrl: "demo/" + meta.filename,
+      size: null, addedAt,
     };
     store.artifacts.set(a.id, a);
-    return a;
-  };
-  const csvLine = (cols) => cols.map((c) => {
-    const s = String(c == null ? "" : c);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }).join(",");
-  mkArtifact("report_pdf", buildDemoPdf(report));
-  mkArtifact(
-    "comments_csv",
-    ["author,emotion,theme_or_idea,text,likes"]
-      .concat(evidence.map((e) => {
-        const m = transfers.concat(themes).find((x) => x.id === e.metricId);
-        return csvLine([e.author, e.emotion, m ? m.label : "", e.text, e.likes]);
-      }))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "key_messages_csv",
-    ["idea,share_pct,evidence_count"]
-      .concat(transfers.map((m) => csvLine([m.label, m.value, m.evidenceCount])))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "themes_csv",
-    ["theme,share_pct"]
-      .concat(themes.map((m) => csvLine([m.label, m.value])))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "sentiment_csv",
-    ["sentiment,share_pct"]
-      .concat([["positive", 0], ["neutral", 0], ["negative", 0]].map(([label]) => {
-        const count = evidence.filter((e) => e.emotion === label).length;
-        const pct = evidence.length ? Math.round((count / evidence.length) * 100) : 0;
-        return csvLine([label, pct]);
-      }))
-      .join("\n") + "\n",
-  );
-  mkArtifact(
-    "emotions_csv",
-    ["emotion,count"]
-      .concat([...new Set(evidence.map((e) => e.emotion))].sort().map((emotion) =>
-        csvLine([emotion, evidence.filter((e) => e.emotion === emotion).length])))
-      .join("\n") + "\n",
-  );
+  }
 
   if (session) {
     session.status = "complete";
     session.commentCount = total;
     session.updatedAt = addedAt;
   }
-}
-
-function buildDemoPdf(report) {
-  // Minimal valid single-page PDF, clearly marked as demo data.
-  const esc = (s) => String(s)
-    .replace(/[^\x20-\x7E]/g, "?") // Helvetica is latin-1; fixture copy has emoji/dashes
-    .replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-  const lines = [
-    [report.title.split("\n")[0], 24, 770],
-    [report.title.split("\n")[1] || "", 24, 736],
-    [report.subtitle, 10, 700],
-    ["Overall signal transfer: " + report.overallTransfer + "%", 16, 660],
-    ["Which ideas arrived:", 12, 620],
-  ];
-  for (const m of report.transfers) lines.push([m.label + " - " + m.value + "%", 10, null]);
-  lines.push(["", 10, null]);
-  lines.push(["LOCAL DEMO FIXTURE DATA - not a real analysis.", 10, null]);
-  let y = 0;
-  const ops = ["BT"];
-  for (const [text, size, absY] of lines) {
-    if (absY != null) y = absY; else y -= size + 8;
-    ops.push(`/F1 ${size} Tf 1 0 0 1 56 ${y} Tm (${esc(text)}) Tj`);
-  }
-  ops.push("ET");
-  const stream = ops.join("\n");
-  const objects = [];
-  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
-  objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>";
-  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
-  objects[5] = "<< /Length " + stream.length + " >>\nstream\n" + stream + "\nendstream";
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (let i = 1; i <= 5; i++) {
-    offsets[i] = pdf.length;
-    pdf += i + " 0 obj\n" + objects[i] + "\nendobj\n";
-  }
-  const xref = pdf.length;
-  pdf += "xref\n0 6\n0000000000 65535 f \n";
-  for (let i = 1; i <= 5; i++) {
-    pdf += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
-  }
-  pdf += "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF";
-  return pdf;
 }
 
 /* The stage machine lives in makeRunEngine/startEngineSchedule — all fixture
@@ -500,7 +304,10 @@ function startEngineSchedule(engine) {
   const session = store.sessions.get(run.sessionId);
   const campaign = session && store.campaigns.get(session.campaignIds[0]);
   const videos = campaign ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean) : [];
-  engine.counts.total = Math.max(1200, videos.reduce((a, v) => a + v.commentCount, 0) || 8412);
+  // No floor and no placeholder: the demo's comment count is whatever the
+  // added videos really hold, so the progress screen and the results header
+  // agree with the fixture.
+  engine.counts.total = videos.reduce((a, v) => a + v.commentCount, 0);
   engine.counts.videos = videos.length || 1;
 
   const go = (stage) => {
@@ -1054,8 +861,17 @@ const demoApi = {
   async getArtifact(id) {
     const a = store.artifacts.get(id);
     if (!a) throw demoError("not_found", "File not found.");
-    const content = a.content instanceof Blob ? a.content : new Blob([a.content], { type: a.contentType });
-    return { ...a, content };
+    if (a.content) {
+      const content = a.content instanceof Blob ? a.content : new Blob([a.content], { type: a.contentType });
+      return { ...a, content };
+    }
+    // Committed demo artifact: fetch the static file and hand back a Blob
+    // carrying the contract MIME type, so downloads open natively.
+    const resp = await fetch(a.downloadUrl);
+    if (!resp.ok) throw demoError("not_found", "File not found.");
+    const raw = await resp.blob();
+    const content = new Blob([raw], { type: a.contentType });
+    return { ...a, content, size: content.size };
   },
 };
 
@@ -2423,6 +2239,11 @@ async function renderRun(runId) {
   let briefPointsSnapshot = (run.briefPoints || []).map((p) => ({ ...p }));
   briefPointsSnapshot = briefPointsSnapshot.slice().sort((a, b) => a.order - b.order);
 
+  // paintSteps() rebuilds every row on each progress tick, so the CSS
+  // insertion animation would replay on all five. Mark only the row whose
+  // index just became currentStep, and only on that first paint.
+  let paintedStep = currentStep;
+
   function paintSteps() {
     const d = state.detail || {};
     const details = [
@@ -2455,7 +2276,7 @@ async function renderRun(runId) {
         ? `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`
         : "";
       return `
-      <div class="step-row">
+      <div class="step-row${i === currentStep && currentStep !== paintedStep ? " advanced" : ""}">
         <div class="step-glyph">${glyph}${line}</div>
         <div class="step-body">
           <div class="step-name ${done || cur ? "" : "pending"}">${s.label}</div>
@@ -2464,6 +2285,7 @@ async function renderRun(runId) {
         </div>
       </div>`;
     }).join("");
+    paintedStep = currentStep;
   }
 
   function totalComments() {
@@ -2475,9 +2297,11 @@ async function renderRun(runId) {
   }
 
   // Live: no commentCount on videos; 0 is the sentinel so totalComments() uses detail.total.
+  // Demo: the real sum of the added videos' comment counts, with no floor and no
+  // placeholder, so the progress screen never shows a number nothing counted.
   const initialTotal = live ? 0 : (campaign
-    ? Math.max(1200, campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0))
-    : 8412);
+    ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0)
+    : 0);
 
   function paintHeader() {
     if (state.failed) {
@@ -2808,15 +2632,11 @@ function openEvidenceDrawer(report, metric, originEl) {
   const overlay = window.matchMedia("(max-width: 1179px)").matches;
   const host = overlay ? overlayRoot : view.querySelector(".report-layout");
 
-  // Live: derive emotion pills from unique emotion labels in report.evidence.
-  // Demo: fixed pills.
-  const emotionPills = live
-    ? [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
-        (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(em)}</button>`
-      ).join("")
-    : `<button class="pill sm" type="button" data-filter="Joy" aria-pressed="false">Joy</button>
-          <button class="pill sm" type="button" data-filter="Skeptical" aria-pressed="false">Skeptical</button>
-          <button class="pill sm" type="button" data-filter="Neutral" aria-pressed="false">Neutral</button>`;
+  // Both modes derive pills from the emotion labels actually present in the
+  // evidence, so a pill can never offer a filter that matches nothing.
+  const emotionPills = [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
+    (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(em)}</button>`
+  ).join("");
 
   const root = document.createElement("div");
   root.style.display = "contents";
@@ -2828,7 +2648,7 @@ function openEvidenceDrawer(report, metric, originEl) {
           <div class="ev-id">
             <span class="ev-kicker">${metric.id.startsWith("m-t-") ? "IDEA FROM YOUR BRIEF" : "THEME"}</span>
             <span class="ev-title">${esc(metric.label)}</span>
-            <span class="ev-sub">${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments || 8412)} comments · ${metric.value}%</span>
+            <span class="ev-sub">${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments)} comments · ${metric.value}%</span>
           </div>
           <button class="ev-close" type="button" data-ev-close aria-label="Close evidence">${ICONS.xLg}</button>
         </div>
@@ -2852,11 +2672,8 @@ function openEvidenceDrawer(report, metric, originEl) {
     else if (filter !== "All") list = list.filter((e) => e.emotion === filter);
     body.innerHTML = list.length
       ? list.map((e) => {
-          // Live: no author field; meta is "emotion · likes" with sentiment when present.
-          // Demo: "emotion · author · likes".
-          const meta = live
-            ? esc(e.emotion) + " · " + fmtNum(e.likes) + " likes" + (e.sentiment ? " · " + esc(e.sentiment) : "")
-            : esc(e.emotion) + " · " + esc(e.author) + " · " + fmtNum(e.likes) + " likes";
+      const meta = [e.emotion, fmtNum(e.likes) + " likes", e.sentiment]
+        .filter(Boolean).map((part) => esc(String(part))).join(" · ");
           return `
         <div class="ev-card">
           <div class="ev-text">${esc(e.text)}</div>
@@ -2930,7 +2747,7 @@ async function renderResults(runId) {
   const artifacts = await demoApi.listArtifacts(runId);
   const byKind = new Map(artifacts.map((a) => [a.kind, a]));
   const pdf = byKind.get("report_pdf");
-  report._totalComments = session.commentCount || 8412;
+  report._totalComments = session.commentCount || 0;
 
   setTopbar(`
     <div class="topbar-left">
@@ -3253,19 +3070,39 @@ document.addEventListener("keydown", (e) => {
 // Only boot the UI when the app shell is mounted (#view/#topbar/#overlay-root
 // present). Both index.html and self-check.html's fixture shell qualify.
 if (view && topbar && overlayRoot) {
-  // Mode probe: live when __liveApi exists AND GET /api/sessions succeeds within 1200ms.
-  (async function resolveMode() {
-    if (window.__liveApi) {
-      try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 1200);
-        const resp = await fetch("/api/sessions", { signal: ctrl.signal });
-        clearTimeout(tid);
-        if (resp.ok) demoApi.mode = "live";
-      } catch { /* network error or timeout: stay demo */ }
+  /* Demo mode is entered deliberately by ?demo=1 and held in sessionStorage,
+     so it survives in-tab navigation and stays scoped to one tab. A plain /
+     in another tab still probes and goes live, because the backend keeps
+     serving office users during a presentation.
+
+     Demo mode pins mode to "demo" before any await, so no wrapper method can
+     reach __liveApi and no request can touch the live database. */
+  let forcedDemo = false;
+  try {
+    if (new URLSearchParams(location.search).get("demo") === "1") {
+      sessionStorage.setItem("demoMode", "1");
     }
+    forcedDemo = sessionStorage.getItem("demoMode") === "1";
+  } catch { /* sessionStorage blocked: fall through to the probe */ }
+
+  if (forcedDemo) {
+    demoApi.mode = "demo";
     route();
-  })();
+  } else {
+    // Mode probe: live when __liveApi exists AND GET /api/sessions succeeds within 1200ms.
+    (async function resolveMode() {
+      if (window.__liveApi) {
+        try {
+          const ctrl = new AbortController();
+          const tid = setTimeout(() => ctrl.abort(), 1200);
+          const resp = await fetch("/api/sessions", { signal: ctrl.signal });
+          clearTimeout(tid);
+          if (resp.ok) demoApi.mode = "live";
+        } catch { /* network error or timeout: stay demo */ }
+      }
+      route();
+    })();
+  }
 } else {
   // No shell mounted: no probe, no route.
 }

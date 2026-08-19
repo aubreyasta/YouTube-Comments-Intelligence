@@ -29,6 +29,9 @@ protects every request; SQLite and local storage are the shared system of record
   a backend or workstation restart, and migration to another workstation.
 - Calibrated confidence scores and confidence columns in exports. Key visuals, chat, global
   search, source discovery, OCR, custom lenses, cross-group reports, and run history.
+- For the demo presentation: reskinning live mode, any new backend route, moving off the
+  `qwen3.5:4b` pin, and Playwright coverage of demo mode. The presenter opens localhost and
+  clicks through instead.
 
 ## Locked decisions
 
@@ -66,6 +69,14 @@ protects every request; SQLite and local storage are the shared system of record
   on a client device and never in the repo.
 - One GPU serves every run, so only one analysis runs at a time. `start_run` rejects a new
   run whenever any Session holds a `queued` or `running` run.
+- Demo mode is entered only by the `?demo=1` query flag, held in `sessionStorage`, scoped to
+  one browser tab. The mode probe is skipped and `demoApi.mode` pins to `"demo"`. Demo mode
+  never consults `window.__liveApi`, so no wrapper gap can reach the live database. A plain
+  `/` stays live, because the backend keeps serving office users during the presentation.
+- Every demo artifact is generated ahead of time by `pipeline/report.py` from hand-labelled
+  real comments, then committed under `app/demo/`. The frontend downloads those files as
+  static assets. No number in the demo is typed by hand: Python counts every percentage from
+  the labels, the same division of labour the product uses.
 
 ## Shared contracts
 
@@ -210,6 +221,29 @@ descending, then case-insensitive label. Empty results still write headers.
   above 100. `sentiment_base_n` counts mentioned rows with a recognized sentiment, including
   neutral. A zero denominator produces `0.0`.
 
+### Demo fixture
+
+The demo presents the Indomie Goreng Cabe Ijo relaunch, an Innocean internal campaign. Both
+videos are real, both comment sets are scraped, and every label is assigned by hand.
+
+```text
+demo_data/comments.csv   181 scraped comments, 169 on Rl-sPdzYlXc, 12 on bvtSIAULS88
+demo_data/videos.csv     real titles, channel, descriptions, view counts; no transcripts
+demo_data/labels.csv     one hand-assigned label row per comment, joined on comment_hash
+app/demo/                the six generated artifacts, plus fixture.js for the results page
+```
+
+- Both videos carry group `Indomie`. `bvtSIAULS88` contributes 12 comments, so its share of
+  every group-split metric is small and honestly reported.
+- The four Key Messages are fixed: `Authentic green chili flavor`, `Bolder, upgraded taste`,
+  `Real green chili`, `Jumbo Size Variant`.
+- `demoVideoMeta` resolves `Rl-sPdzYlXc` and `bvtSIAULS88` to their real titles and comment
+  counts through an exact-ID lookup. Every other ID keeps the existing hash fallback, so a
+  mistyped URL on stage degrades to a generic title instead of raising.
+- `labels.csv` columns are `video_id,comment_hash,theme,sentiment,emotion` plus one boolean
+  column per Key Message. Sentiment and emotion use the product's enums, so the generated CSVs
+  satisfy the same constraints a real run does.
+
 ## Delivery state
 
 - `6eaa00b`, `81bfe27`: local Ollama boundary, grounded User Inputs, Session Key Message schema,
@@ -234,8 +268,91 @@ descending, then case-insensitive label. Empty results still write headers.
   and Ollama, the quick tunnel serves the public URL, Basic Auth gates it, and a real Session
   completes end to end on `qwen3.5:4b`. The evidence tables in `docs/deployment.md` are still
   empty, so that document is the procedure and this bullet is the record.
+- Waves D1 and D2 are implemented and verified, uncommitted. D1 wrote `demo_data/labels.csv`
+  (181 hand-assigned rows), `demo_data/build_demo_artifacts.py`, and the six artifacts plus
+  `fixture.js` under `app/demo/`. D2 added the `?demo=1` entry flag held in `sessionStorage`,
+  the exact-ID Indomie video lookup, the four Indomie Key Messages, and a `finalizeRun` that
+  reads every number from `window.__demoFixture`. Deleted: `buildDemoPdf`, the `mkArtifact` CSV
+  assembly block, six placeholder fixture constants, and every synthetic comment-count floor.
+  Evidence: `node --check app/app.js` exit 0, `node --check app/demo/fixture.js` exit 0,
+  `python demo_data/build_demo_artifacts.py` exit 0 writing seven files, 133 fixture evidence
+  comments each carrying a valid `emotion` with zero null, `comments.csv` header matching the
+  contract with four `key_message_*` columns, `report.pdf` 95,810 bytes starting `%PDF`, and
+  41 assertions across `tests/test_evidence.py` 27/27, `tests/test_classify.py` 8/8,
+  `tests/test_report_key_messages_csv.py` 2/2, `tests/test_report_themes_csv.py` 2/2,
+  `tests/test_report_sentiment_emotions_csv.py` 2/2. Not verified: the by-hand walkthrough at
+  `http://127.0.0.1:8000/?demo=1`. Demo mode has no Playwright coverage by decision, so the
+  presenter click-through is the only check of the six downloads opening natively.
+- Wave D3 is implemented and verified, uncommitted. `app/style.css` gained a `Motion` section
+  holding four keyframes: `view-rise` on route entry, `step-advance` on the stepper dot,
+  `drawer-in` and `backdrop-in` on the evidence drawer. All eight animated selectors are
+  neutralized inside the existing `prefers-reduced-motion` block. `app/app.js` gained one
+  `renderRun` local, `paintedStep`, which marks the single stepper row that just advanced.
+  Evidence: `node --check` exit 0 on `app/app.js` and `app/demo/fixture.js`, a 12-assertion
+  static audit, and 52 test assertions across `tests/test_evidence.py` 27/27,
+  `tests/test_classify.py` 8/8, `tests/test_skip_pause.py` 7/7, and
+  `tests/test_run_artifacts.py` 10/10. Not verified: motion as seen by an eye. No test
+  selects an animated class, by decision, so the presenter walkthrough is the only check.
+
+## Demo presentation waves
+
+A live presentation runs on the office workstation while the backend keeps serving office
+users. The client accepted that no end-to-end run happens on stage: the card cannot hold the
+9b model the analysis wants. The demo therefore replays a real analysis of real comments
+rather than performing one.
+
+### Wave D1: labelled fixture and generated artifacts
+
+Offline Python. No frontend change.
+
+- Task D1.1: write `demo_data/labels.csv`, one row per scraped comment.
+  - Acceptance: 181 rows. Every row joins 1:1 against `demo_data/comments.csv`. Every
+    sentiment is `positive`, `negative`, or `neutral`. Every emotion is `joy`, `anger`,
+    `sadness`, `fear`, or `other_neutral`.
+- Task D1.2: write `demo_data/build_demo_artifacts.py`, which joins comments to labels, builds
+  the dataframe, and calls the real `pipeline/report.py` entry points to emit the artifacts.
+  - Acceptance: the script runs clean. `app/demo/` holds `report.pdf` and the five CSVs. The
+    PDF opens with rendered charts. The `comments.csv` header matches the CSV contract above
+    exactly, including one `key_message_<stable-id>` column per Key Message.
+
+### Wave D2: demo mode entry and fixture wiring
+
+Frontend. Depends on D1.
+
+- Task D2.1: add the `?demo=1` flag, persist it in `sessionStorage`, skip the mode probe, and
+  block `window.__liveApi` while demo mode is active.
+  - Acceptance: `?demo=1` renders the demo store. A second tab on `/` stays live. No demo
+    interaction issues a request to `/api`.
+- Task D2.2: point the demo store at the Indomie fixture. Add the exact-ID video lookup, return
+  the four Key Messages from the draft, read report constants from `app/demo/fixture.js`, and
+  serve artifact downloads from the committed files. Delete `buildDemoPdf` and the `mkArtifact`
+  CSV assembly block.
+  - Acceptance: pasting both URLs shows their real titles. The draft returns the four Key
+    Messages. Results render Indomie themes. All six downloads open in their native
+    application. `node --check app/app.js` passes.
+
+### Wave D3: view transitions
+
+Frontend. Independent of D1 and D2.
+
+- Task D3.1: add a fade-and-rise on route change in `route()`, a stage-advance transition on
+  the progress screen, and entry easing on the evidence drawer.
+  - Acceptance: navigation reads as continuous with no layout shift. All motion resolves inside
+    the existing `prefers-reduced-motion` block in `app/style.css`.
+
+**Verification.** `node --check app/app.js`, then `python demo_data/build_demo_artifacts.py`,
+then open `http://127.0.0.1:8000/?demo=1` and walk setup, brief-pause, results, and the six
+downloads by hand.
 
 ## Open work
+
+**0. Walk the demo by hand, then commit D1, D2, and D3.** Open
+`http://127.0.0.1:8000/?demo=1`, paste both Indomie URLs, and confirm their real titles render.
+Walk setup, `brief_pause`, and results. Open all six downloads in their native application.
+Confirm a second tab on a plain `/` still resolves live. Watch the motion while walking: each
+screen should rise into place, one stepper dot should pop as the stage advances, and the
+evidence drawer should ease in from the right. Then commit `demo_data/`, `app/demo/`,
+`app/app.js`, `app/index.html`, and `app/style.css`. Every planned demo wave is now built.
 
 **1. Commit the skip-pause end-to-end coverage.** `tests/e2e_product_flow.py` is uncommitted
 with five new tests: unchecked start sends `skipPause:false` and pauses, checked start runs
@@ -261,6 +378,37 @@ do-not-change list.
 
 ## Revisions
 
+- 2026-08-19: Shipped Wave D3. Three route roots were missed on the first pass. The packet
+  named `.view-pad` and `.run-layout` as the only children `#view` receives, but
+  `renderNewSession` mounts `.setup-wrap`, `renderCampaign` mounts `.campaign-layout`, and
+  `renderResults` mounts `.report-layout`, so three of six screens had no entry animation. An
+  addendum widened the selector list to five. The results screen animates `.report-scroll`
+  rather than its parent `.report-layout`, because the wide-viewport evidence drawer mounts as
+  a `position: fixed` child of `.report-layout`, and a `transform` on an ancestor of a fixed
+  element makes that ancestor its containing block. `.report-scroll` is the drawer's sibling,
+  so the transform cannot reach it. For the same reason nothing animates `#view` itself.
+  Route entry and drawer entry need no JavaScript: both replace or insert DOM nodes, so a
+  keyframe animation fires on insertion. Only the stepper needed code, because `paintSteps()`
+  rebuilds all five rows on every progress tick and all five would re-animate without a marker
+  for the one that changed.
+- 2026-08-19: Shipped Waves D1 and D2. Two decisions closed during the build. The evidence
+  drawer now derives its filter pills from the emotion labels actually present, in both demo
+  and live mode, which required carrying `emotion` through the fixture's evidence rows;
+  `adapter.py` emits only `text`, `likes`, `videoId`, and `sentiment`, so
+  `build_demo_artifacts.py` joins the label back on comment text. Results always render all
+  four Key Message rows regardless of what the presenter unchecks at `brief_pause`, because
+  fixture numbers exist only for those four labels. One defect was found and repaired: two
+  hardcoded `8412` comment-count placeholders survived the first pass at `app/app.js` and would
+  have displayed a fabricated total on stage. The `utf-8-sig` BOM on the demo CSVs is correct,
+  not a defect: `pipeline/report.py` writes every production CSV that way and four test files
+  read it back that way, so the demo files match live output byte for byte.
+- 2026-08-19: Planned the demo presentation as Waves D1-D3. Two findings redirected the plan.
+  The frontend-only demo already existed in `app/app.js` with a full staged run engine; what
+  was missing was a way to enter it deliberately, since demo mode was only the fallback when
+  the `/api/sessions` probe failed. And the demo's `comments.csv` wrote
+  `author,emotion,key_message,text,likes`, which is not the contract header, so a downloaded
+  file would have contradicted the product on stage. Generating all six artifacts through
+  `pipeline/report.py` fixes that and deletes the hand-rolled `buildDemoPdf` PDF writer.
 - 2026-08-19: Contracted this file from 1094 lines, deleting the shipped Wave 1-3, A-E, and T
   packets and the verification-debt tables. Resolved four contradictions in favour of the
   code: the plan named two models (`qwen3:8b-q4_K_M`, `qwen3-vl:8b-instruct-q4_K_M`) with
