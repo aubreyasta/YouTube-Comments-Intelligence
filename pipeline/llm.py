@@ -347,6 +347,7 @@ def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predic
     if encoded_images:
         payload["images"] = encoded_images
     response = _call(cfg, "POST", "/api/generate", payload)
+    print(f"  ctx  prompt={response.get('prompt_eval_count')} predict={num_predict} num_ctx={cfg.OLLAMA_NUM_CTX}")
     if response.get("error"):
         raise OllamaResponseError("Ollama reported a generation error.")
     if response.get("done") is not True or response.get("done_reason") in {"length", "max_tokens"}:
