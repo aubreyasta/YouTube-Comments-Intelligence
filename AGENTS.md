@@ -18,7 +18,7 @@ Read the doc that matches the change you are making.
 
 Product terms are defined once, in [README.md](README.md). Use those words in prose, comments, commit messages, and docs.
 
-Code identifiers still carry older names. Do not rename them opportunistically; a rename touches the DB, the API, and the frontend at once, and is scheduled in [PRD.md](PRD.md). The mapping:
+Code identifiers still carry older names. Do not rename them opportunistically; a rename touches the DB, API, and frontend at once. The mapping:
 
 | Product term | Code identifier |
 |---|---|
@@ -28,8 +28,8 @@ Code identifiers still carry older names. Do not rename them opportunistically; 
 | Travel | `transfer`, `transfers`, `echoed` |
 | Theme book | the discovered theme set, `codebook.json` in debug output |
 | Themes | `theme` column |
-| Sentiment | `sentiment`, `sentiment_confidence` |
-| Emotions | `emotion`, `emotion_confidence` |
+| Sentiment | `sentiment` |
+| Emotions | `emotion` |
 
 Never in prose: "signal transfer", "codebook", "echoed", "affect", "campaign" as a user-facing unit.
 
@@ -95,7 +95,7 @@ Read the relevant section of [docs/architecture.md](docs/architecture.md) before
 - **PDF requirement** in `run.py`. HTML is a build artifact.
 - **`demoApi` method signatures** in `app/app.js`. Change bodies, keep signatures.
 - **Disabled-feature honesty** in the frontend. A control that cannot do what it looks like it does must be visibly disabled and explain why. Never silently do nothing.
-- **Per-session overwrite** in `server.py`. A new run deletes prior runs and their files for that session.
+- **Run admission and per-session overwrite** in `server.py`. Validate the global one-active-run guard before deleting the target Session's prior runs and files.
 - **`PipelineConfig` as the config contract.** Every pipeline module receives a `PipelineConfig` argument. No global config module, no `sys.modules["config"]` shim. `llm` has no module-global client.
 
 ---

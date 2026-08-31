@@ -26,7 +26,7 @@ These are the only words used in this repo's prose. Code identifiers still carry
 | Theme book | The list of Themes the LLM discovers from a sample of the comments. |
 | Themes | What the comments talk about. One Theme per comment. |
 | Sentiment | Positive, neutral, negative. |
-| Emotions | Happy, sadness, anger, fear, love. |
+| Emotions | Joy, anger, sadness, fear, or other/neutral. |
 | Travel | The share of comments that mention a given Key Message. |
 
 ---
@@ -37,7 +37,7 @@ These are the only words used in this repo's prose. Code identifiers still carry
 
 **Review the Key Messages.** The run pauses after collecting the transcripts, which can sharpen or add to the draft. Edit the wording, exclude the ones that are wrong, confirm. Nothing gets measured against a Key Message you did not approve.
 
-**Run.** In order: scrape comments and transcripts, build the Theme book from a sample, then label every comment with one Theme and zero or more Key Messages in a single pass. After labelling, two local classifiers add Sentiment and Emotion to each comment.
+**Run.** In order: scrape comments and transcripts, build the Theme book from a sample, then use one Qwen classification pass to label every comment with one Theme, zero or more Key Messages, one Sentiment, and one Emotion. Python validates the labels and counts the results.
 
 **Read the results.** Key Message travel as percentages with a positive and negative split, the Theme mix, overall Sentiment, overall Emotions, and a written summary. Every percentage is clickable and shows the comments behind it.
 

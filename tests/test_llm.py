@@ -97,6 +97,26 @@ def test_structured_output_with_schema():
     print("  ok  structured output sends response_format and validates JSON")
 
 
+def test_structured_output_uses_reasoning_content_when_content_is_empty():
+    """LM Studio may place a thinking model's structured result in reasoning_content."""
+    cfg = make_cfg()
+    response_data = {
+        "choices": [{
+            "message": {
+                "content": "",
+                "reasoning_content": '{"answer": "42"}',
+            },
+            "finish_reason": "stop",
+        }]
+    }
+
+    with patch("urllib.request.urlopen", return_value=mock_response(response_data)):
+        result = llm.ask_json("Question", cfg, schema={"type": "object"})
+
+    assert result == {"answer": "42"}
+    print("  ok  structured output accepts LM Studio reasoning_content fallback")
+
+
 def test_structured_output_validator_retry():
     """ask_json retries on validation failure and succeeds on retry."""
     cfg = make_cfg()
@@ -497,6 +517,7 @@ if __name__ == "__main__":
     tests = [
         test_text_generation,
         test_structured_output_with_schema,
+        test_structured_output_uses_reasoning_content_when_content_is_empty,
         test_structured_output_validator_retry,
         test_image_generation,
         test_retry_on_connection_error,

@@ -285,31 +285,13 @@ app/demo/                the six generated artifacts, plus fixture.js for the re
   and Ollama, the quick tunnel serves the public URL, Basic Auth gates it, and a real Session
   completes end to end on `qwen3.5:4b`. The evidence tables in `docs/deployment.md` are still
   empty, so that document is the procedure and this bullet is the record.
-- Waves D1 and D2 are implemented and verified, uncommitted. D1 wrote `demo_data/labels.csv`
-  (181 hand-assigned rows), `demo_data/build_demo_artifacts.py`, and the six artifacts plus
-  `fixture.js` under `app/demo/`. D2 added the `?demo=1` entry flag held in `sessionStorage`,
-  the exact-ID Indomie video lookup, the four Indomie Key Messages, and a `finalizeRun` that
-  reads every number from `window.__demoFixture`. Deleted: `buildDemoPdf`, the `mkArtifact` CSV
-  assembly block, six placeholder fixture constants, and every synthetic comment-count floor.
-  Evidence: `node --check app/app.js` exit 0, `node --check app/demo/fixture.js` exit 0,
-  `python demo_data/build_demo_artifacts.py` exit 0 writing seven files, 133 fixture evidence
-  comments each carrying a valid `emotion` with zero null, `comments.csv` header matching the
-  contract with four `key_message_*` columns, `report.pdf` 95,810 bytes starting `%PDF`, and
-  41 assertions across `tests/test_evidence.py` 27/27, `tests/test_classify.py` 8/8,
-  `tests/test_report_key_messages_csv.py` 2/2, `tests/test_report_themes_csv.py` 2/2,
-  `tests/test_report_sentiment_emotions_csv.py` 2/2. Not verified: the by-hand walkthrough at
-  `http://127.0.0.1:8000/?demo=1`. Demo mode has no Playwright coverage by decision, so the
-  presenter click-through is the only check of the six downloads opening natively.
-- Wave D3 is implemented and verified, uncommitted. `app/style.css` gained a `Motion` section
-  holding four keyframes: `view-rise` on route entry, `step-advance` on the stepper dot,
-  `drawer-in` and `backdrop-in` on the evidence drawer. All eight animated selectors are
-  neutralized inside the existing `prefers-reduced-motion` block. `app/app.js` gained one
-  `renderRun` local, `paintedStep`, which marks the single stepper row that just advanced.
-  Evidence: `node --check` exit 0 on `app/app.js` and `app/demo/fixture.js`, a 12-assertion
-  static audit, and 52 test assertions across `tests/test_evidence.py` 27/27,
-  `tests/test_classify.py` 8/8, `tests/test_skip_pause.py` 7/7, and
-  `tests/test_run_artifacts.py` 10/10. Not verified: motion as seen by an eye. No test
-  selects an animated class, by decision, so the presenter walkthrough is the only check.
+- `2461aa0` committed Waves D1-D3 and the skip-pause browser coverage. D1 generated the Indomie
+  fixture and six public artifacts under `app/demo/`. D2 added explicit `?demo=1` isolation,
+  exact video metadata, four fixed Key Messages, and fixture-backed results. D3 added route,
+  stepper, and evidence-drawer motion with reduced-motion overrides. The commit also expanded
+  `tests/e2e_product_flow.py` from 15 to 20 checks for skip-pause behavior. The generated demo
+  CSVs, `fixture.js`, and `report.pdf` are tracked; demo mode still relies on a presenter
+  walkthrough for visual motion and native download opening.
 - Open work 2 and 3 shipped in `2da78c3` and `8805294`. `PipelineConfig`, the backend, and the
   CLI now use `LLM_BASE_URL`, `LLM_MODEL`, `LLM_CONTEXT_LENGTH`, and
   `LLM_TIMEOUT_SECONDS`. `pipeline/llm.py` uses LM Studio chat completions, strict structured
@@ -374,23 +356,24 @@ downloads by hand.
 
 ## Open work
 
-**0. Walk the demo by hand, then commit D1, D2, and D3.** Open
-`http://127.0.0.1:8000/?demo=1`, paste both Indomie URLs, and confirm their real titles render.
-Walk setup, `brief_pause`, and results. Open all six downloads in their native application.
-Confirm a second tab on a plain `/` still resolves live. Watch the motion while walking: each
-screen should rise into place, one stepper dot should pop as the stage advances, and the
-evidence drawer should ease in from the right. Then commit `demo_data/`, `app/demo/`,
-`app/app.js`, `app/index.html`, and `app/style.css`. Every planned demo wave is now built.
+**0. Complete the real Mac deployment acceptance.** Follow `docs/deployment.md` on the M1 Max.
+Record the exact LM Studio model identifier, 4-bit MLX build, vision support, loaded context,
+structured-output and image smoke tests, loopback listeners, external Basic Auth checks, one
+complete 27B Session, Memory Pressure, swap, throughput, and login-start behavior. This cannot
+be established by offline tests on another computer.
 
-**1. Commit the skip-pause end-to-end coverage.** `tests/e2e_product_flow.py` is uncommitted
-with five new tests: unchecked start sends `skipPause:false` and pauses, checked start runs
-straight through, checked start with zero included messages still pauses, the control is
-label-associated and keyboard operable, and a failed start keeps the checked value and restores
-focus. Run `python tests/e2e_product_flow.py` and require 20/20 with zero console errors, page
-errors, and failed requests. Then commit. This is the last owed test file.
+**1. Walk the committed demo by hand.** Open `http://127.0.0.1:8000/?demo=1`, paste both Indomie
+URLs, and confirm their real titles render. Walk setup, `brief_pause`, results, and all six
+native downloads. Confirm a second tab on plain `/` stays live. Check route, stepper, and drawer
+motion, including reduced-motion behavior. Automated checks do not replace this visual pass.
 
 ## Revisions
 
+- 2026-09-01: Reconciled the active documentation with the shipped code. Updated the product
+  overview, contributor contract, CLI template, setup guidance, architecture, API reference,
+  delivery state, and open work for LM Studio, merged classification, Session Key Messages,
+  global run admission, current Report JSON, seven stored artifacts, Basic Auth, and explicit
+  demo isolation. Preserved historical Ollama and `qwen3.5:4b` entries as delivery history.
 - 2026-08-31: Shipped the LM Studio provider boundary and Mac deployment documentation in
   `2da78c3` and `8805294`. Renamed provider configuration to the four `LLM_*` fields. Replaced
   Ollama generation and lifecycle calls with OpenAI-compatible chat completions, multimodal

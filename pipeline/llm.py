@@ -367,6 +367,8 @@ def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predic
     if not isinstance(message, dict):
         raise LMStudioResponseError("LM Studio returned an invalid message.")
     text = message.get("content")
+    if schema is not None and (not isinstance(text, str) or not text.strip()):
+        text = message.get("reasoning_content")
     if not isinstance(text, str) or not text.strip():
         raise LMStudioResponseError("LM Studio returned an empty response.")
 

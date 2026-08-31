@@ -1,7 +1,8 @@
 """
-The only file you normally need to edit.
+CLI debugging configuration.
 
-Put your links in VIDEOS, set the YouTube API key, run `python run.py`.
+Put your links in VIDEOS, set the YouTube API key, and run `python run.py`.
+The deployed web product reads `.env` instead.
 """
 
 import os
@@ -47,8 +48,9 @@ SESSION_NAME = ""
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 # ---------------------------------------------------------- local LM Studio
-# LM Studio must be running locally with the model loaded.
-# The model must have vision capability enabled.
+# LM Studio must run on this computer and listen on loopback.
+# Load the vision-capable Qwen3.8-27B 4-bit MLX model first. Use the exact
+# API identifier from LM Studio, or the deployment alias below.
 LLM_BASE_URL = "http://127.0.0.1:1234"
 LLM_MODEL = "youtube-intelligence"
 LLM_CONTEXT_LENGTH = 32768
@@ -70,16 +72,13 @@ MAX_COMMENTS_PER_VIDEO = 2000
 # contain an example of every real theme.
 #
 # Actual size used = max(CODEBOOK_SAMPLE_SIZE, 8% of corpus), capped at
-# CODEBOOK_SAMPLE_MAX. Target 500-800 on the Pro tier.
-# So 400 comments -> 150, 5,000 comments -> 500.
+# CODEBOOK_SAMPLE_MAX. So 400 comments -> 150, 5,000 comments -> 500.
 CODEBOOK_SAMPLE_SIZE = 150
 CODEBOOK_SAMPLE_MAX = 500
 
-# Classification batch size. Each batch is one LLM call; smaller batches
-# are more accurate per item but produce more calls. Research shows large
-# batches degrade per-item accuracy (position sensitivity). 25 is a
-# reasonable default; raise to cut call count at the cost of some accuracy.
-CLASSIFY_BATCH_SIZE = 25
+# Classification batch size. Start at 8 for the 27B model on the 32 GB Mac.
+# Change it only after a real-device run shows the memory and throughput cost.
+CLASSIFY_BATCH_SIZE = 8
 
 # If the "Other" share after classification exceeds this percentage, run
 # one extra discovery pass over the Other subset to extend the theme

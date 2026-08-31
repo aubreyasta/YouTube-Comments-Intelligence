@@ -1,290 +1,225 @@
-﻿# Architecture
+# Architecture
 
-What the moving parts are, how they fit together, and where the boundaries are. Read this before changing anything non-trivial.
+How the shipped pipeline, backend, frontend, and local model boundary fit together. Read this before changing non-trivial behavior.
 
-Product terms are defined in [README.md](../README.md). The code-identifier mapping is in [AGENTS.md](../AGENTS.md#terminology).
+Product terms are defined in [README.md](../README.md). Code-identifier mappings are in [AGENTS.md](../AGENTS.md#terminology). Exact product contracts are in [PRD.md](../PRD.md).
 
-Related: [Setup](setup.md), [API reference](api-reference.md), [PRD](../PRD.md).
+Related: [Setup](setup.md), [Deployment](deployment.md), [API reference](api-reference.md).
 
 ---
 
-## The three parts
+## System boundary
 
-1. **Pipeline** (`run.py`, `pipeline/`). The analysis engine. YouTube URLs in, report out.
-2. **Backend** (`server.py`, `db.py`, `storage.py`, `assets.py`, `adapter.py`). A FastAPI wrapper exposing the pipeline over HTTP with sessions, uploads, and a run lifecycle.
-3. **Frontend** (`app/`). A single-page vanilla JS app. This is the product surface.
+The shared deployment runs on one MacBook Pro M1 Max:
 
-The pipeline can run alone via `python run.py`, which is a debugging entry point and not the product. See [setup.md](setup.md#cli-debug-entry-point).
+```text
+external browser
+  -> Cloudflare quick tunnel
+  -> FastAPI 127.0.0.1:8000
+  -> Basic Auth middleware
+  -> frontend or /api route
+
+FastAPI pipeline
+  -> LM Studio 127.0.0.1:1234
+  -> Qwen3.8-27B 4-bit MLX
+```
+
+Only FastAPI is published. LM Studio, YouTube credentials, Session data, uploads, and generated files stay on the Mac.
+
+The application has three code areas:
+
+1. **Pipeline** - `run.py` and `pipeline/`. YouTube and User Inputs in, labels and reports out.
+2. **Backend** - `server.py`, `db.py`, `storage.py`, `assets.py`, and `adapter.py`. FastAPI exposes Sessions, User Inputs, Key Messages, runs, and files.
+3. **Frontend** - `app/`. A vanilla JavaScript single-page application served by FastAPI.
+
+`python run.py` runs the pipeline without the web product. It is a debugging entry point configured through the gitignored `config.py`.
 
 ---
 
 ## Pipeline
 
-Four stages, orchestrated by `run.py` in the CLI and by `adapter.py` in the backend:
+Four stages run in `run.py` for the CLI and `adapter.py` for the web product:
 
-1. **collect** fetch comments and transcripts from YouTube, clean, filter by language.
-2. **brief** describe what the campaign put forward. Returns `(grounded_markdown, points)`.
-3. **analyze** build the Theme book, label every comment, run the two local classifiers, count travel.
-4. **report** write markdown, render PDF, export CSVs, build `report.json`.
+1. **collect** fetches YouTube metadata, transcripts, and comments, then cleans and filters comments.
+2. **brief** drafts grounded Key Messages from transcripts and User Inputs.
+3. **analyze** discovers Themes, classifies every eligible comment, and counts Theme, Key Message, Sentiment, and Emotion labels.
+4. **report** writes `report.pdf`, five public CSVs, and the internal `report.json`.
 
-Data passes between stages in memory. Files under `output/<session>/debug/` are write-only audit artifacts that no stage reads.
+Data passes between stages in memory. Debug files are write-only audit output. No pipeline stage reads them back.
 
-### Key Messages are grounded only
+### Configuration
 
-`brief.run()` returns `(grounded_markdown, points)`. There is no background brief. Every claim comes from something the user provided: transcripts, titles, descriptions, uploaded documents, and uploaded images passed to the model as multimodal parts (up to 6 per group, files over 5 MB skipped). No OCR path exists.
+Every pipeline module receives `pipeline.config_types.PipelineConfig`. The backend builds it in `adapter._build_config()` from Session rows and environment variables. The CLI builds it from `config.py` in `run._load_cfg()`.
 
-A model asked "what was campaign X about" produces fluent, confident detail whether or not it knows. Taglines, unit counts, and launch dates are exactly what it invents. That is why the background brief was removed and should not come back.
+The local model fields are:
 
-### Config contract
+- `LLM_BASE_URL`
+- `LLM_MODEL`
+- `LLM_CONTEXT_LENGTH`
+- `LLM_TIMEOUT_SECONDS`
 
-Every pipeline module receives a `PipelineConfig` dataclass (`pipeline/config_types.py`) rather than importing a global config module. The CLI builds one from `config.py`; the backend builds one from DB rows and environment variables via `adapter._build_config()`. There is no `sys.modules["config"]` shim.
+The backend also reads `CLASSIFY_BATCH_SIZE` from the environment. The deployment starts with a 32,768-token context and batch size 8.
 
-The approved provider-neutral fields are `LLM_BASE_URL`, `LLM_MODEL`, `LLM_CONTEXT_LENGTH`, and `LLM_TIMEOUT_SECONDS`. The backend reads them from `.env`; the CLI reads them from the gitignored `config.py`. `pipeline/llm.py` uses standard-library HTTP and keeps no module-global provider client.
+### Grounded Key Messages
 
-### Theme book and labelling
+Key Messages come only from content supplied to the Session: titles, descriptions, transcripts, uploaded documents, article snapshots, and uploaded images. The pipeline does not ask the model what it already knows about a campaign.
 
-`analyze.build()` reads a stratified sample (150 to 500 comments, `max(CODEBOOK_SAMPLE_SIZE, 8% of corpus)` capped at `CODEBOOK_SAMPLE_MAX`) in one call and writes the Theme book: 5 to 8 Themes, each with a one-sentence definition.
+Adding or deleting a User Input updates the Session draft. The server coalesces overlapping draft requests and keeps the latest requested revision. When a run starts, transcript reconciliation preserves edited rows, updates matching generated rows, keeps unmatched existing rows, and appends transcript additions.
 
-The sample only ever discovers Themes. Every percentage is counted over the full corpus, so the sample does not need to be proportionally representative. It needs one example of everything worth naming, which is a much easier bar.
+Users can add, edit, include, exclude, delete, and reorder Key Messages during setup and at `brief_pause`. The server validates and saves the complete list atomically.
 
-`analyze.classify()` sends every filtered comment to the model in batches of `CLASSIFY_BATCH_SIZE`. Each batch carries the Theme book and the approved Key Messages, and each comment comes back with exactly one Theme and zero or more Key Message mentions, in one pass. The Theme label is enum-constrained so it stays consistent across batches.
+### Theme discovery and classification
 
-`analyze.extend()` runs one top-up pass only when the full-corpus `Other` share is at least 30% and at least 25 comments. It samples from the `Other` subset only, discovers 1 to 4 new labels, and reclassifies only those rows. The reported `other_share` is the post-recalculation value.
+`analyze.build()` reads a stratified comment sample and produces 5 to 8 Themes with definitions. The sample discovers labels only. Python computes every percentage over the full eligible corpus.
 
-`analyze.summarise()` counts labels into the two tables the report reasons over: the Theme mix and Key Message travel. Themes are one per comment and sum to 100. Key Message mentions are zero-or-more per comment and do not.
+`analyze.classify()` sends batches containing the Theme book and approved Key Messages. One Qwen response assigns each comment:
 
-Every percentage traces to a per-comment label. Labelling cost scales with corpus size; the Theme book stage is one call regardless.
+- exactly one Theme;
+- zero or more Key Message mentions;
+- exactly one Sentiment: `positive`, `negative`, or `neutral`;
+- exactly one Emotion: `joy`, `anger`, `sadness`, `fear`, or `other_neutral`.
 
-### Sentiment and Emotion
+Strict JSON Schema constrains the labels. Python validators still check exact row coverage and allowed values. `analyze.affect()` performs no inference; it validates the Sentiment and Emotion columns and aggregates them.
 
-The merged classification pass assigns one sentiment and one emotion with the Theme and Key Message labels. `analyze.affect()` validates those columns and counts them in Python. It runs no model.
+`analyze.extend()` performs one optional Theme top-up when the `Other` share reaches the configured threshold and minimum count. It reclassifies only those rows.
 
-Sentiment is `positive`, `negative`, or `neutral`. Emotion is `joy`, `anger`, `sadness`, `fear`, or `other_neutral`. The JSON Schema constrains both sets, and Python rejects an unknown value. The pipeline does not emit confidence values because an LLM's self-reported confidence is not a calibrated probability.
+The model never produces report percentages. Python counts per-comment labels. The pipeline emits no confidence columns because model self-confidence is not a calibrated probability.
 
-Labels apply to one comment without conversation-thread context. Sarcasm and measured criticism can still be misread. Reports state that the local Qwen classification pass assigned the labels.
+### LM Studio boundary
 
-Two figures result: an Emotion distribution across eligible comments and a per-Key-Message Sentiment split. Python computes every percentage from the per-comment labels.
+All model calls live in `pipeline/llm.py`. Callers use `ask()`, `ask_json()`, `classify_batch()`, and `extract_image_context()` without handling the provider wire format.
 
-### Thread safety in collect.py
+`pipeline.llm._validated_base_url()` accepts only an HTTP loopback origin without credentials, a path, a query, or a fragment. The supported deployment does not use a remote model server, an LM Studio API token, provider selection, or a cloud fallback.
 
-`googleapiclient` sits on `httplib2`, which is not thread-safe. Sharing a service object across threads has them reading from one socket, which surfaces as SSL record-layer failures or `NoneType has no attribute read` from deep inside `http.client`.
+Calls use non-streaming OpenAI-compatible `POST /v1/chat/completions`. Structured calls add strict JSON Schema. Image calls use base64 `data:` URLs with the original MIME type. Connection failures, timeouts, HTTP 429, and HTTP 5xx retry three times.
 
-Rule: each thread builds its own service via `collect._service()`. Never pass service objects between threads or store them outside thread-local storage.
+Preflight reads LM Studio's local inventory. It requires an exact `LLM_MODEL` match and vision support. LM Studio owns model download, loading, context allocation, and unloading.
 
-Transient errors (socket, SSL) retry three times with backoff, discarding the thread's client each time, because a broken connection stays broken. `HttpError` is never retried: a 403 means comments are disabled, a 404 means the video is gone. One bad video does not kill the run; the run fails only if no video yields anything.
+### Collection safety
 
-### Model access
+Each collection thread creates its own `googleapiclient` service. `httplib2` is not thread-safe, so service objects must never cross thread boundaries.
 
-All model calls live in `pipeline/llm.py`. Callers use `ask()`, `ask_json()`, `classify_batch()`, and `extract_image_context()` without knowing the provider wire format.
-
-The approved deployment runs a `Qwen3.8-27B` 4-bit MLX build through LM Studio on the same Mac as FastAPI. LM Studio binds `127.0.0.1:1234`; `pipeline.llm._validated_base_url()` rejects a non-loopback `LLM_BASE_URL`. There is no cloud fallback and no remote model server.
-
-Text and multimodal calls use non-streaming `POST /v1/chat/completions`. Structured calls send a strict JSON Schema and still pass the response through the existing Python validator. Image inputs are base64 `data:` URLs with their original MIME type. Reasoning is disabled because each pipeline call needs the requested answer or schema, not a reasoning transcript.
-
-Preflight reads LM Studio's model inventory. It requires the exact configured model identifier and vision capability. LM Studio owns model download, loading, context allocation, and unloading. Application code does not emulate Ollama lifecycle controls.
+Transient socket and SSL failures retry three times with a fresh client. YouTube HTTP errors are not retried. One unavailable video does not fail a run if another video yields data.
 
 ---
 
 ## Backend
 
-FastAPI app in `server.py` at `127.0.0.1:8000`. Single-user, unauthenticated, localhost-only by design.
+`server.py` serves FastAPI on `127.0.0.1:8000`. Fail-closed HTTP Basic Auth middleware runs before routing and protects static files, API routes, downloads, and SSE. `APP_PASSWORD` must be non-empty. Any non-empty username is accepted because the product has one shared workspace, not user accounts.
 
-```
-Browser (app/)
-  |  fetch + EventSource -> http://localhost:8000
-  v
-server.py       FastAPI: /api routes + app/ mounted as static files
-  |
-  +-- db.py       SQLite at data/app.db (stdlib sqlite3, WAL, no ORM)
-  +-- storage.py  paths and writes: data/uploads, data/runs, data/artifacts
-  +-- assets.py   .pdf/.docx/.pptx text extraction and article fetching
-  +-- adapter.py  builds PipelineConfig from DB rows; runs the pipeline in a
-  |               daemon thread; streams progress through a per-run queue
-  +-- pipeline/   the analysis engine; only adapter.py calls it
-```
+The backend reads `.env` before reading configuration. It never sends `YOUTUBE_API_KEY`, `APP_PASSWORD`, or model configuration to the browser.
 
-The backend owns the keys. It reads them from environment variables or a `.env` file and never sends them to the browser.
+### Storage
 
-### Entities
+`data/app.db` uses stdlib SQLite in WAL mode. Eight tables hold the shared state:
 
-UUID v4 ids, stable once created. Seven tables in `data/app.db`:
-
-| Table | Key fields |
+| Table | Purpose |
 |---|---|
-| `sessions` | `id`, `name`, `created_at`, `updated_at` |
-| `campaigns` | `id`, `session_id`, `name`. Internal. Exactly one per session |
-| `videos` | `id`, `campaign_id`, `url`, `youtube_id`, `kind` (`auto`/`brand_ad`/`review`/`explainer`) |
-| `assets` | `id`, `campaign_id`, `kind` (`document`/`image`/`article`), `filename`, `url`, `title`, `text`, `retrieved_at`, `file_path` |
-| `runs` | `id`, `session_id`, `state` (`queued`/`running`/`complete`/`failed`), `started_at`, `finished_at`, `error` |
-| `brief_points` | `id`, `run_id`, `campaign_id`, `video_id`, `label`, `description`, `approved`, `edited`, `included`, `sort_order` |
-| `run_artifacts` | `id`, `run_id`, `kind`, `file_path` |
+| `sessions` | Session identity, timestamps, and Key Message draft state. |
+| `campaigns` | One internal group row per Session. |
+| `videos` | YouTube URLs and kinds. |
+| `assets` | User Input metadata, extracted text, article snapshot, and upload path. |
+| `key_messages` | Editable Session-level Key Message draft. |
+| `runs` | Run state, persisted stage, skip-pause choice, timestamps, and error. |
+| `brief_points` | Immutable run copy of the reconciled Key Messages. |
+| `run_artifacts` | Stored output file records. |
 
-`campaigns` exists because the pipeline was built around a group concept before Sessions existed. It is never shown to the user. `POST /api/sessions/{id}/campaigns` returns `409` if one already exists, and `adapter._load_campaign()` fetches the single row.
-
-Multi-campaign comparison is not planned. A Session is one campaign.
-
-### Run lifecycle
-
-`POST /api/sessions/{id}/runs` returns `202`. Before inserting the new run row it deletes all prior runs for that session (rows cascade to `brief_points` and `run_artifacts`) and calls `storage.clear_run()` on each to remove their files. There is one result per Session; a rerun overwrites the previous one. No run history, no `-2`/`-3` suffix in the backend.
-
-The adapter thread then:
-
-1. Builds a `PipelineConfig` from DB rows and environment variables.
-2. Extracts upload text via `assets.extract_upload()` and fetches article URLs via `assets.fetch_article()`. Collects images into `images_by_group`. Results written back to `assets` rows.
-3. Runs `collect.fetch()` and `collect.clean()`.
-4. Runs `brief.run()`, inserts `brief_points` rows, pushes a `brief_pause` event, and blocks on a `threading.Event` until `POST /runs/{id}/proceed`.
-5. Re-reads approved and edited Key Messages from the DB. Runs `analyze.build()`, `classify()`, `extend()`, `summarise()`, `affect()`.
-6. Runs `report.write()`, `render()`, `export()`.
-7. Builds `report.json`. `_build_evidence()` computes the numbers and evidence sampling directly from the DataFrames, with no markdown parsing. `_build_prose()` makes one dedicated model call for title, interpretation, quote, and caveat, falling back to a deterministic template if it fails.
-8. Copies outputs to `data/artifacts/{run_id}/` and inserts `run_artifacts` rows.
-9. Pushes `complete`. On exception, pushes `error` and sets the run to `failed`.
-
-Step 2 moves to upload time under workstream 6 in the [PRD](../PRD.md), which also adds a `key_messages` table keyed on `session_id`.
-
-### Artifacts
-
-The backend registers six artifacts per run:
-
-| `fileKind` | File | Tier |
-|---|---|---|
-| `report_pdf` | `report.pdf` | primary |
-| `summary_csv` | `summary.csv` | primary |
-| `chart_transfer_csv` | `chart_transfer.csv` | primary |
-| `chart_themes_csv` | `chart_themes.csv` | primary |
-| `report_json` | `report.json` | primary |
-| `comments_csv` | `comments.csv` | advanced |
-
-The CLI writes the same files minus `report.json`.
-
-This set is wrong for the product. Workstream 4 renames the chart CSVs, drops `summary.csv`, adds `sentiment.csv` and `emotions.csv`, and keeps `report.json` as an internal file rather than a download.
-
-### report.json
-
-`GET /api/runs/{id}/report` returns the file directly. It is what the results screen reads, not something the user downloads. Full shape in the [API reference](api-reference.md#report-json-shape).
-
-Keys use the older vocabulary (`transfers`, `themes`, `ideaSentiment`). They are renamed only when the export rename lands, and not before.
-
-### Evidence
-
-For each clickable metric, `_build_evidence()` precomputes up to 8 supporting comments ranked by likes descending, then by text length descending. Rows carry `id`, `metricId`, `text`, `emotion`, `sentiment`, `likes`. No author field; it is not collected from the API.
-
-A fixed ranking rule rather than a selection is the point. Nobody is choosing quotes to fit a story.
-
-### Streaming progress
-
-`GET /api/runs/{id}/events` is a Server-Sent Events stream carrying `adapter.py`'s progress dict straight through, unserialized. That is why its payload is `snake_case` while every other response is `camelCase`. Event shape, heartbeat, and replay-on-reconnect: [API reference](api-reference.md#get-runsidevents).
-
-`brief_pause` signals the review interrupt. The stream stays open through it; labelling resumes only after `POST /runs/{id}/proceed`.
+`storage.py` owns paths and file writes under `data/`. The Mac disk is the only copy. Backups and active-run recovery after a process or Mac restart are out of scope.
 
 ### User Inputs
 
-At run start, uploads with no extracted text pass through `assets.extract_upload()` (pypdf for `.pdf`, python-docx for `.docx`, python-pptx for `.pptx`; images return empty text). Article URLs with no snapshot pass through `assets.fetch_article()` (httpx with a 15 s timeout, BeautifulSoup, capped at 20,000 characters). A failed fetch returns empty text and the run continues.
+Upload routes validate extension and size, store the file, and extract document text before returning. Images retain their file path for multimodal model calls. Article routes resolve and pin a public destination before connecting, revalidate redirects, and store the fetched snapshot. Private, loopback, link-local, and mixed public/private destinations are rejected.
 
-Per-session asset text concatenates into the `context_map` passed to `brief.run()`. User Inputs describe what the campaign put forward. They never touch the comment side.
+Draft generation reads the persisted User Inputs. A failed ordinary public article extraction may leave empty text; an SSRF rejection creates no asset.
+
+### Run admission and lifecycle
+
+`POST /api/sessions/{id}/runs` uses `BEGIN IMMEDIATE` to enforce one queued or running analysis across all Sessions. The server checks the global guard before deleting the target Session's prior result. A rejected start therefore preserves existing data.
+
+The adapter thread then:
+
+1. Loads the Session, campaign, videos, User Inputs, and Key Message draft.
+2. Fetches and cleans YouTube data.
+3. Reconciles transcript-derived Key Messages and copies them into run `brief_points`.
+4. Enters `brief_pause`, unless `skipPause` is true and at least one Key Message remains included.
+5. Re-reads the saved run Key Messages, discovers Themes, classifies comments, and aggregates labels.
+6. Writes the report files and internal Report JSON.
+7. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
+8. Marks the run complete. An exception marks it failed.
+
+Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the Mac loses an active run.
+
+### Progress
+
+SSE events carry `adapter._push()` dictionaries in `snake_case`. All other HTTP JSON uses `camelCase`. The stream emits comment heartbeats while idle and closes after a terminal event.
+
+The persisted run stage is authoritative when a fresh GET conflicts with an old buffered event. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
+
+### Artifacts
+
+A completed run stores seven artifacts in fixed order:
+
+| Kind | File | Public |
+|---|---|---|
+| `report_pdf` | `report.pdf` | Yes |
+| `comments_csv` | `comments.csv` | Yes |
+| `key_messages_csv` | `key-messages.csv` | Yes |
+| `themes_csv` | `themes.csv` | Yes |
+| `sentiment_csv` | `sentiment.csv` | Yes |
+| `emotions_csv` | `emotions.csv` | Yes |
+| `report_json` | `report.json` | No |
+
+`server._ARTIFACT_CONTRACT` is the API source of truth for order, filename, MIME type, and visibility. `adapter._ARTIFACT_FILES` is the matching pipeline completeness check.
+
+`RunSnapshot.artifacts` includes only the six public files. `GET /api/runs/{id}/report` reads the internal `report_json`. The artifact download route rejects the internal record.
 
 ---
 
 ## Frontend
 
-Single-page vanilla app. No framework, no build step. Targets desktop and tablet, 768 px and wider.
+`app/` has no framework or build step:
 
-- `app/index.html` the shell.
-- `app/app.js` fixture store, `demoApi` dispatcher, run engine, hash router, screen renderers, one IIFE.
-- `app/live.js` `window.__liveApi`, the real `fetch` implementation, same method signatures as `demoApi`.
-- `app/style.css` design tokens and per-screen styles.
-- `app/self-check.html` assert-based store and state-machine checks.
+- `app/index.html` provides the shell.
+- `app/live.js` defines `window.__liveApi` for HTTP and SSE.
+- `app/app.js` contains the shared UI, demo store, route renderers, and dispatcher.
+- `app/style.css` contains tokens and component styles.
+- `app/self-check.html` runs browser state-machine checks.
 
-### Visual language
+### Live and demo isolation
 
-Ink `#1A1A2E`, pink `#D6246E` (hover `#B01B5B`), pink tint `#FDEEF5`, border `#E6E6EE`, neutral `#FAFAFB`. Plus Jakarta Sans with a system fallback, no CDN.
+A plain `/` probes `GET /api/sessions` through `window.__liveApi`. Success selects live mode. A failed or unavailable backend can fall back to the in-memory demo store.
 
-The signature interaction: every number in the report is a dotted-underline button that opens a 400 px evidence drawer.
+`?demo=1` explicitly enters the committed Indomie demo and stores that choice in `sessionStorage` for the current tab. Explicit demo mode skips the probe and never delegates to `window.__liveApi`, so demo actions cannot reach the live database. A second tab opened at plain `/` remains live.
 
-### Live and demo modes
+The demo replays generated artifacts and metrics from `app/demo/`. It does not run the model or call `/api`.
 
-Resolved once at boot:
+### Product flow
 
-1. `app.js` checks for `window.__liveApi`, defined by `live.js`, which `index.html` loads first.
-2. If present, and the shell elements (`#view`, `#topbar`, `#overlay-root`) exist, `app.js` probes `GET /api/sessions` with a 1200 ms `AbortController` timeout. Success selects live; any failure selects demo.
-3. `self-check.html` loads only `app.js`, so it never probes and always runs in demo mode.
-4. `demoApi.mode` exposes `"live"` or `"demo"`.
+The frontend supports:
 
-The probe needs no CORS middleware. Live mode is reachable only when the backend serves the app on the same origin. Served standalone on another port, or over `file://`, the app falls back to demo.
+1. Create or resume a Session.
+2. Add videos and User Inputs.
+3. Review, edit, add, delete, include, exclude, and reorder Session Key Messages.
+4. Start with optional skip-pause behavior.
+5. Restore a running or paused run after reopening.
+6. Review run Key Messages at `brief_pause` when required.
+7. Read Report JSON and open evidence by metric.
+8. Download the six ordered public artifacts.
 
-In demo mode the in-memory store and a simulated run engine back every call: `connecting` -> `collect` -> `brief` -> `brief_pause`, wait for `proceedRun`, then `classify` -> `emotion` -> `report` -> `complete`. Nothing leaves the browser.
-
-Two stage values differ from live. Demo adds `connecting` before `collect`, where SSE starts at `collect`. Demo's terminal failure stage is `failed`, where SSE emits `error`. Live maps `error` to `-2` and `running` to `-1` in `STAGE_TO_STEP`.
-
-### Route map
-
-| `demoApi` method | Route |
-|---|---|
-| `listSessions` | `GET /api/sessions` |
-| `getSession` | `GET /api/sessions/{id}` |
-| `createSession` | `POST /api/sessions`, then `POST /api/sessions/{id}/campaigns`, then one `POST /api/campaigns/{id}/videos` per URL |
-| `getCampaign` | list sessions, match on `campaignIds`, then `GET /api/sessions/{id}` |
-| `addVideo` | `POST /api/campaigns/{id}/videos` |
-| `removeVideo` | `DELETE /api/videos/{id}` |
-| `uploadAsset` | `POST /api/campaigns/{id}/assets/upload` |
-| `addArticle` | `POST /api/campaigns/{id}/assets/article` |
-| `removeAsset` | `DELETE /api/assets/{id}` |
-| `getAssetData` | `GET /api/assets/{id}/file`; `null` for articles |
-| `startRun` | `POST /api/sessions/{id}/runs` |
-| `getRun` | `GET /api/runs/{id}` |
-| `getRunningRun` | `GET /api/sessions/{id}`, returns `latestRun` when queued or running |
-| `subscribeRun` | `GET /api/runs/{id}/events` (SSE) |
-| `updateBriefPoints` | `PATCH /api/runs/{id}/brief_points` |
-| `proceedRun` | `POST /api/runs/{id}/proceed` |
-| `getReport` | `GET /api/runs/{id}/report` |
-| `getArtifact` | `GET /api/runs/{id}/artifacts/{artifact_id}` (blob) |
-| `listFiles` | composed client-side from all sessions' assets and complete runs' artifacts |
-| `simulateDisconnect`, `simulateFailure` | demo-only, no backend equivalent |
-
-### Screens
-
-Seven: home and empty state, session list, new session, session detail, run progress and Key Message review, results, files.
-
-New-session setup collects one Session. YouTube URLs are added one at a time and accept `youtube.com/watch?v=`, `youtu.be/`, and `youtube.com/shorts/`. Playlists and duplicates within a Session are rejected with a field-level message. The frontend validates and `_parse_youtube_url()` in `server.py` validates again.
-
-Key Messages stay empty until the run reaches `brief_pause`. At the pause they become editable numbered rows with include and exclude toggles and reorder. At least one must stay included. Edits save only on "Confirm and continue".
-
-The evidence drawer starts closed and opens on a clicked metric. It filters by All, by emotion, or by most liked, and closes on its button or Escape with focus restored.
-
-### Known gaps between the mockup and the backend
-
-The mockup drew a finished product. These are the honest disconnects that remain, all resolved by showing less rather than faking more.
-
-| Gap | Resolution |
-|---|---|
-| The API returns no `title`, `channel`, or `commentCount` for a video | The row shows the pasted URL. The Short or Video tag derives from the URL. The "N comments available" line is gone. |
-| Key Message add and delete have no route; PATCH skips unknown ids | Add and per-row delete are hidden. The review note says ideas are fixed for this run and can be excluded. |
-| SSE `detail` is a string, not an object | The stepper and counters parse the known strings. Anything unparseable renders as a dash. |
-| Artifact and upload blobs | Served through the artifact and asset file routes; renderers call `downloadBlob` unchanged. |
-| Evidence filter pills | Derived from the emotion labels actually present in `report.evidence`, plus "Most liked". Demo keeps fixed pills. |
-| A new run overwrites the previous result | Live "Run analysis" confirms before starting when the Session already has a result. |
-| No live progress bar in the session list | The row shows a status pill and the latest run message. The server does not persist `pct`. |
-| `KEY_VISUALS` is always empty in the backend | The key-visual toggle is hidden. `_ser_asset()` always returns `isKeyVisual: false`. Unresolved; see the PRD. |
-
-Never make a disabled control silently do nothing. If a control cannot do what it looks like it does, it must be visibly disabled and explain why.
+Every number in the results view links to deterministic evidence rows. The drawer restores focus when closed and supports keyboard operation. Reduced-motion styles neutralize view, step, and drawer animation.
 
 ---
 
-## Risks and seams
+## Operational seams
 
-| Risk | Handling |
+| Risk | Current handling |
 |---|---|
-| Article fetch hangs | 15 s httpx timeout, empty text on failure, run continues. |
-| pypdf returns nothing on scanned or encrypted PDFs | Warning logged, empty text returned. OCR is out of scope. |
-| Fixture and live shapes drift | One dispatcher, one signature set. `self-check.html` pins the demo side; the end-to-end run pins the live side. |
-| Local model drifts off the Theme book | Theme, Sentiment, Emotion, and Key Message labels are schema-constrained. Python validates exact row coverage and allowed values. |
-| The 27B model exhausts unified memory | Start with a 4-bit MLX build, 32768 context, and batch size 8. Measure the real run before changing either value. |
+| A 27B model exhausts unified memory | Start with 4-bit MLX, 32,768 context, and batch size 8. Measure on the M1 Max before tuning. |
+| Two users start together | SQLite `BEGIN IMMEDIATE` admits only one active analysis. |
+| Browser closes during a run | The backend thread continues; persisted state restores the view. |
+| FastAPI or Mac restarts during a run | The active run is lost. Recovery is out of scope. |
+| Cloudflare quick tunnel restarts | The public URL changes. |
+| Model or schema output drifts | Strict JSON Schema plus Python validation rejects invalid labels or row coverage. |
+| Public article resolves privately | Resolution pinning and redirect revalidation reject the request before asset creation. |
 
-### Team-deployment seams
-
-Nothing is designed in, but the shape supports it:
-
-- Auth in front of `/api`, and a `user_id` foreign key for tenancy.
-- PostgreSQL in place of `db.py`.
-- Celery or ARQ with Redis in place of the daemon thread and queue.
-- S3-compatible storage in place of `storage.py`.
-- A `cancelled` state and a `cancel_event` beside `proceed_event`, which also restores a Cancel control.
+Future multi-user deployment would require identity and authorization, durable job execution, shared object storage, backups, and a server database. None is implemented now.

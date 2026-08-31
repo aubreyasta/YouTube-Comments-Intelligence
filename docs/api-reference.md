@@ -1,60 +1,131 @@
 # API reference
 
-HTTP contract for the FastAPI backend. Base URL: `http://localhost:8000/api`.
+HTTP contract for the FastAPI backend. Local base URL: `http://127.0.0.1:8000/api`.
 
-Related docs:
-- [Setup](setup.md) - how to install and start the server.
-- [Architecture](architecture.md) - what the pieces are.
-- [README](../README.md) - short human overview.
+Related: [Setup](setup.md), [Architecture](architecture.md), [PRD](../PRD.md).
 
 ---
 
 ## Conventions
 
-- **Content type**: `application/json` for request and response bodies, unless noted (`multipart/form-data` for uploads, `text/event-stream` for the events stream).
-- **Timestamps**: ISO-8601 with timezone, e.g. `2026-08-01T14:22:31+00:00`.
-- **IDs**: UUID v4, stable once created.
-- **Casing**: response bodies use `camelCase`; request bodies match what each endpoint documents. Exception: `GET /runs/{id}/events` (SSE) payloads use `snake_case` (`run_id`, not `runId`) - see the events section below.
-- **Base URL**: `http://localhost:8000/api`. The server binds `127.0.0.1` only.
+- FastAPI binds `127.0.0.1:8000`. The public Cloudflare URL forwards to that origin.
+- Fail-closed HTTP Basic Auth protects every request before routing. Any non-empty username works with the shared `APP_PASSWORD`.
+- JSON responses use `camelCase`. SSE progress events use `snake_case` because they carry `adapter.py` dictionaries directly.
+- IDs are UUID v4. Timestamps are ISO 8601 with a timezone.
+- Uploads use `multipart/form-data`. SSE uses `text/event-stream`. Downloads return their recorded MIME type.
 
-### Error format
+### Errors
 
-Errors return a JSON object:
+API errors use one unwrapped shape:
+
+```ts
+type ApiError = {
+  error: string;
+  message: string;
+  field: string | null;
+};
+```
+
+Example:
 
 ```json
 {
-  "error": "snake_case_code",
-  "message": "Human-readable description.",
-  "field": "optional_field_name_or_null"
+  "error": "VALIDATION_ERROR",
+  "message": "Include at least one Key Message before continuing.",
+  "field": "messages"
 }
 ```
 
-FastAPI wraps error responses in a `detail` envelope for `HTTPException`, so a full error looks like:
+FastAPI `HTTPException` and request-validation handlers both return this flat object. Clients never receive a `detail` envelope.
 
-```json
-{
-  "detail": {
-    "error": "validation",
-    "message": "Only youtube.com/watch?v=, youtu.be/ and youtube.com/shorts/ links work.",
-    "field": "url"
-  }
-}
+Authentication failures return `401` and include:
+
+```text
+WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"
 ```
 
-Pydantic validation errors (missing or malformed request bodies) return the flat shape without the `detail` wrapper.
-
-### Status codes
+Common status codes:
 
 | Status | Meaning |
 |---|---|
-| `200` | OK, response includes a body. |
-| `201` | Created. Response body is the new resource. |
-| `202` | Accepted. Used by `POST /sessions/{id}/runs`; the run starts in a background thread. |
-| `204` | No content. Used by `DELETE` endpoints. Idempotent: deleting a missing id still returns `204`. |
-| `404` | Not found. Returned by `_404()` helper. |
-| `409` | Conflict / state violation. E.g. a session already has a campaign, editing brief points after proceed, requesting a report before completion. |
-| `413` | Payload too large. Uploads capped at 10 MB. |
-| `422` | Validation error. Bad URL format, missing name, unknown `kind`, empty file, duplicate video, etc. |
+| `200` | Success. |
+| `201` | Resource created. |
+| `202` | Run accepted and started in a background thread. |
+| `204` | Deletion complete. Delete routes are idempotent. |
+| `401` | Missing, malformed, or wrong Basic Auth credentials. |
+| `404` | Resource not found. |
+| `409` | Current state prevents the operation. |
+| `413` | Upload exceeds 10 MB. |
+| `422` | Request content failed validation. |
+
+---
+
+## Shared shapes
+
+### Key Message
+
+```ts
+type KeyMessageInput = {
+  id: string | null;
+  label: string;
+  description: string;
+  included: boolean;
+  order: number;
+};
+
+type KeyMessage = KeyMessageInput & { id: string };
+
+type KeyMessageDraft = {
+  status: "empty" | "drafting" | "ready" | "stale" | "failed";
+  messages: KeyMessage[];
+  error: string | null;
+  revision: number;
+};
+```
+
+`id:null` creates a server UUID. The submitted array defines order; the server does not trust the submitted `order` value. Labels are trimmed, required, and limited to 120 characters. Descriptions are trimmed and limited to 500 characters.
+
+### Run snapshot
+
+```ts
+type RunStage =
+  | "queued"
+  | "collect"
+  | "brief"
+  | "brief_pause"
+  | "classify"
+  | "emotion"
+  | "report"
+  | "complete"
+  | "error";
+
+type RunSnapshot = {
+  id: string;
+  sessionId: string;
+  status: "queued" | "running" | "complete" | "failed";
+  stage: RunStage;
+  pct: number;
+  message: string;
+  error: string | null;
+  skipPause: boolean;
+  briefPoints: KeyMessage[];
+  artifacts: Artifact[];
+};
+```
+
+`briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay.
+
+### Artifact
+
+```ts
+type Artifact = {
+  id: string;
+  kind: string;
+  filename: string;
+  contentType: string;
+  downloadUrl: string;
+};
+```
 
 ---
 
@@ -62,12 +133,12 @@ Pydantic validation errors (missing or malformed request bodies) return the flat
 
 ### `POST /sessions`
 
-Create a new session.
+Create a Session.
 
 Request:
 
 ```json
-{ "name": "My session" }
+{ "name": "Campaign analysis" }
 ```
 
 Response `201`:
@@ -75,129 +146,117 @@ Response `201`:
 ```json
 {
   "id": "...",
-  "name": "My session",
+  "name": "Campaign analysis",
   "campaignIds": [],
   "commentCount": 0,
   "status": "ready",
   "updatedAt": "...",
-  "createdAt": "..."
+  "createdAt": "...",
+  "latestRun": null,
+  "keyMessages": {
+    "status": "empty",
+    "messages": [],
+    "error": null,
+    "revision": 0
+  }
 }
 ```
 
-Errors: `422` if `name` is empty.
+Error: `422` when `name` is empty.
 
 ### `GET /sessions`
 
-List all sessions, newest first. Each entry adds `campaignCount` (integer).
+List Sessions newest first. Each item adds `campaignCount`.
 
-Response `200`:
+`status` is `ready`, `running`, `complete`, or `failed`, derived from the latest run. `commentCount` counts CSV records in the latest complete run's readable `comments_csv`; otherwise it is `0`.
 
-```json
-[
-  {
-    "id": "...",
-    "name": "...",
-    "campaignIds": ["..."],
-    "campaignCount": 1,
-    "commentCount": 0,
-    "status": "ready",
-    "updatedAt": "...",
-    "createdAt": "...",
-    "latestRun": {
-      "id": "...",
-      "status": "queued | running | complete | failed",
-      "stage": "connecting | running | complete | failed",
-      "pct": 0,
-      "message": "",
-      "error": null
-    }
-  }
-]
-```
-
-`status` values: `ready`, `running`, `complete`, `failed`. Derived from the most recent run.
-
-`commentCount` is read from the latest complete run's `report.json`; `0` if no complete run yet.
-
-`latestRun` is the most recent run for the session, ordered by `started_at DESC, rowid DESC`. Fields use the same derivation as `GET /runs/{id}` (`stage` is `"connecting"` when queued, `"running"` when active, `"complete"` or `"failed"` when terminal). `latestRun` is `null` when the session has no run. `briefPointIds` and `artifacts` are omitted.
-
-### `GET /sessions/{id}`
-
-Return a session with nested campaigns (each with nested videos and assets) and run summaries.
-
-Response `200`:
+`latestRun` is `null` or:
 
 ```json
 {
   "id": "...",
-  "name": "...",
-  "campaignIds": ["..."],
-  "commentCount": 1234,
-  "status": "complete",
-  "updatedAt": "...",
-  "createdAt": "...",
-  "campaigns": [ { "..." : "..." } ],
-  "runs": [ { "..." : "..." } ],
-  "latestRun": {
-    "id": "...",
-    "status": "queued | running | complete | failed",
-    "stage": "connecting | running | complete | failed",
-    "pct": 0,
-    "message": "",
-    "error": null
-  }
+  "status": "queued | running | complete | failed",
+  "stage": "queued | collect | brief | brief_pause | classify | emotion | report | complete | error",
+  "pct": 0,
+  "message": "",
+  "error": null
 }
 ```
 
-`latestRun` is the same shape as in `GET /sessions`. `null` when the session has no run.
+### `GET /sessions/{id}`
 
-Errors: `404` if the session does not exist.
+Return one Session. The response adds nested `campaigns` and `runs`. Every run uses `RunSnapshot`.
+
+Error: `404` when the Session does not exist.
+
+---
+
+## Session Key Messages
+
+### `POST /sessions/{id}/key_messages/draft`
+
+Draft Key Messages from the latest persisted User Inputs. The route returns `KeyMessageDraft`.
+
+One drafting pass runs at a time per Session. A request that arrives during a pass requests one coalesced rerun against the latest saved inputs, waits, and returns that result.
+
+Draft merge rules preserve edited rows. A matching unedited row receives the fresh generated label and description while retaining inclusion and order. Unmatched edited rows stay. New proposals append.
+
+Each completed pass, including failed and empty passes, increments `revision`. A failure keeps existing rows and returns `stale`; without existing rows it returns `failed`.
+
+Error: `404` when the Session does not exist.
+
+### `PATCH /sessions/{id}/key_messages`
+
+Atomically replace the complete Session Key Message list.
+
+Request:
+
+```json
+{
+  "messages": [
+    {
+      "id": null,
+      "label": "Real green chili",
+      "description": "The product uses real green chili.",
+      "included": true,
+      "order": 0
+    }
+  ]
+}
+```
+
+Response `200`: `KeyMessageDraft` with the saved rows. This route does not increment `revision`.
+
+An empty list and an all-excluded list are valid during setup. Non-null IDs must be unique and belong to this Session.
+
+Errors:
+
+- `404` Session not found.
+- `422` invalid label or description, duplicate ID, unknown ID, or foreign ID. `field` is `messages`.
 
 ---
 
 ## Campaigns
 
-Each session holds at most one campaign. Attempting to create a second returns `409`.
+A Session holds at most one internal campaign row.
 
 ### `POST /sessions/{id}/campaigns`
-
-Create a campaign under a session.
 
 Request:
 
 ```json
-{ "name": "Campaign A" }
+{ "name": "Campaign analysis" }
 ```
 
-Response `201`: campaign object (see below).
+Response `201`: campaign object.
 
-Errors:
-- `404` session not found.
-- `409` the session already has a campaign. Message: `"This session already has a campaign."`
-- `422` empty `name`.
+Errors: `404` Session not found; `409` campaign already exists; `422` empty name.
 
 ### `GET /sessions/{id}/campaigns`
 
-Return the session's campaigns, each with nested videos, assets, and brief-point ids from the latest run.
+Return campaign rows with nested videos, User Inputs, and the latest run's `briefPointIds`.
 
-Response `200`:
-
-```json
-[
-  {
-    "id": "...",
-    "sessionId": "...",
-    "name": "...",
-    "videoIds": ["..."],
-    "assetIds": ["..."],
-    "briefPointIds": ["..."],
-    "videos": [ { "..." : "..." } ],
-    "assets": [ { "..." : "..." } ]
-  }
-]
-```
-
-Errors: `404` session not found.
+Error: `404` Session not found.
 
 ---
 
@@ -205,15 +264,13 @@ Errors: `404` session not found.
 
 ### `POST /campaigns/{id}/videos`
 
-Add a video to a campaign. Accepts `youtube.com/watch?v=`, `youtu.be/`, and `youtube.com/shorts/` URLs. Rejects playlist URLs and duplicates within the same campaign.
-
-Request:
+Add a YouTube video.
 
 ```json
 { "url": "https://youtu.be/...", "kind": "auto" }
 ```
 
-`kind` is optional; defaults to `auto`. Allowed values: `auto`, `brand_ad`, `review`, `explainer`.
+`kind` is `auto`, `brand_ad`, `review`, or `explainer`. The route accepts `youtube.com/watch?v=`, `youtu.be/`, and `youtube.com/shorts/`. It rejects playlists and duplicates within the campaign.
 
 Response `201`:
 
@@ -227,65 +284,51 @@ Response `201`:
 }
 ```
 
-Errors:
-- `404` campaign not found.
-- `422` empty URL, playlist URL, unrecognized URL format, missing video id, unknown `kind`, or duplicate within the campaign.
+Errors: `404` campaign not found; `422` invalid URL, duplicate URL, or invalid kind.
 
 ### `DELETE /videos/{id}`
 
-Remove a video. Idempotent: `204` whether or not the id exists.
+Delete a video. Returns `204`, including when the ID does not exist.
 
 ---
 
-## Assets
-
-Two kinds of assets: uploads (`document` or `image`) and articles.
+## User Inputs
 
 ### `POST /campaigns/{id}/assets/upload`
 
-Upload a file to a campaign. `multipart/form-data`, field name `file`.
+Upload field `file` as `multipart/form-data`. Accepted extensions: `.pdf`, `.pptx`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.webp`. Maximum size: 10 MB.
 
-Accepted extensions: `.pdf`, `.pptx`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.webp`. Max size 10 MB.
-
-Text extraction is deferred to run start, not done on upload. Documents get text extracted then; images add visual context without text.
+The route stores the file and extracts document text before returning. Images retain their file path for multimodal model calls and have empty extracted text.
 
 Response `201`: asset object.
 
-Errors:
-- `404` campaign not found.
-- `413` file exceeds 10 MB.
-- `422` empty filename, unrecognized extension.
+Errors: `404` campaign not found; `413` file over 10 MB; `422` empty or unsupported filename.
 
 ### `POST /campaigns/{id}/assets/article`
 
-Add an article URL to a campaign. The URL is snapshotted at run start (15 s timeout, capped at 20 000 characters); a failed fetch returns empty text and the run continues.
-
-Request:
+Fetch and store an article snapshot.
 
 ```json
-{ "url": "https://..." }
+{ "url": "https://example.com/article" }
 ```
+
+The server accepts public HTTP and HTTPS destinations on default ports. It resolves and pins the destination before connecting and revalidates redirects. A private, loopback, link-local, non-default-port, or mixed public/private destination returns:
+
+```json
+{
+  "error": "VALIDATION_ERROR",
+  "message": "That link points to a private address and cannot be fetched.",
+  "field": "url"
+}
+```
+
+An ordinary public-host timeout or extraction failure may create an asset with empty text.
 
 Response `201`: asset object.
 
-Errors:
-- `404` campaign not found.
-- `422` URL is not `http://` or `https://`.
+Errors: `404` campaign not found; `422` invalid or prohibited URL.
 
-### `DELETE /assets/{id}`
-
-Remove an asset. For uploaded files, the file on disk is also removed. Idempotent.
-
-### `GET /assets/{id}/file`
-
-Download the raw bytes of an uploaded asset. Returns the file with `Content-Disposition: attachment` set.
-
-Same shape as `GET /runs/{id}/artifacts/{artifact_id}`.
-
-Errors:
-- `404` asset record not found, asset has no `file_path` (article assets), or file missing on disk.
-
-### Asset object shape
+### Asset object
 
 ```json
 {
@@ -297,70 +340,67 @@ Errors:
   "mimeType": "...",
   "size": 12345,
   "addedAt": "...",
-  "isKeyVisual": false,
   "status": "ready"
 }
 ```
 
-`isKeyVisual` is currently always `false`. The frontend has a key-visual selector but no backing route yet.
+### `DELETE /assets/{id}`
+
+Delete a User Input and its stored upload file. Returns `204` when the ID does not exist.
+
+### `GET /assets/{id}/file`
+
+Download an uploaded file. Articles have no downloadable file.
+
+Error: `404` when the row, path, or file does not exist.
 
 ---
 
 ## Runs
 
-Starting a new run deletes the session's prior run and all its artifacts. There is one result per session at any time. The client should confirm this overwrite with the user before calling `POST /sessions/{id}/runs`.
-
 ### `POST /sessions/{id}/runs`
 
-Start a run for a session. Deletes the session's existing run (if any) and its artifacts before inserting the new run record. Returns immediately with `202`; the run executes in a background thread.
+Start one analysis in a background thread.
 
-Response `202`: run object.
+Request body is optional. Omitted means `skipPause:false`.
+
+```json
+{ "skipPause": false }
+```
+
+The server acquires an immediate SQLite write transaction and rejects a start while any Session has a `queued` or `running` run. It performs this guard before deleting the target Session's prior result.
+
+After admission, the new run replaces that Session's prior run and files. There is no run history.
+
+Response `202`: `RunSnapshot`.
 
 Errors:
-- `404` session not found.
+
+- `404` Session not found.
+- `409 RUN_IN_PROGRESS` with `"This session already has a run in progress."`
+- `409 RUN_IN_PROGRESS` with `"Another analysis is already running. Wait for it to finish."`
+
+`skipPause:true` bypasses `brief_pause` only when reconciliation leaves at least one included Key Message. Zero included rows always pause.
 
 ### `GET /runs/{id}`
 
-Return the current run snapshot.
+Return `RunSnapshot`.
 
-Response `200`:
-
-```json
-{
-  "id": "...",
-  "sessionId": "...",
-  "status": "queued | running | complete | failed",
-  "stage": "connecting | running | complete | failed",
-  "pct": 0,
-  "message": "",
-  "briefPointIds": ["..."],
-  "error": null,
-  "createdAt": "...",
-  "briefPoints": [ "..." ],
-  "artifacts": [ "..." ]
-}
-```
-
-`briefPoints` is included whenever brief points exist (from `brief_pause` onward). `artifacts` is included only when `status == "complete"`.
-
-For live stage progress, use the SSE stream. `GET /runs/{id}` is a snapshot.
-
-Errors: `404` run not found.
+Error: `404` run not found.
 
 ### `PATCH /runs/{id}/brief_points`
 
-Bulk update brief points during the review pause.
+Atomically replace the complete run Key Message list while the persisted stage is `brief_pause`.
 
 Request:
 
 ```json
 {
-  "points": [
+  "messages": [
     {
-      "id": "...",
-      "label": "...",
-      "description": "...",
-      "approved": true,
+      "id": null,
+      "label": "New Key Message",
+      "description": "Added during review.",
       "included": true,
       "order": 0
     }
@@ -368,155 +408,136 @@ Request:
 }
 ```
 
-Updates only rows that already belong to this run by `id`; unknown ids are silently skipped. Does not create or delete rows. Sets `edited` to `1` on every updated row.
+`id:null` creates a server UUID. Omitted existing rows are deleted. Submitted array order wins. An empty or all-excluded list can be saved; proceeding still requires one included row.
 
-Response `200`: the full ordered list of brief points after the update.
+Response `200`:
 
-Errors:
-- `404` run not found.
-- `409` run has moved past the brief phase (state not `running`/`queued`, no brief points inserted yet, or proceed has already been called).
-- `422` empty `points`, empty `label`, or all points excluded.
+```json
+{ "messages": [ { "id": "...", "label": "...", "description": "...", "included": true, "order": 0 } ] }
+```
+
+Errors: `404` run or campaign not found; `409` review is not open or already continued; `422` invalid, duplicate, unknown, or foreign ID.
 
 ### `POST /runs/{id}/proceed`
 
-Unblock classification after brief review. Requires at least one included brief point.
+Continue a run paused at `brief_pause`.
 
-Response `200`: the run object.
+Response `200`: current `RunSnapshot`.
 
-Errors:
-- `404` run not found.
-- `409` run is not waiting for review (already proceeded, terminal, or brief points not yet inserted).
-- `422` no included brief points.
+Errors: `404` run not found; `409` run is not waiting; `422` no Key Message is included.
 
 ### `GET /runs/{id}/events`
 
-Server-Sent Events stream. `text/event-stream`. Stays open through the brief pause.
+Open the SSE progress stream. Data events use `snake_case`:
 
-Each event, in `snake_case` (the one exception to the camelCase convention above - this shape comes straight from `adapter.py`'s internal progress dict, not through a serializer):
-
-```
-data: {"run_id":"...","stage":"...","message":"...","pct":42,"detail":null}\n\n
+```text
+data: {"run_id":"...","stage":"classify","message":"Classifying comments","pct":60,"detail":null}\n\n
 ```
 
-Stages, in order:
+Stages:
 
-| Stage | `pct` range | Notes |
-|---|---|---|
-| `collect` | 2-20 | Asset extraction, comment fetch, and cleaning. |
-| `brief` | 22-38 | Transcript reading and brief point discovery. |
-| `brief_pause` | 40 | Stream stays open. Waiting for user review and `POST /proceed`. |
-| `classify` | 42-65 | Theme build, classification, and theme top-up. |
-| `emotion` | 67-75 | Emotion and sentiment analysis (both models run under this stage name). |
-| `report` | 77-88 | PDF render and CSV export. |
-| `complete` | 100 | Run finished. |
-| `error` | 0 | Run failed. `detail` contains the exception string, including local LM Studio preflight or model errors. There is no cloud fallback. |
+| Stage | Typical percent | Meaning |
+|---|---:|---|
+| `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
+| `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
+| `brief_pause` | 40 | Wait for review and `/proceed`. |
+| `classify` | 42-65 | Discover Themes, classify all labels, optionally refine `Other`. |
+| `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |
+| `report` | 77-88 | Write Report JSON, PDF, and CSVs. |
+| `complete` | 100 | Run complete. |
+| `error` | 0 | Run failed; `detail` carries the exception string. |
 
-One additional `classify` event may appear at `pct` 60 with message `"Refining themes - high uncategorised count"`. It fires when the theme top-up pass runs because the uncategorised share exceeded the limit.
+An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. A terminal run replays one terminal event and closes.
 
-Heartbeat every 15 s:
+Error: `404` before the stream opens.
 
-```
-: heartbeat\n\n
-```
+---
 
-If the client connects after the run has already terminated, the stream replays a terminal event once and closes.
-
-Errors: `404` run not found (before the stream opens).
+## Report JSON
 
 ### `GET /runs/{id}/report`
 
-Return the report JSON built at the end of the run.
+Return the internal `report_json` after completion.
 
-Response `200`: shape below.
+Errors: `404` run not found; `409` run incomplete, artifact missing, or file unreadable.
 
-Errors:
-- `404` run not found.
-- `409` run has not completed yet.
-- `409` report artifact is missing or unreadable.
-
-### Report JSON shape
+Exact top-level keys:
 
 ```json
 {
-  "runId": "...",
-  "title": "two-line title separated by \n",
-  "subtitle": "1,234 comments · 2 videos · 5 themes · Indonesian / English",
-  "overallTransfer": 41,
-  "transfers": [
-    { "id": "m-t-<slug>", "label": "...", "value": 41, "evidenceCount": 340 }
+  "overallTransfer": 41.2,
+  "keyMessages": [
+    {
+      "id": "...",
+      "metricId": "m-t-real-green-chili",
+      "label": "Real green chili",
+      "description": "...",
+      "count": 34,
+      "percent": 41.2
+    }
   ],
   "themes": [
-    { "id": "m-th-0", "label": "...", "value": 28 }
+    { "metricId": "m-th-0", "label": "Flavor", "count": 42, "percent": 50.6 }
   ],
   "emotions": [
-    { "label": "joy", "value": 34, "n": 420 }
+    { "metricId": "m-em-joy", "label": "joy", "count": 30, "percent": 36.1 }
   ],
-  "ideaSentiment": [
-    { "id": "m-is-<slug>", "label": "...", "positive": 60, "neutral": 30, "negative": 10, "n": 340 }
+  "keyMessageSentiment": [
+    {
+      "id": "...",
+      "metricId": "m-is-real-green-chili",
+      "label": "Real green chili",
+      "positiveCount": 20,
+      "positivePercent": 58.8,
+      "negativeCount": 4,
+      "negativePercent": 11.8,
+      "baseN": 34
+    }
   ],
-  "interpretation": "2-4 paragraphs separated by \n\n",
-  "quote": { "text": "...", "attr": "comment · 47 likes" },
-  "caveat": "...",
   "evidence": [
-    { "id": "ev-0", "metricId": "m-t-...", "text": "...", "emotion": "joy", "sentiment": "positive", "likes": 123 }
+    {
+      "metricId": "m-t-real-green-chili",
+      "comments": [
+        {
+          "text": "...",
+          "likes": 123,
+          "videoId": "...",
+          "sentiment": "positive"
+        }
+      ]
+    }
   ]
 }
 ```
 
-**`transfers`** - one entry per brief point. `value` is the percentage of comments that echoed it (integer, 0-100). `evidenceCount` is the raw comment count. Zero-echo ideas are included with `value: 0` and `evidenceCount: 0`. Slug is derived from the point label by lowercasing and replacing non-word characters with `-`.
+`overallTransfer` is the share of eligible rows that mention at least one applicable included Key Message. `keyMessages`, `themes`, `emotions`, and `keyMessageSentiment` carry Python-counted values. Percentages use one decimal.
 
-**`themes`** - one entry per discovered theme, sorted by `value` descending with `Other` last. `value` is the percentage of comments in that theme (rounded integer).
-
-**`emotions`** - distribution of emotion labels across all comments in the analysis base. `value` is the rounded percentage; `n` is the raw count. Empty array if the emotion model did not run.
-
-**`ideaSentiment`** - one entry per transfer point, aligned by slug (`m-is-<slug>` matches the corresponding `m-t-<slug>`). `positive`, `neutral`, and `negative` are integer percentages that sum to 100. `n` is the number of comments that echoed the idea. A zero-echo idea has `n: 0` and `positive: 0, neutral: 0, negative: 0`.
-
-**`evidence`** - up to 8 rows per metric, ranked by likes descending then comment length descending. No global cap. `metricId` references either a `transfers[].id`, a `themes[].id`, or an `ideaSentiment[].id`. There is no `author` field. `sentiment` is present on every row.
-
-Every number traces to a per-comment label from the classification step; nothing here is model-estimated.
-
-### `GET /runs/{id}/artifacts/{artifact_id}`
-
-Download a run artifact. Returns the raw file with `Content-Disposition: attachment` set.
-
-Artifact kinds:
-
-| `fileKind` (DB) | `name` | `tier` | Content type |
-|---|---|---|---|
-| `report_pdf` | `report.pdf` | `primary` | `application/pdf` |
-| `summary_csv` | `summary.csv` | `primary` | `text/csv` |
-| `chart_transfer_csv` | `chart_transfer.csv` | `primary` | `text/csv` |
-| `chart_themes_csv` | `chart_themes.csv` | `primary` | `text/csv` |
-| `report_json` | `report.json` | `primary` | `application/json` |
-| `comments_csv` | `comments.csv` | `advanced` | `text/csv` |
-
-`tier: "primary"` - deck-ready downloads: the PDF report, the summary, and the chart data CSVs.
-`tier: "advanced"` - raw per-comment audit data for deeper inspection.
-
-Errors:
-- `404` artifact record not found, or file missing on disk.
-
-### Serialized artifact object
-
-Included in `GET /runs/{id}` responses when the run is complete:
-
-```json
-{
-  "id": "...",
-  "runId": "...",
-  "kind": "pdf | csv | json | file",
-  "name": "report.pdf",
-  "fileKind": "report_pdf",
-  "tier": "primary | advanced",
-  "size": 123456,
-  "addedAt": "..."
-}
-```
-
-`kind` is a client-facing hint derived from the file extension. `fileKind` is the DB `kind` value used to distinguish CSVs from each other. `tier` indicates the intended audience: `primary` for deck-ready outputs, `advanced` for raw audit data.
+Each evidence group contains up to eight comments, ranked by likes and then text length. Key Message Sentiment evidence selects up to four positive and four negative rows, then backfills from the best remaining recognized Sentiment rows. Metric IDs remain unique when labels slugify to the same value.
 
 ---
 
-## Static files
+## Artifacts
 
-`app/` is mounted at `/` when the directory exists. Any request that does not match an `/api/*` route falls through to the static handler, so `http://localhost:8000/` serves the frontend and `http://localhost:8000/style.css` serves the stylesheet.
+### `GET /runs/{id}/artifacts/{artifactId}`
+
+Download one public artifact with `Content-Disposition: attachment`.
+
+| Kind | Filename | Content type | Public |
+|---|---|---|---|
+| `report_pdf` | `report.pdf` | `application/pdf` | Yes |
+| `comments_csv` | `comments.csv` | `text/csv` | Yes |
+| `key_messages_csv` | `key-messages.csv` | `text/csv` | Yes |
+| `themes_csv` | `themes.csv` | `text/csv` | Yes |
+| `sentiment_csv` | `sentiment.csv` | `text/csv` | Yes |
+| `emotions_csv` | `emotions.csv` | `text/csv` | Yes |
+| `report_json` | `report.json` | `application/json` | No |
+
+`RunSnapshot.artifacts` contains only the first six, in this order. `report_json` is available only through `/runs/{id}/report`. Requesting its artifact record returns `404`.
+
+Error: `404` when the record is unknown, internal, or missing on disk.
+
+---
+
+## Static frontend
+
+FastAPI serves `app/` after all `/api` routes. `/` serves `index.html`; assets such as `/app.js` and `/style.css` use the same authenticated origin. No CORS configuration or second frontend server is required.

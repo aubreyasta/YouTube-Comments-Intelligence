@@ -100,6 +100,7 @@ CLASSIFY_BATCH_SIZE=8
 - `LLM_MODEL` must exactly match the LM Studio model inventory.
 - `LLM_CONTEXT_LENGTH` and `CLASSIFY_BATCH_SIZE` are starting values. Change them only after a real-device run shows memory pressure or unacceptable throughput.
 - `.env`, `config.py`, and `data/` are gitignored. Never commit them.
+- The application has no LM Studio API-token setting. Keep LM Studio on loopback. Do not publish port 1234 or replace `LLM_BASE_URL` with a remote URL.
 
 Check the exclusions:
 
