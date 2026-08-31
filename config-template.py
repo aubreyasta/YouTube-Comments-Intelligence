@@ -46,16 +46,13 @@ SESSION_NAME = ""
 # Never hardcode a key in this file.
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
-# ---------------------------------------------------------- local Ollama/Qwen
-# Ollama must be running locally with this exact tag installed. The pipeline
-# never pulls models automatically:
-#   ollama pull qwen3.5:4b
-# One multimodal model serves both text and image inputs.
-OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-MODEL = "qwen3.5:4b"
-OLLAMA_NUM_CTX = 32768
-OLLAMA_TIMEOUT_SECONDS = 600
-OLLAMA_KEEP_ALIVE = "10m"
+# ---------------------------------------------------------- local LM Studio
+# LM Studio must be running locally with the model loaded.
+# The model must have vision capability enabled.
+LLM_BASE_URL = "http://127.0.0.1:1234"
+LLM_MODEL = "youtube-intelligence"
+LLM_CONTEXT_LENGTH = 32768
+LLM_TIMEOUT_SECONDS = 600
 
 # ---------------------------------------------------------------- filters
 # Languages to keep. Add codes as needed: id=Indonesian, ms=Malay,

@@ -1,11 +1,10 @@
-"""Local Ollama model boundary and strict structured-output contracts."""
+"""LM Studio model boundary and strict structured-output contracts."""
 
 from __future__ import annotations
 
 import base64
 import ipaddress
 import json
-import re
 import socket
 import time
 from collections.abc import Callable
@@ -13,25 +12,21 @@ from urllib import error, parse, request
 
 from pipeline.config_types import PipelineConfig
 
-# Exported so a caller can check the version floor without preflight(),
-# which also requires the model tag to be installed.
-MIN_OLLAMA_VERSION = (0, 12, 7)
+
+class LMStudioError(RuntimeError):
+    """Base class for safe LM Studio boundary errors."""
 
 
-class OllamaError(RuntimeError):
-    """Base class for safe Ollama boundary errors."""
+class LMStudioConnectionError(LMStudioError):
+    """LM Studio could not be reached or returned a retryable HTTP error."""
 
 
-class OllamaConnectionError(OllamaError):
-    """Ollama could not be reached or returned a retryable HTTP error."""
-
-
-class OllamaModelError(OllamaError):
+class LMStudioModelError(LMStudioError):
     """A configured model is missing or rejected the request."""
 
 
-class OllamaResponseError(OllamaError):
-    """Ollama returned an invalid, incomplete, or schema-invalid response."""
+class LMStudioResponseError(LMStudioError):
+    """LM Studio returned an invalid, incomplete, or schema-invalid response."""
 
 
 _STRING = {"type": "string", "minLength": 1}
@@ -248,38 +243,35 @@ def validate_classification(value: object, expected_indices: list[int],
 
 
 def _validated_base_url(cfg: PipelineConfig) -> str:
-    if not isinstance(cfg.OLLAMA_BASE_URL, str):
-        raise ValueError("OLLAMA_BASE_URL must be a string")
-    url = parse.urlsplit(cfg.OLLAMA_BASE_URL)
+    if not isinstance(cfg.LLM_BASE_URL, str):
+        raise ValueError("LLM_BASE_URL must be a string")
+    url = parse.urlsplit(cfg.LLM_BASE_URL)
     if url.scheme != "http" or not url.hostname or url.username or url.password:
-        raise ValueError("OLLAMA_BASE_URL must be an HTTP loopback URL without credentials")
+        raise ValueError("LLM_BASE_URL must be an HTTP loopback URL without credentials")
     if url.query or url.fragment or url.path not in ("", "/"):
-        raise ValueError("OLLAMA_BASE_URL must not contain a path, query, or fragment")
+        raise ValueError("LLM_BASE_URL must not contain a path, query, or fragment")
     try:
         loopback = ipaddress.ip_address(url.hostname).is_loopback
     except ValueError:
         loopback = url.hostname.lower() == "localhost"
     if not loopback:
-        raise ValueError("OLLAMA_BASE_URL host must be loopback")
+        raise ValueError("LLM_BASE_URL host must be loopback")
     try:
         url.port
     except ValueError as exc:
-        raise ValueError("OLLAMA_BASE_URL has an invalid port") from exc
-    return cfg.OLLAMA_BASE_URL.rstrip("/")
+        raise ValueError("LLM_BASE_URL has an invalid port") from exc
+    return cfg.LLM_BASE_URL.rstrip("/")
 
 
 def _validate_config(cfg: PipelineConfig) -> str:
     base_url = _validated_base_url(cfg)
-    for name in ("MODEL",):
-        model = getattr(cfg, name)
-        if not isinstance(model, str) or not model.strip() or model.lower().endswith("-cloud"):
-            raise ValueError(f"{name} must be a nonempty local model tag and must not end in -cloud")
-    for name in ("OLLAMA_NUM_CTX", "OLLAMA_TIMEOUT_SECONDS"):
+    model = cfg.LLM_MODEL
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("LLM_MODEL must be a nonempty string")
+    for name in ("LLM_CONTEXT_LENGTH", "LLM_TIMEOUT_SECONDS"):
         value = getattr(cfg, name)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"{name} must be a positive integer")
-    if not isinstance(cfg.OLLAMA_KEEP_ALIVE, str) or not cfg.OLLAMA_KEEP_ALIVE.strip():
-        raise ValueError("OLLAMA_KEEP_ALIVE must be nonempty")
     return base_url
 
 
@@ -288,98 +280,126 @@ def _call(cfg: PipelineConfig, method: str, path: str, payload: dict | None = No
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"} if data is not None else {}
     retry_statuses = {429, 500, 502, 503, 504}
+    last = ""
     for attempt in range(3):
         try:
             req = request.Request(base_url + path, data=data, headers=headers, method=method)
-            with request.urlopen(req, timeout=cfg.OLLAMA_TIMEOUT_SECONDS) as response:
+            with request.urlopen(req, timeout=cfg.LLM_TIMEOUT_SECONDS) as response:
                 raw = response.read()
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
-                raise OllamaResponseError("Ollama returned a non-object response.")
+                raise LMStudioResponseError("LM Studio returned a non-object response.")
             return parsed
         except error.HTTPError as exc:
             if exc.code in (400, 404):
-                raise OllamaModelError(f"Ollama rejected the model request (HTTP {exc.code}).") from None
+                raise LMStudioModelError(f"LM Studio rejected the request (HTTP {exc.code}).") from None
             if exc.code not in retry_statuses:
-                raise OllamaConnectionError(f"Ollama request failed (HTTP {exc.code}).") from None
+                raise LMStudioConnectionError(f"LM Studio request failed (HTTP {exc.code}).") from None
             last = f"HTTP {exc.code}"
         except (error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError):
             last = "connection failure"
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise OllamaResponseError("Ollama returned invalid JSON.") from None
+            raise LMStudioResponseError("LM Studio returned invalid JSON.") from None
         if attempt < 2:
             time.sleep((2, 5)[attempt])
-    raise OllamaConnectionError(f"Ollama request failed after 3 attempts ({last}).")
+    raise LMStudioConnectionError(f"LM Studio request failed after 3 attempts ({last}).")
 
 
 def _generate(prompt: str, cfg: PipelineConfig, *, model: str | None, num_predict: int,
-              schema: dict | None = None, images: list[tuple[bytes, str]] | None = None,
-              keep_alive: str | int | None = None) -> str:
+              schema: dict | None = None, images: list[tuple[bytes, str]] | None = None) -> str:
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a nonempty string")
     if isinstance(num_predict, bool) or not isinstance(num_predict, int) or num_predict <= 0:
         raise ValueError("num_predict must be a positive integer")
-    chosen_model = model or cfg.MODEL
-    if not isinstance(chosen_model, str) or not chosen_model.strip() or chosen_model.lower().endswith("-cloud"):
-        raise ValueError("model must be a nonempty local tag and must not end in -cloud")
-    encoded_images = []
-    for image in images or []:
-        if (not isinstance(image, tuple) or len(image) != 2
-                or not isinstance(image[0], bytes) or not image[0]
-                or not isinstance(image[1], str) or not image[1].strip()):
-            raise ValueError("images must contain (bytes, MIME type) tuples")
-        encoded_images.append(base64.b64encode(image[0]).decode("ascii"))
+    chosen_model = model or cfg.LLM_MODEL
+    if not isinstance(chosen_model, str) or not chosen_model.strip():
+        raise ValueError("model must be a nonempty string")
+
+    # Build message content: plain string for text-only, content array for images
+    if images:
+        content_parts = [{"type": "text", "text": prompt}]
+        for image_bytes, mime_type in images:
+            if (not isinstance(image_bytes, bytes) or not image_bytes
+                    or not isinstance(mime_type, str) or not mime_type.strip()):
+                raise ValueError("images must contain (bytes, MIME type) tuples")
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+            })
+        messages = [{"role": "user", "content": content_parts}]
+    else:
+        messages = [{"role": "user", "content": prompt}]
+
     payload = {
         "model": chosen_model,
-        "prompt": prompt,
+        "messages": messages,
+        "temperature": 0,
+        "seed": 0,
+        "max_tokens": num_predict,
         "stream": False,
-        "think": False,
-        "keep_alive": cfg.OLLAMA_KEEP_ALIVE if keep_alive is None else keep_alive,
-        "options": {
-            "temperature": 0,
-            "seed": 0,
-            "num_ctx": cfg.OLLAMA_NUM_CTX,
-            "num_predict": num_predict,
-        },
     }
     if schema is not None:
-        payload["format"] = schema
-    if encoded_images:
-        payload["images"] = encoded_images
-    response = _call(cfg, "POST", "/api/generate", payload)
-    print(f"  ctx  prompt={response.get('prompt_eval_count')} predict={num_predict} num_ctx={cfg.OLLAMA_NUM_CTX}")
-    if response.get("error"):
-        raise OllamaResponseError("Ollama reported a generation error.")
-    if response.get("done") is not True or response.get("done_reason") in {"length", "max_tokens"}:
-        raise OllamaResponseError("Ollama returned an incomplete or truncated response.")
-    text = response.get("response")
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "response",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+
+    response = _call(cfg, "POST", "/v1/chat/completions", payload)
+
+    # Validate response structure
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise LMStudioResponseError("LM Studio returned no choices.")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise LMStudioResponseError("LM Studio returned an invalid choice.")
+
+    finish_reason = choice.get("finish_reason")
+    if finish_reason in ("length", "max_tokens"):
+        raise LMStudioResponseError("LM Studio returned a truncated response.")
+
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise LMStudioResponseError("LM Studio returned an invalid message.")
+    text = message.get("content")
     if not isinstance(text, str) or not text.strip():
-        raise OllamaResponseError("Ollama returned an empty response.")
+        raise LMStudioResponseError("LM Studio returned an empty response.")
+
+    print(f"  ctx  predict={num_predict} context_length={cfg.LLM_CONTEXT_LENGTH}")
     return text
 
 
 def preflight(cfg: PipelineConfig) -> None:
-    version = _call(cfg, "GET", "/api/version").get("version")
-    if not isinstance(version, str):
-        raise OllamaResponseError("Ollama version response is invalid.")
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", version)
-    if not match:
-        raise OllamaResponseError("Ollama version response is invalid.")
-    if tuple(map(int, match.groups())) < MIN_OLLAMA_VERSION:
-        raise OllamaError(f"Ollama {'.'.join(map(str, MIN_OLLAMA_VERSION))} or newer is required; found {version}.")
-    models = _call(cfg, "GET", "/api/tags").get("models")
+    response = _call(cfg, "GET", "/api/v1/models")
+    models = response.get("models")
     if not isinstance(models, list):
-        raise OllamaResponseError("Ollama tags response is invalid.")
-    local = {
-        item.get("name", item.get("model")): item.get("size")
-        for item in models if isinstance(item, dict)
-    }
-    missing = [tag for tag in (cfg.MODEL,)
-               if tag not in local or isinstance(local[tag], bool)
-               or not isinstance(local[tag], (int, float)) or local[tag] <= 0]
-    if missing:
-        commands = "\n".join(f"ollama pull {tag}" for tag in missing)
-        raise OllamaModelError(f"Required local Ollama model tag(s) missing:\n{commands}")
+        raise LMStudioResponseError("LM Studio models response is invalid.")
+
+    # Find the configured model by exact key match
+    target_model = None
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        if item.get("key") == cfg.LLM_MODEL:
+            target_model = item
+            break
+
+    if target_model is None:
+        raise LMStudioModelError(
+            f"Required LM Studio model '{cfg.LLM_MODEL}' not found. "
+            f"Load it in LM Studio before running the pipeline.")
+
+    # Check vision capability
+    capabilities = target_model.get("capabilities")
+    if not isinstance(capabilities, dict) or not capabilities.get("vision"):
+        raise LMStudioModelError(
+            f"Model '{cfg.LLM_MODEL}' does not support vision. "
+            f"A multimodal model is required for image analysis.")
 
 
 def ask(prompt: str, cfg: PipelineConfig, *, model: str | None = None,
@@ -402,8 +422,8 @@ def ask_json(prompt: str, cfg: PipelineConfig, *, schema: dict,
             return validation(value) if validation else value
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             last_error = f"{exc.__class__.__name__}: {exc}"
-    raise OllamaResponseError(
-        f"Ollama failed to return a valid structured response after {retries} attempts ({last_error}).")
+    raise LMStudioResponseError(
+        f"LM Studio failed to return a valid structured response after {retries} attempts ({last_error}).")
 
 
 def classify_batch(prompt: str, expected_indices: list[int], theme_names: list[str],
@@ -430,16 +450,3 @@ def extract_image_context(images: list[tuple[bytes, str]], cfg: PipelineConfig) 
             *(f"- {row}" for row in result["observations"]),
         ])
     return "\n".join(blocks)
-
-
-def unload(model: str, cfg: PipelineConfig) -> None:
-    _validate_config(cfg)
-    if not isinstance(model, str) or not model.strip() or model.lower().endswith("-cloud"):
-        raise ValueError("model must be a nonempty local tag and must not end in -cloud")
-    response = _call(cfg, "POST", "/api/generate", {
-        "model": model,
-        "stream": False,
-        "keep_alive": 0,
-    })
-    if response.get("error") or response.get("done") is not True:
-        raise OllamaResponseError("Ollama did not confirm model unload.")

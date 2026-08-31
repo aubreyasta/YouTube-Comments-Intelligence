@@ -52,9 +52,9 @@ CANNED = {
 
 def make_cfg(batch_size=1):
     values = {
-        "YOUTUBE_API_KEY": "test", "OLLAMA_BASE_URL": "http://127.0.0.1:11434",
-        "MODEL": "qwen3.5:4b", "OLLAMA_NUM_CTX": 32768,
-        "OLLAMA_TIMEOUT_SECONDS": 2, "OLLAMA_KEEP_ALIVE": "5m",
+        "YOUTUBE_API_KEY": "test", "LLM_BASE_URL": "http://127.0.0.1:1234",
+        "LLM_MODEL": "youtube-intelligence", "LLM_CONTEXT_LENGTH": 32768,
+        "LLM_TIMEOUT_SECONDS": 2,
         "VIDEOS": [], "SESSION_NAME": "test", "OUTPUT_DIR": "output",
         "KEEP_LANGUAGES": {"en"}, "MIN_COMMENT_LETTERS": 4,
         "MAX_COMMENTS_PER_VIDEO": 100, "CODEBOOK_SAMPLE_SIZE": 10,

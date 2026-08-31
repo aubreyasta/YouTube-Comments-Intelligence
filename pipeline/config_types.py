@@ -26,8 +26,7 @@ class PipelineConfig:
     REPORT_LANGUAGE: str
     CAMPAIGN_CONTEXT: str | dict
     KEEP_INTERMEDIATE: bool = False
-    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
-    MODEL: str = "qwen3.5:4b"
-    OLLAMA_NUM_CTX: int = 32768
-    OLLAMA_TIMEOUT_SECONDS: int = 600
-    OLLAMA_KEEP_ALIVE: str = "10m"
+    LLM_BASE_URL: str = "http://127.0.0.1:1234"
+    LLM_MODEL: str = "youtube-intelligence"
+    LLM_CONTEXT_LENGTH: int = 32768
+    LLM_TIMEOUT_SECONDS: int = 600

@@ -25,13 +25,10 @@ def _load_cfg() -> PipelineConfig:
     """Build a PipelineConfig from the config.py module-level names."""
     return PipelineConfig(
         YOUTUBE_API_KEY=_config_module.YOUTUBE_API_KEY,
-        OLLAMA_BASE_URL=getattr(
-            _config_module, "OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        MODEL=getattr(_config_module, "MODEL", "qwen3.5:4b"),
-        OLLAMA_NUM_CTX=getattr(_config_module, "OLLAMA_NUM_CTX", 32768),
-        OLLAMA_TIMEOUT_SECONDS=getattr(
-            _config_module, "OLLAMA_TIMEOUT_SECONDS", 600),
-        OLLAMA_KEEP_ALIVE=getattr(_config_module, "OLLAMA_KEEP_ALIVE", "10m"),
+        LLM_BASE_URL=getattr(_config_module, "LLM_BASE_URL", "http://127.0.0.1:1234"),
+        LLM_MODEL=getattr(_config_module, "LLM_MODEL", "youtube-intelligence"),
+        LLM_CONTEXT_LENGTH=getattr(_config_module, "LLM_CONTEXT_LENGTH", 32768),
+        LLM_TIMEOUT_SECONDS=getattr(_config_module, "LLM_TIMEOUT_SECONDS", 600),
         VIDEOS=_config_module.VIDEOS,
         SESSION_NAME=_config_module.SESSION_NAME,
         OUTPUT_DIR=_config_module.OUTPUT_DIR,
@@ -97,97 +94,91 @@ def run_folder(cfg: PipelineConfig) -> str:
 
 def main():
     cfg = _load_cfg()
-    try:
-        preflight(cfg)
-        out_dir = run_folder(cfg)
-        debug_dir = os.path.join(out_dir, "debug")
+    preflight(cfg)
+    out_dir = run_folder(cfg)
+    debug_dir = os.path.join(out_dir, "debug")
+    if cfg.KEEP_INTERMEDIATE:
+        os.makedirs(debug_dir, exist_ok=True)
+
+    def save(name, content):
         if cfg.KEEP_INTERMEDIATE:
-            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, name), "w",
+                      encoding="utf-8") as handle:
+                handle.write(content)
 
-        def save(name, content):
-            if cfg.KEEP_INTERMEDIATE:
-                with open(os.path.join(debug_dir, name), "w",
-                          encoding="utf-8") as handle:
-                    handle.write(content)
+    print(f"Campaign: {out_dir}\n")
 
-        print(f"Campaign: {out_dir}\n")
+    print("[1/5] Collecting")
+    comments, meta = collect.fetch(cfg)
+    save("comments_raw.csv", comments.to_csv(index=False))
+    comments = collect.clean(comments, cfg)
+    base = comments[comments["in_base"]].reset_index(drop=True)
+    print(f"    analysis base: {len(base)} comments")
 
-        print("[1/5] Collecting")
-        comments, meta = collect.fetch(cfg)
-        save("comments_raw.csv", comments.to_csv(index=False))
-        comments = collect.clean(comments, cfg)
-        base = comments[comments["in_base"]].reset_index(drop=True)
-        print(f"    analysis base: {len(base)} comments")
-
-        print("[2/5] Reading the videos")
+    print("[2/5] Reading the videos")
     # CAMPAIGN_CONTEXT in config.py may be a dict (group->text) or a plain str.
-        context_map = (cfg.CAMPAIGN_CONTEXT
-                       if isinstance(cfg.CAMPAIGN_CONTEXT, dict)
-                       else {})
-        grounded, points = brief.run(meta, cfg, context_map=context_map)
-        save("video_brief.md", grounded)
-        save("points.json", json.dumps(points, ensure_ascii=False, indent=2))
+    context_map = (cfg.CAMPAIGN_CONTEXT
+                   if isinstance(cfg.CAMPAIGN_CONTEXT, dict)
+                   else {})
+    grounded, points = brief.run(meta, cfg, context_map=context_map)
+    save("video_brief.md", grounded)
+    save("points.json", json.dumps(points, ensure_ascii=False, indent=2))
 
-        print("[3/5] Classifying the comments")
-        summary = "; ".join(meta["title"].fillna("").astype(str).head(6))
-        themes = analyze.build(base, summary, cfg)
-        for theme in themes:
-            print(f"    theme: {theme['name']}")
+    print("[3/5] Classifying the comments")
+    summary = "; ".join(meta["title"].fillna("").astype(str).head(6))
+    themes = analyze.build(base, summary, cfg)
+    for theme in themes:
+        print(f"    theme: {theme['name']}")
 
-        n_comments = len(base)
-        batch_size = cfg.CLASSIFY_BATCH_SIZE
-        n_batches = sum(
-            -(-len(g) // batch_size)
-            for _, g in base.groupby("video_id"))
-        print(f"    classifying {n_comments} comments in {n_batches} batches")
-        base, columns = analyze.classify(
-            base, themes, points, cfg,
-            on_progress=lambda done, total: print(
-                f"    classified batch {done} of {total}"))
+    n_comments = len(base)
+    batch_size = cfg.CLASSIFY_BATCH_SIZE
+    n_batches = sum(
+        -(-len(g) // batch_size)
+        for _, g in base.groupby("video_id"))
+    print(f"    classifying {n_comments} comments in {n_batches} batches")
+    base, columns = analyze.classify(
+        base, themes, points, cfg,
+        on_progress=lambda done, total: print(
+            f"    classified batch {done} of {total}"))
 
-        base, themes, other_share = analyze.extend(
-            base, themes, points, summary, cfg,
-            on_progress=lambda msg: print(msg))
+    base, themes, other_share = analyze.extend(
+        base, themes, points, summary, cfg,
+        on_progress=lambda msg: print(msg))
 
-        save("codebook.json", json.dumps(themes, ensure_ascii=False, indent=2))
-        if cfg.KEEP_INTERMEDIATE:
-            save("classified.csv", base.head(100).to_csv(index=False))
+    save("codebook.json", json.dumps(themes, ensure_ascii=False, indent=2))
+    if cfg.KEEP_INTERMEDIATE:
+        save("classified.csv", base.head(100).to_csv(index=False))
 
-        print(f"    Other: {other_share:.0f}%")
-        if other_share > 40:
-            print("    WARNING: the theme set is not covering this conversation. "
-                  "Turn on KEEP_INTERMEDIATE and read codebook.json before "
-                  "trusting the report.")
+    print(f"    Other: {other_share:.0f}%")
+    if other_share > 40:
+        print("    WARNING: the theme set is not covering this conversation. "
+              "Turn on KEEP_INTERMEDIATE and read codebook.json before "
+              "trusting the report.")
 
-        theme_table, transfer_table = analyze.summarise(base, columns)
+    theme_table, transfer_table = analyze.summarise(base, columns)
 
-        print("[4/5] Emotion and sentiment")
-        base, affect_result = analyze.affect(base, cfg)
+    print("[4/5] Emotion and sentiment")
+    base, affect_result = analyze.affect(base, cfg)
 
     # other_share is post-recalc from extend(); use it directly.
-        if other_share > 40:
-            print("    WARNING: Other still above 40% after Extend function.")
+    if other_share > 40:
+        print("    WARNING: Other still above 40% after Extend function.")
 
-        print("[5/5] Writing")
-        markdown = report.write(grounded, theme_table,
-                                transfer_table, affect_result, base, cfg)
-        report.render(markdown, out_dir, cfg,
-                      debug_dir if cfg.KEEP_INTERMEDIATE else None,
-                      _df=base, _transfer=transfer_table)
-        report.export(base, theme_table, transfer_table, affect_result, meta,
-                      out_dir)
+    print("[5/5] Writing")
+    markdown = report.write(grounded, theme_table,
+                            transfer_table, affect_result, base, cfg)
+    report.render(markdown, out_dir, cfg,
+                  debug_dir if cfg.KEEP_INTERMEDIATE else None,
+                  _df=base, _transfer=transfer_table)
+    report.export(base, theme_table, transfer_table, affect_result, meta,
+                  out_dir)
 
-        print(f"\nDone. {out_dir}")
-        for name in ("report.pdf", "comments.csv", "key-messages.csv",
-                     "themes.csv", "sentiment.csv", "emotions.csv"):
-            print(f"  {name}")
-        if cfg.KEEP_INTERMEDIATE:
-            print("  debug/")
-    finally:
-        try:
-            llm.unload(cfg.MODEL, cfg)
-        except Exception:
-            pass
+    print(f"\nDone. {out_dir}")
+    for name in ("report.pdf", "comments.csv", "key-messages.csv",
+                 "themes.csv", "sentiment.csv", "emotions.csv"):
+        print(f"  {name}")
+    if cfg.KEEP_INTERMEDIATE:
+        print("  debug/")
 
 
 if __name__ == "__main__":
