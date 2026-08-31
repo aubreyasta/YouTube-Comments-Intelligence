@@ -6,13 +6,13 @@ commit named below.
 
 ## Goal
 
-YouTube Intelligence runs as one shared office service. A single Windows workstation with an
-RTX 4060 Ti 16GB runs Ollama, the FastAPI backend, and the frontend. Anyone who knows the
+YouTube Intelligence runs as one shared office service. A MacBook Pro M1 Max with 32 GB of
+unified memory runs LM Studio, the FastAPI backend, and the frontend. Anyone who knows the
 shared password opens a public HTTPS link from any browser, creates or resumes a Session,
-runs the analysis on the office GPU, and downloads the six public artifacts. YouTube
-credentials, model execution, Session data, and generated files never leave the workstation.
-FastAPI serves the frontend and API on loopback; Ollama serves the pinned local Qwen model on
-loopback; `cloudflared` publishes FastAPI through a free quick tunnel; HTTP Basic Auth
+runs the analysis on the Mac, and downloads the six public artifacts. YouTube credentials,
+model execution, Session data, and generated files never leave the Mac. FastAPI serves the
+frontend and API on loopback; LM Studio serves the pinned local `Qwen3.8-27B` 4-bit MLX model
+on loopback; `cloudflared` publishes FastAPI through a free quick tunnel; HTTP Basic Auth
 protects every request; SQLite and local storage are the shared system of record.
 
 ## Out of scope
@@ -22,11 +22,11 @@ protects every request; SQLite and local storage are the shared system of record
 - A permanent or branded hostname, DNS delegation, a named tunnel, and an `@innocean.co.id`
   email rule. The operator communicates the current quick-tunnel URL out of band; nothing
   distributes it automatically.
-- Router port forwarding, LAN binding, direct Ollama exposure, CORS, a second frontend
-  origin, multiple concurrent analyses, a run queue, cancellation, GPU scheduling, and
+- Router port forwarding, LAN binding, direct LM Studio exposure, CORS, a second frontend
+  origin, multiple concurrent analyses, a run queue, cancellation, model scheduling, and
   per-user quotas.
 - Backups, replication, remote object storage, high availability, active-run recovery after
-  a backend or workstation restart, and migration to another workstation.
+  a backend or Mac restart, and migration of data from the Windows workstation.
 - Calibrated confidence scores and confidence columns in exports. Key visuals, chat, global
   search, source discovery, OCR, custom lenses, cross-group reports, and run history.
 - For the demo presentation: reskinning live mode, any new backend route, moving off the
@@ -35,10 +35,20 @@ protects every request; SQLite and local storage are the shared system of record
 
 ## Locked decisions
 
-- One model serves everything: `PipelineConfig.MODEL` is `qwen3.5:4b`, one multimodal tag
-  handling both comment classification and image User Inputs. One context setting,
-  `OLLAMA_NUM_CTX`, defaults to 32768. Model selection is by decision, not by benchmark: no
-  F1 scoring, no answer key, no timing or quality gate.
+- One model serves everything: `PipelineConfig.LLM_MODEL` identifies a `Qwen3.8-27B` 4-bit
+  MLX build that LM Studio reports as vision-capable. It handles comment classification and
+  image User Inputs. `LLM_CONTEXT_LENGTH` defaults to 32768. `CLASSIFY_BATCH_SIZE` defaults to
+  8. Model selection is by decision, not by benchmark: no F1 scoring, answer key, timing gate,
+  or quality gate.
+- LM Studio runs on the same Mac as FastAPI and binds `127.0.0.1:1234`. The model boundary uses
+  non-streaming OpenAI-compatible chat completions with reasoning disabled. Structured calls
+  use strict JSON Schema output and the existing Python validators. Provider configuration uses
+  `LLM_BASE_URL`, `LLM_MODEL`, `LLM_CONTEXT_LENGTH`, and `LLM_TIMEOUT_SECONDS`. The application
+  does not support Ollama, remote model servers, provider selection, or a cloud fallback.
+- The Mac deployment starts fresh. It does not copy the Windows workstation's `data/`, SQLite
+  database, uploads, runs, or artifacts. LM Studio, FastAPI, and `cloudflared` start at macOS
+  login. Restarting only FastAPI keeps the public URL. Restarting `cloudflared` creates a new
+  quick-tunnel URL.
 - One merged classify pass emits theme, echoed Key Messages, one sentiment, and one emotion
   per comment. `analyze.affect` reads those columns and aggregates in Python. No encoder
   inference, and no `torch` or `transformers` at runtime.
@@ -84,17 +94,24 @@ protects every request; SQLite and local storage are the shared system of record
 
 ```text
 browser -> https://<random>.trycloudflare.com -> Cloudflare quick tunnel
-        -> cloudflared (outbound, on the workstation) -> http://127.0.0.1:8000
+        -> cloudflared (outbound, on the Mac) -> http://127.0.0.1:8000
         -> FastAPI Basic Auth middleware -> static frontend or /api route
-FastAPI pipeline -> http://127.0.0.1:11434 -> Ollama local model only
+FastAPI pipeline -> http://127.0.0.1:1234/v1/chat/completions
+                 -> LM Studio -> local Qwen3.8-27B 4-bit MLX model
 ```
 
-- `cloudflared` publishes only `http://127.0.0.1:8000`. It never publishes Ollama, a filesystem
-  path, a second web server, or a LAN address.
+- `cloudflared` publishes only `http://127.0.0.1:8000`. It never publishes LM Studio, a
+  filesystem path, a second web server, or a LAN address.
 - The Basic Auth middleware runs before routing, so one check protects static files, APIs,
   downloads, and SSE. Authentication answers "may this request enter?" Not ownership.
-- Ollama stays loopback-only: `pipeline.llm._validated_base_url` rejects a non-loopback
-  `OLLAMA_BASE_URL`.
+- LM Studio stays loopback-only: `pipeline.llm._validated_base_url` rejects a non-loopback
+  `LLM_BASE_URL`. The model API is unauthenticated because no non-loopback route can reach it.
+- Preflight reads LM Studio's local model inventory, requires an exact `LLM_MODEL` match, and
+  requires vision support. Application code never downloads or selects a quantization.
+- Plain calls send one user message with temperature and seed set to zero. Structured calls add
+  a strict JSON Schema response format. Image calls send base64 `data:` URLs with the original
+  MIME type. Connection, timeout, 429, and 5xx failures retry three times. Invalid structured
+  output retries three times and then fails the run.
 
 ### HTTP Basic Auth
 
@@ -332,7 +349,6 @@ Frontend. Depends on D1.
     application. `node --check app/app.js` passes.
 
 ### Wave D3: view transitions
-
 Frontend. Independent of D1 and D2.
 
 - Task D3.1: add a fade-and-rise on route change in `route()`, a stage-advance transition on
@@ -361,23 +377,30 @@ label-associated and keyboard operable, and a failed start keeps the checked val
 focus. Run `python tests/e2e_product_flow.py` and require 20/20 with zero console errors, page
 errors, and failed requests. Then commit. This is the last owed test file.
 
-**2. Move to `qwen3.5:9b`.** The card holds 16GB and the pin is a 4b model. Repin
-`pipeline/config_types.py:30`, `adapter.py:335`, `run.py:30`, `config-template.py:55`, the
-model references in `docs/deployment.md`, and the two test constructors at
-`tests/test_brief_key_messages.py:28` and `tests/test_classify.py:56`. Pull the tag, run one
-real Session, and compare label quality against 4b. Watch the context budget: `OLLAMA_NUM_CTX`
-is 32768 and a 9b model's KV cache is larger. Revert if quality or throughput regresses.
+**2. Move the model boundary to LM Studio.** Rename the `PipelineConfig` model fields and
+all constructors to `LLM_*`. Replace Ollama `/api/generate` calls in `pipeline/llm.py` with
+LM Studio's OpenAI-compatible `/v1/chat/completions` contract. Reuse the existing schemas,
+validators, retries, and public helper signatures. Remove Ollama preflight, keep-alive, and
+unload behavior. Add one focused offline boundary test for text, structured JSON, images,
+model inventory, vision capability, retries, malformed responses, and loopback rejection.
 
-**3. Correct the stale documentation.** `README.md:115`, `docs/setup.md:50-56`,
-`docs/setup.md:167`, and `docs/architecture.md:82` still claim the LLM is Gemini over the API
-and that the Qwen swap has not landed. It landed in `ca76b13`. `README.md:94` also names an
-"RTX 4060, 16 GB" where the card is a 4060 Ti. In the same pass, update `AGENTS.md`: add
-`APP_PASSWORD` to the never-commit rule, and record the merged classify contract, the one-run
-invariant, the Basic Auth boundary, the SSRF guard, and the loopback Ollama rule under the
-do-not-change list.
+**3. Replace the deployment and provider documentation.** Rewrite `docs/deployment.md` for a
+fresh macOS deployment on the M1 Max. Cover the 4-bit MLX download, exact model identifier,
+vision and structured-output smoke checks, 32768-token load, local binds, `.env`, Basic Auth,
+Cloudflare quick tunnel, login startup, restart effects, and one real external Session. Update
+`README.md`, `AGENTS.md`, `docs/setup.md`, `docs/architecture.md`, and `docs/api-reference.md`.
+Delete stale Gemini, HuggingFace classifier, Windows, NVIDIA, and Ollama instructions where
+they describe the current system. Preserve historical delivery references.
 
 ## Revisions
 
+- 2026-08-31: Planned the move from the Windows Ollama deployment to a fresh MacBook Pro M1
+  Max deployment. Locked LM Studio, the multimodal `Qwen3.8-27B` 4-bit MLX build, a 32768-token
+  context, and an initial classify batch of 8. The exact LM Studio model identifier remains a
+  deployment value because the downloaded build is authoritative. The provider boundary will
+  use OpenAI-compatible chat completions with reasoning disabled, strict JSON Schema responses,
+  and existing Python validators. The plan excludes Windows data migration, dual-provider
+  support, remote inference, automatic model download, and automatic hardware tuning.
 - 2026-08-19: Shipped Wave D3. Three route roots were missed on the first pass. The packet
   named `.view-pad` and `.run-layout` as the only children `#view` receives, but
   `renderNewSession` mounts `.setup-wrap`, `renderCampaign` mounts `.campaign-layout`, and

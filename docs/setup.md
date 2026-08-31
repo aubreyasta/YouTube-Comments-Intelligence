@@ -1,160 +1,193 @@
 # Setup
 
-Getting a working install, keys in the right place, and the app running.
+Install the application, configure the local model boundary, and start the server.
 
-Related: [Architecture](architecture.md), [API reference](api-reference.md), [README](../README.md).
+Related: [Deployment](deployment.md), [Architecture](architecture.md), [API reference](api-reference.md), [README](../README.md).
 
 ---
 
 ## Prerequisites
 
+The shared deployment target is a MacBook Pro M1 Max with 32 GB of unified memory.
+
+Install:
+
+- macOS 14 or newer.
 - Python 3.10 or newer.
-- A Conda environment is recommended. The repo is developed against one named `YouTubeIntelligence`, but any isolated environment works.
-- Windows, macOS, or Linux. Windows-only gotchas are flagged below.
+- Git.
+- LM Studio with the `lms` CLI.
+- `cloudflared` for public access.
 
-Check the interpreter before running anything:
+Check the local tools:
 
 ```bash
-python -c "import sys; print(sys.executable)"
+python3 --version
+git --version
+lms --version
+cloudflared --version
 ```
 
-On Windows use `python`, never `py`. `py` picks the system Python and ignores the active environment, which produces confusing `ModuleNotFoundError` failures.
+Use an isolated Python environment. The environment name does not affect the application.
 
 ---
 
-## Install
+## Install the application
+
+Clone the repository, create the environment, and install both dependency sets:
 
 ```bash
-pip install -r requirements.txt -r requirements-server.txt
-playwright install chromium
+git clone https://github.com/aubreyasta/YouTube-Comments-Intelligence.git
+cd YouTube-Comments-Intelligence
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt -r requirements-server.txt
+python -m playwright install chromium
 ```
 
-The Chromium download is not a Python package, so `pip` cannot check it. If preflight passes but PDF rendering fails later, this is why.
-
-Sentiment and Emotion classification pull roughly 500 MB of HuggingFace models on first run. Both run locally and cost nothing per run.
+Playwright Chromium renders `report.pdf`. Install it before the first run. Otherwise, a run can reach the report stage and fail after model work has completed.
 
 ---
 
-## Configuration
+## Prepare LM Studio
 
-The backend reads configuration from the process environment or a `.env` file at the repo root. `.env` is gitignored. The browser never sees any of it.
+Install LM Studio from <https://lmstudio.ai/download>. Open it once to initialize the `lms` CLI.
 
-```
-YOUTUBE_API_KEY=...
-GEMINI_API_KEY=...
-GEMINI_MODEL=...
-```
+Download a 4-bit MLX build of `Qwen3.8-27B`. Select a build that LM Studio reports as vision-capable. Do not use the repository display name as the API model identifier.
 
-`YOUTUBE_API_KEY` is a YouTube Data API v3 key. It fetches comments and video metadata and stays required.
-
-### About the Gemini keys
-
-**Gemini is a debugging stand-in, not the product.** The shipping model is a local Qwen served by Ollama, so that no client material leaves the building and no run costs anything. The Gemini path exists because the swap has not landed yet. See workstream 2 in the [PRD](../PRD.md).
-
-Two things follow from that. Do not build anything new against the Gemini client; `pipeline/llm.py` is the only file that should know a provider exists. And do not put confidential client material through it, because free-tier prompts may be used to train the provider's models.
-
-`GEMINI_MODEL` names a model ID. Google renames and retires models every few months, so a `404` from Gemini means the ID is stale. Set it explicitly rather than relying on the built-in fallback, which was current when it was written and will not stay that way.
-
-### Pasted keys with hidden characters
-
-A tab or newline riding along with a copy-pasted key produces:
-
-```
-httpx.InvalidURL: Invalid non-printable ASCII character
-```
-
-Check the value with `repr`, which shows the escape codes:
+Start the local service and inspect the downloaded models:
 
 ```bash
-python -c "import os; print(repr(os.environ['GEMINI_API_KEY']))"
+lms daemon up
+lms server start --port 1234
+lms ls
+curl -s http://127.0.0.1:1234/api/v1/models
 ```
+
+Record the exact model key returned by LM Studio. Set that key as `LLM_MODEL`.
+
+Load the model with a 32,768-token context. Disable thinking in the model settings because the pipeline requires direct schema-only responses. Keep the server on its default loopback bind.
+
+Verify the bind:
+
+```bash
+lsof -nP -iTCP:1234 -sTCP:LISTEN
+```
+
+The listener must be `127.0.0.1:1234` or `localhost:1234`. Do not enable **Serve on Local Network**.
+
+See [Deployment](deployment.md) for model smoke tests and real-device acceptance.
 
 ---
 
-## Running
+## Configure the backend
 
-```bash
-python -m uvicorn server:app --host 127.0.0.1 --port 8000
+Create `.env` in the repository root:
+
+```text
+YOUTUBE_API_KEY=<YouTube Data API v3 key>
+APP_PASSWORD=<long unique shared password>
+LLM_BASE_URL=http://127.0.0.1:1234
+LLM_MODEL=<exact model key returned by LM Studio>
+LLM_CONTEXT_LENGTH=32768
+LLM_TIMEOUT_SECONDS=600
+CLASSIFY_BATCH_SIZE=8
 ```
 
-or
+- `YOUTUBE_API_KEY` stays on the Mac. The browser never receives it.
+- `APP_PASSWORD` protects the frontend, API, downloads, and SSE stream. The server refuses to start when it is empty.
+- `LLM_BASE_URL` must be a loopback HTTP origin without a path, credentials, query, or fragment.
+- `LLM_MODEL` must exactly match the LM Studio model inventory.
+- `LLM_CONTEXT_LENGTH` and `CLASSIFY_BATCH_SIZE` are starting values. Change them only after a real-device run shows memory pressure or unacceptable throughput.
+- `.env`, `config.py`, and `data/` are gitignored. Never commit them.
+
+Check the exclusions:
 
 ```bash
+git check-ignore -v .env config.py data/
+```
+
+The Mac deployment starts with an empty `data/` directory. Do not copy the Windows workstation database, uploads, runs, or artifacts.
+
+---
+
+## Start the application
+
+Activate the environment and start FastAPI:
+
+```bash
+source .venv/bin/activate
 python server.py
 ```
 
-Both start the API at `http://localhost:8000/api` and serve the app at `http://localhost:8000/`. At boot the frontend probes `GET /api/sessions` from the same origin; when the probe succeeds it switches to live mode and starting a run invokes the real pipeline, streaming progress over SSE.
+The backend binds `127.0.0.1:8000`. It serves the frontend and API from one origin.
 
-The server binds `127.0.0.1` by design. It is single-user, unauthenticated, and localhost only.
-
-On first start, `db.init()` creates `data/app.db` with its tables. Uploads land in `data/uploads/`. Run outputs go to `data/runs/<run_id>/` and `data/artifacts/<run_id>/`.
-
-### Frontend without the backend
-
-Serve `app/` from any static server:
+Check the authentication boundary from a second terminal:
 
 ```bash
-python -m http.server 8797 --bind 127.0.0.1 --directory app
+curl -i http://127.0.0.1:8000/
+curl -i -u office:wrong-password http://127.0.0.1:8000/api/sessions
+curl -i -u office:<the-password> http://127.0.0.1:8000/api/sessions
+lsof -nP -iTCP:8000 -sTCP:LISTEN
 ```
 
-The backend probe is cross-origin from there and fails, so the app stays in demo mode for the whole session. Data is in-memory fixture content, the run engine simulates progress on fixed timing, and nothing reaches YouTube or a model. Everything resets on refresh.
+Require these results:
 
-Bind `127.0.0.1` on a fresh port. Reusing a stale one causes `ERR_EMPTY_RESPONSE` from lingering processes.
+- Missing or wrong credentials return `401`.
+- Every `401` includes `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"`.
+- Correct credentials return `200`.
+- FastAPI listens only on `127.0.0.1:8000`.
 
-### CLI debug entry point
-
-`python run.py` runs the pipeline without the web layer, configured through `config.py` (copy `config-template.py` if it does not exist; it is gitignored).
-
-This is for debugging the pipeline in isolation. It is not the product, it is not what anyone at the agency uses, and it is not maintained to the same standard as the server path. It writes `report.pdf`, `comments.csv`, `summary.csv`, `chart_transfer.csv`, and `chart_themes.csv` into `output/<session-name>/`, with `-2` and `-3` suffixes on repeat runs.
-
-`run.py` starts with a preflight check. Anything missing is reported all at once, before any API call or model download:
-
-- both keys set
-- `VIDEOS` not empty
-- `transformers` importable
-- a PDF engine installed
-
-Preflight then prints the configured `EMOTION_MODEL` and `SENTIMENT_MODEL`. Both always run; there is no flag to disable either.
-
-`KEEP_INTERMEDIATE = True` also writes `output/<session>/debug/` with the Theme book, the Key Message drafts, and intermediate markdown. No stage reads these; they exist for auditing. Check `codebook.json` first when a Theme looks wrong, and `classified.csv` when a label looks wrong.
+Open <http://127.0.0.1:8000>, authenticate, and create a Session.
 
 ---
 
-## PDF engine
+## Publish the application
 
-The pipeline refuses to start without one. Engines are tried in order:
+Start a free Cloudflare quick tunnel:
 
-| Engine | Notes |
-|---|---|
-| `playwright>=1.49` | Recommended. Same output on every OS. Installed via `requirements.txt`; run `playwright install chromium` once. |
-| `weasyprint>=68` | Needs GTK on Windows, which is the painful part. |
-| `pdfkit>=1.0.0` | Thin wrapper around `wkhtmltopdf`, which installs separately and is archived upstream. Last resort. |
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000
+```
 
-The HTML the report renders from is a build artifact, not an output. It goes to a temp file and is deleted unless `KEEP_INTERMEDIATE` is on.
+Share the generated `https://<random>.trycloudflare.com` URL and the password through separate trusted channels. The URL changes whenever `cloudflared` restarts.
+
+Publish only port 8000. Never publish LM Studio on port 1234.
+
+See [Deployment](deployment.md) for external security checks, automatic login startup, and the full acceptance run.
 
 ---
 
-## Verifying
+## CLI debug entry point
 
-There is no pytest suite covering the pipeline end to end. Two assert-based scripts live under `tests/`:
+`python run.py` runs the pipeline without the web product. Copy `config-template.py` to the gitignored `config.py`, add local inputs, and run:
 
-- `tests/test_classify.py` labelling behaviour.
-- `tests/test_evidence.py` evidence selection and ranking.
+```bash
+python run.py
+```
 
-Run them directly with `python`. Beyond that, verify by running the pipeline on real data. Preflight catches the common misconfigurations before you spend a run.
+Use this entry point only for pipeline debugging. The deployed product uses `server.py` and `.env`.
 
-Frontend:
+`KEEP_INTERMEDIATE = True` writes audit files under `output/<session>/debug/`. Check `codebook.json` when a Theme looks wrong and `classified.csv` when a per-comment label looks wrong.
 
-- `node --check app/app.js` for syntax.
-- Open `app/self-check.html` in a browser for the store and state-machine checks.
-- For end-to-end flows, Playwright headless with the `webapp-testing` skill.
+---
 
-Backend acceptance, once keys are set:
+## Verify a change
 
-- Server starts on `127.0.0.1:8000`.
-- `POST /api/sessions` returns `201` with a UUID.
-- The upload endpoint rejects a bad extension with `422` and an oversized file with `413`.
-- A full run streams `brief_pause` over SSE, records Key Messages, unblocks on `POST /runs/{id}/proceed`, emits `complete`, and yields a downloadable `report.pdf`.
+Run the focused assert-based scripts directly:
+
+```bash
+python tests/test_llm.py
+python tests/test_classify.py
+python tests/test_evidence.py
+python tests/e2e_product_flow.py
+node --check app/app.js
+node --check app/live.js
+```
+
+Open `app/self-check.html` for the frontend state-machine checks.
+
+After a provider or model change, complete the real-device acceptance procedure in [Deployment](deployment.md). Offline tests cannot prove MLX memory fit, vision support, structured-output behavior, or throughput on the M1 Max.
 
 ---
 
@@ -162,11 +195,12 @@ Backend acceptance, once keys are set:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: googleapiclient` | Ran with `py` instead of `python` on Windows | `python run.py` |
-| `httpx.InvalidURL: Invalid non-printable ASCII character` | Tab or newline in a pasted key | Check with `repr`, re-paste |
-| `404` from Gemini | Stale model ID | Set `GEMINI_MODEL` from the current model list |
-| `JSONDecodeError` during the brief stage | Model returned malformed or truncated JSON | `llm.ask_json` retries once. A hard failure usually means the response was cut off. Rerun |
-| SSL record-layer failure | Something is sharing a `googleapiclient` service across threads | Each thread builds its own via `collect._service()` |
-| `ERR_EMPTY_RESPONSE` serving `app/` | Stale processes on the port | Bind `127.0.0.1` on a fresh port |
-| Preflight passes, PDF rendering fails | Chromium not installed; preflight only sees the Python package | `playwright install chromium` |
-| `409` on `POST /api/sessions/{id}/runs` | Another run is queued or running | Wait, or check `GET /api/sessions` |
+| `RuntimeError: APP_PASSWORD must be set before the server can start.` | `.env` is missing or `APP_PASSWORD` is empty | Create `.env` in the repository root and restart FastAPI. |
+| LM Studio connection failure | The daemon or API server is stopped | Run `lms daemon up`, then `lms server start --port 1234`. |
+| Model not found | `LLM_MODEL` does not exactly match LM Studio's model key | Read `curl -s http://127.0.0.1:1234/api/v1/models` and copy the exact key. |
+| Vision preflight failure | The downloaded build does not expose vision support | Download a vision-capable `Qwen3.8-27B` 4-bit MLX build. |
+| Structured response fails validation | Thinking is enabled or the local runtime did not enforce the schema | Disable thinking, confirm the selected model, and run the structured-output smoke test. |
+| Run fails at the report stage | Playwright Chromium is missing | Run `python -m playwright install chromium`. |
+| `409` when starting a run | Another Session has a queued or running run | Wait for the active run to finish. |
+| Public URL stopped working | `cloudflared` restarted | Read and share the new quick-tunnel URL. |
+| Run is slower than expected | The model or KV cache is using too much unified memory | Close memory-heavy applications, inspect Activity Monitor and `lms ps`, then lower `LLM_CONTEXT_LENGTH` only if the real run requires it. |

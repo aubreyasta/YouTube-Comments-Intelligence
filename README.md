@@ -81,21 +81,21 @@ python server.py
 # http://localhost:8000
 ```
 
-The server is single-user and localhost-only by design. There is no login and it is not meant to be exposed.
+The server binds loopback and protects every route with one shared HTTP Basic Auth password. A free Cloudflare quick tunnel publishes the service without exposing a local port directly.
 
 There is also a CLI (`python run.py`, configured through `config.py`). It is for debugging the pipeline without the web layer. It is not the product and it is not maintained to the same standard.
 
-Full install, keys, GPU, and troubleshooting: [docs/setup.md](docs/setup.md).
+Full installation, model setup, deployment, and troubleshooting: [docs/setup.md](docs/setup.md).
 
 ---
 
 ## The model
 
-The LLM runs locally through Ollama on the INNOCEAN machine (RTX 4060, 16 GB VRAM). It does two jobs: drafting Key Messages from the campaign material, and labelling every comment. Nothing is sent to an external API.
+The approved deployment runs a multimodal `Qwen3.8-27B` 4-bit MLX build through LM Studio on a MacBook Pro M1 Max with 32 GB of unified memory. The model drafts grounded Key Messages from User Inputs and labels every comment with a Theme, Key Message mentions, Sentiment, and Emotion. Nothing is sent to an external model API.
 
-Sentiment and Emotion run locally too, through HuggingFace transformers.
+Python validates every label and counts every percentage. The model never emits report statistics directly.
 
-Running locally means no per-run cost and no client material leaving the building. It also means throughput is bounded by one GPU, so a large corpus takes real wall-clock time.
+Local inference has no per-run API cost and keeps client material on the Mac. Throughput depends on the model build, context, corpus, and current unified-memory pressure.
 
 ---
 
@@ -110,19 +110,16 @@ Running locally means no per-run cost and no client material leaving the buildin
 
 ## Where the code is today
 
-The product above is the target. The shipped code differs in four places, all of them being closed out. Details and sequencing: [PRD.md](PRD.md).
+The pipeline, backend, frontend, Basic Auth, six public artifacts, merged classification pass, quick-tunnel deployment, and LM Studio `LLM_*` provider boundary are shipped.
 
-1. The LLM is still Gemini over the API, not local Qwen.
-2. Sentiment and Emotion models are Indonesian-only. English comments get labels the models were not trained for.
-3. Exports are `summary.csv`, `chart_transfer.csv`, and `chart_themes.csv` rather than the four named above. No sentiment or emotions CSV yet.
-4. The frontend still carries disabled controls for chat, source discovery, OCR, and lenses. Those features are dropped, not deferred.
-5. Key Messages are drafted at run start, not when you upload a brief. Uploading currently just stores the file.
+Chat, source discovery, OCR, custom lenses, and run history are out of scope. Disabled controls remain disabled rather than pretending those features exist.
 
 ---
 
 ## Docs
 
 - [docs/setup.md](docs/setup.md) install, configure, run, troubleshoot.
+- [docs/deployment.md](docs/deployment.md) prepare and accept the shared Mac service.
 - [docs/architecture.md](docs/architecture.md) how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) the HTTP contract.
 - [PRD.md](PRD.md) what changed and what is planned.

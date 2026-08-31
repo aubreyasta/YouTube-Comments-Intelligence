@@ -39,7 +39,7 @@ A model asked "what was campaign X about" produces fluent, confident detail whet
 
 Every pipeline module receives a `PipelineConfig` dataclass (`pipeline/config_types.py`) rather than importing a global config module. The CLI builds one from `config.py`; the backend builds one from DB rows and environment variables via `adapter._build_config()`. There is no `sys.modules["config"]` shim.
 
-`llm.py` has no module-global client. `_get_client(cfg)` constructs one per key, cached by key value within a process.
+The approved provider-neutral fields are `LLM_BASE_URL`, `LLM_MODEL`, `LLM_CONTEXT_LENGTH`, and `LLM_TIMEOUT_SECONDS`. The backend reads them from `.env`; the CLI reads them from the gitignored `config.py`. `pipeline/llm.py` uses standard-library HTTP and keeps no module-global provider client.
 
 ### Theme book and labelling
 
@@ -57,15 +57,13 @@ Every percentage traces to a per-comment label. Labelling cost scales with corpu
 
 ### Sentiment and Emotion
 
-`analyze.affect()` always runs both models sequentially over the full analysis base. There is no toggle. Each comment receives `emotion`, `emotion_confidence`, `sentiment`, and `sentiment_confidence`. Labels are raw model output with no remapping.
+The merged classification pass assigns one sentiment and one emotion with the Theme and Key Message labels. `analyze.affect()` validates those columns and counts them in Python. It runs no model.
 
-Both are local HuggingFace models, so they cost nothing per run. First use downloads roughly 500 MB.
+Sentiment is `positive`, `negative`, or `neutral`. Emotion is `joy`, `anger`, `sadness`, `fear`, or `other_neutral`. The JSON Schema constrains both sets, and Python rejects an unknown value. The pipeline does not emit confidence values because an LLM's self-reported confidence is not a calibrated probability.
 
-Labels are assigned per comment with no surrounding context, so sarcasm and measured criticism both read as anger. The pipeline tracks the share of low-confidence labels and pipes that caveat into the report prompt, so the numbers cannot be presented without it.
+Labels apply to one comment without conversation-thread context. Sarcasm and measured criticism can still be misread. Reports state that the local Qwen classification pass assigned the labels.
 
-Two figures result: an Emotion distribution across all comments, and a per-Key-Message Sentiment split.
-
-Current models are Indonesian-only, which is wrong for a mixed corpus. The replacement is workstream 3 in the [PRD](../PRD.md).
+Two figures result: an Emotion distribution across eligible comments and a per-Key-Message Sentiment split. Python computes every percentage from the per-comment labels.
 
 ### Thread safety in collect.py
 
@@ -77,9 +75,13 @@ Transient errors (socket, SSL) retry three times with backoff, discarding the th
 
 ### Model access
 
-All model calls live in `pipeline/llm.py`. That is the only file a provider swap touches.
+All model calls live in `pipeline/llm.py`. Callers use `ask()`, `ask_json()`, `classify_batch()`, and `extract_image_context()` without knowing the provider wire format.
 
-The shipping target is a local Qwen model through Ollama. The code currently calls Gemini over the API, which is a debugging stand-in and not the product. See workstream 2 in the [PRD](../PRD.md).
+The approved deployment runs a `Qwen3.8-27B` 4-bit MLX build through LM Studio on the same Mac as FastAPI. LM Studio binds `127.0.0.1:1234`; `pipeline.llm._validated_base_url()` rejects a non-loopback `LLM_BASE_URL`. There is no cloud fallback and no remote model server.
+
+Text and multimodal calls use non-streaming `POST /v1/chat/completions`. Structured calls send a strict JSON Schema and still pass the response through the existing Python validator. Image inputs are base64 `data:` URLs with their original MIME type. Reasoning is disabled because each pipeline call needs the requested answer or schema, not a reasoning transcript.
+
+Preflight reads LM Studio's model inventory. It requires the exact configured model identifier and vision capability. LM Studio owns model download, loading, context allocation, and unloading. Application code does not emulate Ollama lifecycle controls.
 
 ---
 
@@ -274,8 +276,8 @@ Never make a disabled control silently do nothing. If a control cannot do what i
 | Article fetch hangs | 15 s httpx timeout, empty text on failure, run continues. |
 | pypdf returns nothing on scanned or encrypted PDFs | Warning logged, empty text returned. OCR is out of scope. |
 | Fixture and live shapes drift | One dispatcher, one signature set. `self-check.html` pins the demo side; the end-to-end run pins the live side. |
-| Local model drifts off the Theme book | Theme label is enum-constrained. Batch size trades accuracy against call count. |
-| Sentiment and Emotion vocabulary changes with a model swap | Labels are raw model output. Docs and the frontend pills follow whichever models workstream 3 selects. |
+| Local model drifts off the Theme book | Theme, Sentiment, Emotion, and Key Message labels are schema-constrained. Python validates exact row coverage and allowed values. |
+| The 27B model exhausts unified memory | Start with a 4-bit MLX build, 32768 context, and batch size 8. Measure the real run before changing either value. |
 
 ### Team-deployment seams
 

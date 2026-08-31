@@ -137,15 +137,22 @@ def test_image_generation():
     image_bytes = b"fake image data"
     mime_type = "image/png"
     response_data = {
-        "choices": [{"message": {"content": "I see an image"}, "finish_reason": "stop"}]
+        "choices": [{"message": {"content": '{"description":"I see an image"}'},
+                     "finish_reason": "stop"}]
+    }
+    schema = {
+        "type": "object",
+        "properties": {"description": {"type": "string"}},
+        "required": ["description"],
     }
 
     with patch("urllib.request.urlopen", return_value=mock_response(response_data)) as mock_urlopen:
-        result = llm.ask(
-            "Describe this", cfg, images=[(image_bytes, mime_type)], num_predict=100
+        result = llm.ask_json(
+            "Describe this", cfg, schema=schema,
+            images=[(image_bytes, mime_type)], num_predict=100
         )
 
-    assert result == "I see an image"
+    assert result == {"description": "I see an image"}
 
     # Verify the request payload
     call_args = mock_urlopen.call_args
