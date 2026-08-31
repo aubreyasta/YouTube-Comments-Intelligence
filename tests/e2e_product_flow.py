@@ -224,7 +224,6 @@ def _patches():
                     side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
         patch.object(adapter.analyze, "affect",
                     side_effect=lambda df, cfg: (df, _fake_affect_result())),
-        patch.object(adapter.pipeline_llm, "unload", return_value=None),
         patch.object(adapter.pipeline_report, "write", return_value="# report"),
         patch.object(adapter.pipeline_report, "render", side_effect=_fake_render),
         patch.object(adapter.pipeline_report, "export", side_effect=_fake_export),

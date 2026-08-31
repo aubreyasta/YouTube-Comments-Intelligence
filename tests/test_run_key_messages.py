@@ -10,8 +10,8 @@ data/artifacts write adapter.py makes), then drives the routes through
 FastAPI's TestClient. Both globals are restored on exit so this file
 never leaves anything under the repo's real data/ tree.
 adapter._execute()'s pipeline edges (collect, brief.reconcile, analyze,
-affect, report, and every Ollama-touching call after brief_pause) are
-mocked - no network, no Ollama, no HuggingFace, no real PDF render - but
+affect, report, and every model-touching call after brief_pause) are
+mocked - no network, no model, no real PDF render - but
 the run still executes on adapter.start_run()'s real daemon thread, so
 the brief_pause block and DB writes are exercised for real.
 
@@ -151,9 +151,8 @@ def _fake_export(base_df, theme_table, transfer_table, affect_result, meta_df, o
 def _patched_pipeline(reconcile_side_effect):
     """Context managers covering every pipeline edge _execute() touches,
     including every stage AFTER brief_pause, so the run reaches complete
-    (or a controlled failure) deterministically with no network, Ollama,
-    or HuggingFace call. classify()/extend()/affect()/report all normally
-    call into pipeline.llm or transformers; every one of those edges is
+    (or a controlled failure) deterministically with no network or model
+    call. classify()/extend()/affect()/report model edges are
     stubbed here rather than left to run for real post-pause."""
     fake_df = _fake_comments_df()
     return (
@@ -169,7 +168,6 @@ def _patched_pipeline(reconcile_side_effect):
                     side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
         patch.object(adapter.analyze, "affect",
                     side_effect=lambda df, cfg: (df, _fake_affect_result())),
-        patch.object(adapter.pipeline_llm, "unload", return_value=None),
         patch.object(adapter.pipeline_report, "write", return_value="# report"),
         patch.object(adapter.pipeline_report, "render", side_effect=_fake_render),
         patch.object(adapter.pipeline_report, "export", side_effect=_fake_export),
@@ -212,12 +210,8 @@ def _run_to_brief_pause(session_id, proposals):
 
 
 def _wait_for_run_thread(run_id, timeout=5.0):
-    """adapter._execute()'s daemon thread flips the DB row to
-    complete/failed BEFORE its own `finally` block finishes calling
-    pipeline_llm.unload() twice more. Waiting on the DB status alone is
-    not enough to know the thread is done touching mocked pipeline
-    functions; this waits for the actual thread object to exit so
-    _stop() never removes a mock the thread is still mid-call on."""
+    """Persisted terminal status can precede daemon thread exit.
+    Wait for the thread before teardown removes active pipeline mocks."""
     name = f"adapter-run-{run_id[:8]}"
     deadline = time.time() + timeout
     while time.time() < deadline:

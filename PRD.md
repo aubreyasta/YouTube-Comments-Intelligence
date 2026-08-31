@@ -310,6 +310,18 @@ app/demo/                the six generated artifacts, plus fixture.js for the re
   `tests/test_classify.py` 8/8, `tests/test_skip_pause.py` 7/7, and
   `tests/test_run_artifacts.py` 10/10. Not verified: motion as seen by an eye. No test
   selects an animated class, by decision, so the presenter walkthrough is the only check.
+- Open work 2 and 3 shipped in `2da78c3` and `8805294`. `PipelineConfig`, the backend, and the
+  CLI now use `LLM_BASE_URL`, `LLM_MODEL`, `LLM_CONTEXT_LENGTH`, and
+  `LLM_TIMEOUT_SECONDS`. `pipeline/llm.py` uses LM Studio chat completions, strict structured
+  output, multimodal data URLs, exact model and vision preflight, loopback enforcement, and
+  three-attempt retry handling. Ollama lifecycle behavior is gone. The Mac deployment,
+  setup, architecture, API, and README documentation now describe the shipped boundary.
+  Verification covered 152 assertions across 18 direct Python scripts, including
+  `tests/test_llm.py` 21/21, `tests/test_run_key_messages.py` 10/10, and
+  `tests/test_skip_pause.py` 7/7. Both frontend `node --check` commands and
+  `git diff --check` exited 0. The full suite was not rerun after the final stale-mock repair;
+  by user instruction, only the two previously failing direct suites were rerun. The browser
+  E2E flow was skipped by user instruction and is not claimed as passed.
 
 ## Demo presentation waves
 
@@ -377,23 +389,18 @@ label-associated and keyboard operable, and a failed start keeps the checked val
 focus. Run `python tests/e2e_product_flow.py` and require 20/20 with zero console errors, page
 errors, and failed requests. Then commit. This is the last owed test file.
 
-**2. Move the model boundary to LM Studio.** Rename the `PipelineConfig` model fields and
-all constructors to `LLM_*`. Replace Ollama `/api/generate` calls in `pipeline/llm.py` with
-LM Studio's OpenAI-compatible `/v1/chat/completions` contract. Reuse the existing schemas,
-validators, retries, and public helper signatures. Remove Ollama preflight, keep-alive, and
-unload behavior. Add one focused offline boundary test for text, structured JSON, images,
-model inventory, vision capability, retries, malformed responses, and loopback rejection.
-
-**3. Replace the deployment and provider documentation.** Rewrite `docs/deployment.md` for a
-fresh macOS deployment on the M1 Max. Cover the 4-bit MLX download, exact model identifier,
-vision and structured-output smoke checks, 32768-token load, local binds, `.env`, Basic Auth,
-Cloudflare quick tunnel, login startup, restart effects, and one real external Session. Update
-`README.md`, `AGENTS.md`, `docs/setup.md`, `docs/architecture.md`, and `docs/api-reference.md`.
-Delete stale Gemini, HuggingFace classifier, Windows, NVIDIA, and Ollama instructions where
-they describe the current system. Preserve historical delivery references.
-
 ## Revisions
 
+- 2026-08-31: Shipped the LM Studio provider boundary and Mac deployment documentation in
+  `2da78c3` and `8805294`. Renamed provider configuration to the four `LLM_*` fields. Replaced
+  Ollama generation and lifecycle calls with OpenAI-compatible chat completions, multimodal
+  data URLs, strict structured output, exact model and vision preflight, loopback enforcement,
+  and focused offline boundary checks. Removed stale `unload` mocks after verification exposed
+  them. Verified 152 assertions across 18 direct Python scripts, two frontend syntax checks,
+  and diff hygiene. The full suite was not rerun after that final repair: the user requested
+  only the two previously failing suites, which passed 10/10 and 7/7. The user skipped
+  `tests/e2e_product_flow.py`, so no browser E2E pass is claimed. Next resume point: complete
+  open work 0 and 1, then perform the real Mac deployment acceptance in `docs/deployment.md`.
 - 2026-08-31: Planned the move from the Windows Ollama deployment to a fresh MacBook Pro M1
   Max deployment. Locked LM Studio, the multimodal `Qwen3.8-27B` 4-bit MLX build, a 32768-token
   context, and an initial classify batch of 8. The exact LM Studio model identifier remains a

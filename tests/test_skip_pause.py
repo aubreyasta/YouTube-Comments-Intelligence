@@ -8,8 +8,8 @@ server (server.app's startup hook calls db.init() against whatever path
 db._DB_PATH holds at that time; storage._ROOT gates every data/runs and
 data/artifacts write adapter.py makes), then drives the routes through
 FastAPI's TestClient. adapter._execute()'s pipeline edges (collect,
-brief.reconcile, analyze, affect, report, and every Ollama-touching call)
-are mocked - no network, no Ollama, no HuggingFace, no real PDF render -
+brief.reconcile, analyze, affect, report, and every model-touching call)
+are mocked - no network, no model, no real PDF render -
 but the run still executes on adapter.start_run()'s real daemon thread,
 so the skip_pause branch and DB writes are exercised for real.
 
@@ -113,8 +113,7 @@ def _fake_export(base_df, theme_table, transfer_table, affect_result, meta_df, o
 def _patched_pipeline(reconcile_side_effect):
     """Context managers covering every pipeline edge _execute() touches,
     including every stage after brief/brief_pause, so the run reaches
-    complete deterministically with no network, Ollama, or HuggingFace
-    call."""
+    complete deterministically with no network or model call."""
     fake_df = _fake_comments_df()
     return (
         patch.object(adapter.pipeline_llm, "preflight", return_value=None),
@@ -129,7 +128,6 @@ def _patched_pipeline(reconcile_side_effect):
                     side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
         patch.object(adapter.analyze, "affect",
                     side_effect=lambda df, cfg: (df, _fake_affect_result())),
-        patch.object(adapter.pipeline_llm, "unload", return_value=None),
         patch.object(adapter.pipeline_report, "write", return_value="# report"),
         patch.object(adapter.pipeline_report, "render", side_effect=_fake_render),
         patch.object(adapter.pipeline_report, "export", side_effect=_fake_export),
@@ -157,11 +155,8 @@ def _run_reconcile_of(proposals, included=True):
 
 
 def _wait_for_run_thread(run_id, timeout=5.0):
-    """adapter._execute()'s daemon thread flips the DB row to
-    complete/failed BEFORE its own `finally` block finishes calling
-    pipeline_llm.unload() twice more. Waiting on the DB status alone is
-    not enough to know the thread is done touching mocked pipeline
-    functions; this waits for the actual thread object to exit."""
+    """Persisted terminal status can precede daemon thread exit.
+    Wait for the thread before teardown removes active pipeline mocks."""
     name = f"adapter-run-{run_id[:8]}"
     deadline = time.time() + timeout
     while time.time() < deadline:
