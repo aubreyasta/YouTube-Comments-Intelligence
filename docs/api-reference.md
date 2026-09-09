@@ -2,7 +2,7 @@
 
 HTTP contract for the FastAPI backend. Local base URL: `http://127.0.0.1:8000/api`.
 
-Related: [Setup](setup.md), [Architecture](architecture.md), [Product](../PRODUCT.md).
+Related: [Setup](setup.md), [Architecture](architecture.md), [Product](../README.md).
 
 ---
 

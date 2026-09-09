@@ -5,9 +5,6 @@ Repository conventions for agents and contributors. This file is about how to ch
 If you need:
 
 - What the product is, the user flow, the output files: [README.md](README.md).
-- The canonical product specification (users, scope, constraints, acceptance): [PRODUCT.md](PRODUCT.md).
-- The visual and interaction system: [DESIGN.md](DESIGN.md).
-- What is planned, its status, and what is out of scope: [PLAN.md](PLAN.md).
 - Install, config, keys, GPU, troubleshooting: [docs/setup.md](docs/setup.md).
 - How pipeline, backend, and frontend fit together: [docs/architecture.md](docs/architecture.md).
 - HTTP contract, error codes, request and response shapes: [docs/api-reference.md](docs/api-reference.md).
@@ -128,7 +125,7 @@ Read the relevant section of [docs/architecture.md](docs/architecture.md) before
 
 ## Frontend UI and UX work
 
-Any user-visible change (new screens, restyling, layout, content presentation, interaction feedback, loading, empty, and error states) is scoped work that needs design intent, not just implementation. The visual language is in [DESIGN.md](DESIGN.md).
+Any user-visible change (new screens, restyling, layout, content presentation, interaction feedback, loading, empty, and error states) is scoped work that needs design intent, not just implementation. The visual language is in [docs/architecture.md](docs/architecture.md).
 
 Never re-enable a disabled control without a backing route landing first. Never fake an unbuilt backend feature.
 

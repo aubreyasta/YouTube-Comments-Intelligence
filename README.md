@@ -122,7 +122,4 @@ Chat, source discovery, OCR, custom lenses, and run history are out of scope. Di
 - [docs/deployment.md](docs/deployment.md) prepare and accept the shared Mac service.
 - [docs/architecture.md](docs/architecture.md) how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) the HTTP contract.
-- [PRODUCT.md](PRODUCT.md) the canonical product specification.
-- [DESIGN.md](DESIGN.md) the visual and interaction system.
-- [PLAN.md](PLAN.md) what is planned, its status, and what is out of scope.
 - [AGENTS.md](AGENTS.md) conventions for contributors and agents.
