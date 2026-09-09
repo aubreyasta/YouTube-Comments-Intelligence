@@ -4,7 +4,7 @@ Task 3.6 end-to-end product flow check.
 Starts the real server in-process (uvicorn on a real socket) against a
 temporary DB and storage root, and drives the real app/ frontend with
 Playwright Chromium against that server's own origin. Only the
-YouTube, LLM/Ollama, classifier, and article-fetch boundaries are
+YouTube, LLM/LM Studio, classifier, and article-fetch boundaries are
 replaced with process-global fakes; everything else (routes, DB,
 storage, frontend JS) runs for real.
 
@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("YOUTUBE_API_KEY", "e2e-test-key")
 # server refuses to start without APP_PASSWORD, and its Basic Auth
 # middleware guards every route. Set before import so the startup hook sees it.
-os.environ.setdefault("APP_PASSWORD", "test-password")
+os.environ["APP_PASSWORD"] = "test-password"
 
 # db._DB_PATH and storage._ROOT are module globals dereferenced per
 # call (not read once at import time), so reassigning them here before
@@ -180,7 +180,7 @@ def _fake_export(df, themes, transfer, affect_result, meta_df, out_dir):
 
 def _fake_draft_from_inputs(text, images, cfg):
     if FAKES["draft_fails"]:
-        raise RuntimeError("Ollama unreachable")
+        raise RuntimeError("LM Studio unreachable")
     return [
         {"label": lbl, "description": desc, "included": True,
          "order": i, "edited": False}

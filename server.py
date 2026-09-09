@@ -148,7 +148,7 @@ def _413(message):
 # FastAPI wraps HTTPException.detail as {"detail": ...} by default and
 # emits its own {"detail": [...]} shape for Pydantic validation errors.
 # Both handlers below unwrap to the bare {error, message, field} shape
-# every client-facing error must have (PRD "HTTP errors").
+# every client-facing error must have (docs/api-reference.md "Errors").
 #
 # Registered on starlette.exceptions.HTTPException, not fastapi.HTTPException:
 # fastapi.HTTPException is a subclass, so routes raising it are still
@@ -404,7 +404,7 @@ _RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
 
 
 def _ser_run(row, conn) -> dict:
-    """RunSnapshot shape (PRD "Runs and SSE"): briefPoints and
+    """RunSnapshot shape (docs/api-reference.md "Run snapshot"): briefPoints and
     artifacts are always present, including empty arrays, so a fresh
     queued run and a completed run have the same shape."""
     rid = row["id"]
@@ -457,7 +457,7 @@ def _ser_run(row, conn) -> dict:
 
 
 def _ser_brief_point(row) -> dict:
-    """BriefPoint shape (== KeyMessage, PRD "Key Messages"): only
+    """BriefPoint shape (== KeyMessage, docs/api-reference.md "Key Message"): only
     these five fields. `approved`/`edited`/`runId`/`campaignId`/`videoId`
     stay in the DB row for internal bookkeeping but never cross the wire."""
     return {
@@ -480,7 +480,7 @@ def _ser_key_message(row) -> dict:
 
 
 def _ser_key_message_draft(session_row, conn) -> dict:
-    """KeyMessageDraft shape: {status, messages, error}. See PRD."""
+    """KeyMessageDraft shape: {status, messages, error}. See docs/api-reference.md."""
     rows = conn.execute(
         "SELECT * FROM key_messages WHERE session_id = ? ORDER BY sort_order",
         (session_row["id"],)
@@ -494,7 +494,7 @@ def _ser_key_message_draft(session_row, conn) -> dict:
 
 
 # Single source of truth for artifact order, filename, MIME, and public
-# status (PRD "Artifacts"). order also drives RunSnapshot.artifacts
+# status (docs/api-reference.md "Artifacts"). order also drives RunSnapshot.artifacts
 # ordering; public=False keeps report_json out of that list and download.
 _ARTIFACT_CONTRACT = {
     "report_pdf":       (1, "report.pdf",       "application/pdf",  True),
@@ -536,7 +536,7 @@ class ArticleBody(BaseModel):
     url: str
 
 class KeyMessageIn(BaseModel):
-    """Matches the KeyMessageInput type in PRD.md exactly: id is
+    """Matches the KeyMessageInput type in docs/api-reference.md exactly: id is
     nullable (None creates a server-generated row), every other field is
     always resent by the client."""
     id: str | None
@@ -549,11 +549,11 @@ class SaveKeyMessagesBody(BaseModel):
     messages: list[KeyMessageIn]
 
 class BriefPointsBody(BaseModel):
-    """BriefPointInput == KeyMessageInput (PRD "Runs and SSE")."""
+    """BriefPointInput == KeyMessageInput (docs/api-reference.md "Runs")."""
     messages: list[KeyMessageIn]
 
 class StartRunBody(BaseModel):
-    """StartRunRequest (PRD "Start-run request"). Omitted means False:
+    """StartRunRequest (docs/api-reference.md "POST /sessions/{id}/runs"). Omitted means False:
     the run pauses for Key Message review as it always has."""
     skipPause: bool = False
 
@@ -703,7 +703,7 @@ def _load_draft_inputs(session_id: str, conn) -> tuple[str, list[tuple[bytes, st
 def _merge_key_messages(existing: list[dict], proposals: list[dict]) -> list[dict]:
     """Merge fresh model proposals into the current Key Message list.
 
-    Rules (PRD "Draft Key Messages"):
+    Rules (docs/api-reference.md "POST /sessions/{id}/key_messages/draft"):
     - A match is case-insensitive, whitespace-normalized label equality
       between an existing row and a proposal.
     - An edited existing row survives verbatim (label, description,
@@ -789,8 +789,9 @@ def _run_one_draft_pass(session_id: str) -> None:
 
     Guards every write with `WHERE key_messages_revision = expected`, so
     a write from a superseded pass can never clobber a newer one - see
-    PRD "Increment/use session revision to prevent obsolete
-    results overwriting newer requests." Passes for one session are
+    docs/api-reference.md "POST /sessions/{id}/key_messages/draft": each
+    completed pass increments revision to prevent obsolete results
+    overwriting newer requests. Passes for one session are
     already serialized by the caller's lock, so this is a defensive
     no-op today, not a substitute for that lock.
     """
@@ -1237,7 +1238,7 @@ def start_run(session_id: str, body: StartRunBody | None = None):
             _404("Session not found.")
 
         # One GPU serves every run, so the guard is global, not per-Session
-        # (PRD "Locked decisions"). BEGIN IMMEDIATE takes SQLite's write
+        # (docs/architecture.md "Run admission and lifecycle"). BEGIN IMMEDIATE takes SQLite's write
         # lock before the check, so the check and the INSERT are one
         # transaction and two simultaneous requests cannot both pass it.
         # Manual transaction control: get_conn() leaves pysqlite's implicit
@@ -1348,8 +1349,8 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
                 _404("Campaign not found.")
             campaign_id = campaign_row["id"]
 
-        # Validate the complete list before any write (PRD "Key
-        # Messages"): id:null mints a server UUID below; a duplicate
+        # Validate the complete list before any write (docs/api-reference.md
+        # "PATCH /runs/{id}/brief_points"): id:null mints a server UUID below; a duplicate
         # non-null id, an id unknown to this run, or an id owned by
         # another run (which is equally "not in existing_ids", since
         # existing_ids is scoped to this run_id) is a 422 naming

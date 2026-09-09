@@ -1070,8 +1070,8 @@ def _execute(run_id: str) -> None:
         # brief.reconcile() keeps edited entries and stable ids verbatim,
         # refreshes unedited matches with the transcript-grounded
         # description, and appends transcript-only messages a Session
-        # with no User Inputs would otherwise have none of (PRD
-        # "No-input Sessions draft from transcripts").
+        # with no User Inputs would otherwise have none of (see
+        # docs/architecture.md "Grounded Key Messages").
         _push(run_id, "brief", "Reading the videos", 22)
         summary_str = "; ".join(
             meta_df["title"].fillna("").astype(str).head(6))
@@ -1091,7 +1091,7 @@ def _execute(run_id: str) -> None:
 
         # skip_pause is a request, not a guarantee: with zero included
         # messages there is nothing to classify against, so the run pauses
-        # regardless and the user must include at least one (PRD Task A.4).
+        # regardless and the user must include at least one.
         any_included = any(pt.get("included") for pt in reconciled)
         if run_row["skip_pause"] and any_included:
             _push(run_id, "brief", "Brief ready - skipping review", 40,

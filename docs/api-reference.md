@@ -2,7 +2,7 @@
 
 HTTP contract for the FastAPI backend. Local base URL: `http://127.0.0.1:8000/api`.
 
-Related: [Setup](setup.md), [Architecture](architecture.md), [PRD](../PRD.md).
+Related: [Setup](setup.md), [Architecture](architecture.md), [Product](../PRODUCT.md).
 
 ---
 
@@ -535,6 +535,14 @@ Download one public artifact with `Content-Disposition: attachment`.
 `RunSnapshot.artifacts` contains only the first six, in this order. `report_json` is available only through `/runs/{id}/report`. Requesting its artifact record returns `404`.
 
 Error: `404` when the record is unknown, internal, or missing on disk.
+
+### CSV artifact shapes
+
+All five CSVs use UTF-8, comma separators, a header row, `\n` line endings, one-decimal percentages, and deterministic group-first ordering (groups follow first appearance; labels sort by count descending, then case-insensitive label). Empty results still write headers. `pipeline/report.py` is the implementation authority.
+
+- `comments.csv`: `video_id,group,comment,likes,language,theme,sentiment,emotion`, then one `key_message_<stable-id>` boolean column per Key Message, in Key Message order.
+- `themes.csv`, `sentiment.csv`, `emotions.csv`: `group,<label>,count,percent,base_n`. Eligible rows carry a non-null, non-empty label. `base_n` is eligible rows in the group. Zero-count labels are omitted.
+- `key-messages.csv`: `group,key_message,count,percent,base_n,positive_count,positive_percent,negative_count,negative_percent,sentiment_base_n`. Every applicable group/message pair appears, including zero mentions. Percentages may sum above 100 (a comment can mention several Key Messages). `sentiment_base_n` counts mentioned rows with a recognized sentiment, including neutral. A zero denominator produces `0.0`.
 
 ---
 

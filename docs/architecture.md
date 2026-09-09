@@ -2,7 +2,7 @@
 
 How the shipped pipeline, backend, frontend, and local model boundary fit together. Read this before changing non-trivial behavior.
 
-Product terms are defined in [README.md](../README.md). Code-identifier mappings are in [AGENTS.md](../AGENTS.md#terminology). Exact product contracts are in [PRD.md](../PRD.md).
+Product terms are defined in [README.md](../README.md). Code-identifier mappings are in [AGENTS.md](../AGENTS.md#terminology). The canonical product specification is [PRODUCT.md](../PRODUCT.md); the exact HTTP contract is [docs/api-reference.md](api-reference.md).
 
 Related: [Setup](setup.md), [Deployment](deployment.md), [API reference](api-reference.md).
 

@@ -202,8 +202,8 @@ def test_report_quotes_and_export_survive_pdna_pt_columns():
 def test_comments_csv_header_order_and_empty_input():
     """
     comments.csv: exact header/column order per the CSV contract
-    (PRD.md), and empty input still writes headers with no data
-    rows.
+    (docs/api-reference.md "CSV artifact shapes"), and empty input
+    still writes headers with no data rows.
     """
     import csv as csv_module
 

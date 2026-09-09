@@ -678,8 +678,8 @@ def _key_messages_csv(df, transfer, out_path):
 
 def export(df, themes, transfer, affect_result, meta_df, out_dir):
     """
-    Write the five CSVs in the CSV contract (PRD.md, Shared
-    contracts > CSVs). report.pdf remains render()'s output.
+    Write the five CSVs in the CSV contract (docs/api-reference.md,
+    "CSV artifact shapes"). report.pdf remains render()'s output.
 
     comments.csv      every comment, exact schema, for reading
     key-messages.csv  (group, key_message, count, percent, base_n,

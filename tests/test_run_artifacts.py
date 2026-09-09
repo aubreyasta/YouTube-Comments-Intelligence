@@ -15,7 +15,7 @@ never leaves anything under the repo's real data/ tree.
 This does not run the pipeline. It seeds run_artifacts rows directly,
 the same way adapter._insert_artifact() would after a real run, using
 adapter.py's own kind strings so this fails if adapter.py's kind
-vocabulary drifts from the PRD "Artifacts" contract table. No
+vocabulary drifts from the docs/api-reference.md "Artifacts" contract table. No
 network, model, browser, or external API is touched.
 
 Run: python tests/test_run_artifacts.py
@@ -51,7 +51,7 @@ import adapter
 db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})
 
-# PRD.md "Artifacts": stored order (all seven) and public order
+# docs/api-reference.md "Artifacts": stored order (all seven) and public order
 # (the six with a downloadUrl). kind -> (filename, contentType).
 _ARTIFACT_CONTRACT = [
     ("report_pdf",       "report.pdf",         "application/pdf", True),

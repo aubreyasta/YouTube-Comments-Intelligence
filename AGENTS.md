@@ -5,10 +5,13 @@ Repository conventions for agents and contributors. This file is about how to ch
 If you need:
 
 - What the product is, the user flow, the output files: [README.md](README.md).
-- What is planned and in what order: [PRD.md](PRD.md).
+- The canonical product specification (users, scope, constraints, acceptance): [PRODUCT.md](PRODUCT.md).
+- The visual and interaction system: [DESIGN.md](DESIGN.md).
+- What is planned, its status, and what is out of scope: [PLAN.md](PLAN.md).
 - Install, config, keys, GPU, troubleshooting: [docs/setup.md](docs/setup.md).
 - How pipeline, backend, and frontend fit together: [docs/architecture.md](docs/architecture.md).
 - HTTP contract, error codes, request and response shapes: [docs/api-reference.md](docs/api-reference.md).
+- Preparing and accepting the shared Mac service: [docs/deployment.md](docs/deployment.md).
 
 Read the doc that matches the change you are making.
 
@@ -125,7 +128,7 @@ Read the relevant section of [docs/architecture.md](docs/architecture.md) before
 
 ## Frontend UI and UX work
 
-Any user-visible change (new screens, restyling, layout, content presentation, interaction feedback, loading, empty, and error states) is scoped work that needs design intent, not just implementation. The visual language is in [docs/architecture.md](docs/architecture.md).
+Any user-visible change (new screens, restyling, layout, content presentation, interaction feedback, loading, empty, and error states) is scoped work that needs design intent, not just implementation. The visual language is in [DESIGN.md](DESIGN.md).
 
 Never re-enable a disabled control without a backing route landing first. Never fake an unbuilt backend feature.
 
@@ -133,7 +136,7 @@ Never re-enable a disabled control without a backing route landing first. Never 
 
 ## Skills
 
-- `xabi-delivery-orchestration` for Xabi-only non-trivial delivery planning.
+- `project-delivery-orchestration` for Xabi-only non-trivial delivery planning.
 - `compact-technical-writing` for commit messages, README edits, architecture notes, any technical prose.
 - `webapp-testing` for Playwright end-to-end checks of `app/`.
 - `tdd` only when explicitly asked for test-first work.
