@@ -13,6 +13,7 @@ output/
 *.csv
 *.json
 !pipeline/__init__.py
+!railpack.json
 
 # The data/ dir holds the sqlite DB, uploads, and per-run outputs (PDFs,
 # comment CSVs with PII). None of it belongs in git regardless of extension.

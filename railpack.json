@@ -1,0 +1,16 @@
+{
+    "$schema": "https://schema.railpack.com",
+    "steps": {
+        "install": {
+            "commands": [
+                "pip install -r requirements.txt -r requirements-server.txt",
+                "python -m playwright install --with-deps chromium",
+                "curl -Lo /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)",
+                "chmod +x /usr/local/bin/cloudflared"
+            ]
+        }
+    },
+    "deploy": {
+        "startCommand": "sh start.sh"
+    }
+}
