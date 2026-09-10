@@ -4,6 +4,8 @@ Use this file as the setup procedure and evidence record for the Mac that runs Y
 
 Never record a password, API key, or `Authorization` header. Record `set/non-empty`, not the value.
 
+**Status:** this is the last-accepted production procedure, not the current running state. The working target right now is a Dokploy-managed remote workstation that only keeps a test copy synced with `main`; it does not serve real traffic. Which production path replaces this file (rebuilding the Dokploy deployment as a plain Docker Compose service, or another change) has not been decided. Keep this record until a new one is written and accepted. For local development against a remote LM Studio without deploying anything, see [Setup](setup.md#developing-against-a-remote-lm-studio).
+
 Target shape:
 
 ```text

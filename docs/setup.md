@@ -159,6 +159,26 @@ See [Deployment](deployment.md) for external security checks, automatic login st
 
 ---
 
+## Developing against a remote LM Studio
+
+`LLM_BASE_URL` must stay a loopback URL. `pipeline/llm.py`'s `_validated_base_url()` rejects any other host, and the application has no LM Studio API-token setting. This holds even when the person developing works on a different machine than the one running LM Studio.
+
+Run a local relay instead of changing that boundary. The relay is a small process on the developer's own machine:
+
+- It listens on `http://127.0.0.1:<port>`.
+- It forwards every request to the remote LM Studio endpoint, using whatever network path and credentials that endpoint requires (a private mesh network and an API token, for example).
+- It returns the response unchanged.
+
+Set `LLM_BASE_URL=http://127.0.0.1:<port>` to the relay's own port, not LM Studio's. `pipeline/llm.py` then sees a plain loopback URL and needs no other change.
+
+The relay is a personal development tool, not part of the application. Keep its script and any token it holds out of the repository. Never commit them.
+
+With the relay running, follow the rest of this file as written: create `.env`, start `python server.py`, and use the application at `http://127.0.0.1:8000` like any other local run. Every model call now reaches the remote LM Studio; everything else stays local.
+
+A code change needs only a restart of `python server.py` to test. No redeploy is required. The remote machine's only requirement is that LM Studio and the configured model stay loaded and running.
+
+---
+
 ## CLI debug entry point
 
 `python run.py` runs the pipeline without the web product. Copy `config-template.py` to the gitignored `config.py`, add local inputs, and run:
