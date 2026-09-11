@@ -2135,13 +2135,13 @@ const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
    Known patterns from adapter.py _push calls:
-     "total fetched: N"  -> { total: N }
+     "total=N"            -> { total: N }
      "N themes"          -> { themes: N }
      "other_share=X.Y"   -> { otherShare: X.Y }
    Unparseable returns null; callers show "-". */
 function parseDetailStr(detail) {
   if (!detail || typeof detail !== "string") return null;
-  const m1 = detail.match(/^total fetched: (\d+)$/i);
+  const m1 = detail.match(/^total=(\d+)$/i);
   if (m1) return { total: parseInt(m1[1], 10) };
   const m2 = detail.match(/^(\d+)\s+themes?$/i);
   if (m2) return { themes: parseInt(m2[1], 10) };
@@ -2251,9 +2251,9 @@ async function renderRun(runId) {
     const d = state.detail || {};
     const details = [
       state.stage === "collect" || currentStep > 0
-        ? (live && d.collected == null
+        ? (live && totalComments() === 0
             ? "—"
-            : `${fmtNum(d.collected || (currentStep > 0 ? totalComments() : 0))} across ${d.videos || videoCount()} videos, replies included`)
+            : `${fmtNum(live ? totalComments() : (d.collected || (currentStep > 0 ? totalComments() : 0)))} across ${d.videos || videoCount()} videos, replies included`)
         : STEP_DEFS[0].pending,
       currentStep > 1
         ? (d.themes ? d.themes + " themes, identified from the sample" : (live ? "Themes identified from the sample" : "7 themes, drawn from a 640-comment read"))
@@ -2299,10 +2299,12 @@ async function renderRun(runId) {
     return campaign ? (campaign.videoIds ? campaign.videoIds.length : (campaign.videos ? campaign.videos.length : 1)) : 1;
   }
 
-  // Live: no commentCount on videos; 0 is the sentinel so totalComments() uses detail.total.
+  // Live: the run snapshot's persisted total_comments once collect has
+  // finished (survives a reopen with no SSE replay); 0 is the sentinel
+  // before that, so totalComments() falls through to detail.total.
   // Demo: the real sum of the added videos' comment counts, with no floor and no
   // placeholder, so the progress screen never shows a number nothing counted.
-  const initialTotal = live ? 0 : (campaign
+  const initialTotal = live ? (run.totalComments || 0) : (campaign
     ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0)
     : 0);
 
@@ -2530,7 +2532,11 @@ async function renderRun(runId) {
     // Live: detail is a string from adapter.py; parse it into an object.
     // Demo: detail is already an object.
     const parsedStr = (live && typeof e.detail === "string") ? parseDetailStr(e.detail) : null;
-    state.detail = parsedStr || (e.detail && typeof e.detail === "object" ? e.detail : {});
+    const newDetail = parsedStr || (e.detail && typeof e.detail === "object" ? e.detail : {});
+    // Merge, don't replace: an unparseable or object-less event (e.g. a
+    // classify batch progress string) must not erase a field an earlier
+    // event set (e.g. collect's total), since a later paint still needs it.
+    state.detail = Object.assign({}, state.detail, newDetail);
 
     // Live: terminal failure comes as stage === "error" (not "failed").
     if (e.stage === "error") {

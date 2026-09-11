@@ -108,12 +108,13 @@ type RunSnapshot = {
   message: string;
   error: string | null;
   skipPause: boolean;
+  totalComments: number | null;
   briefPoints: KeyMessage[];
   artifacts: Artifact[];
 };
 ```
 
-`briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay.
+`briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
 
 ### Artifact
 
