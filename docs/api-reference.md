@@ -93,6 +93,7 @@ type RunStage =
   | "collect"
   | "brief"
   | "brief_pause"
+  | "themes"
   | "classify"
   | "emotion"
   | "report"
@@ -177,7 +178,7 @@ List Sessions newest first. Each item adds `campaignCount`.
 {
   "id": "...",
   "status": "queued | running | complete | failed",
-  "stage": "queued | collect | brief | brief_pause | classify | emotion | report | complete | error",
+  "stage": "queued | collect | brief | brief_pause | themes | classify | emotion | report | complete | error",
   "pct": 0,
   "message": "",
   "error": null
@@ -442,7 +443,8 @@ Stages:
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
 | `brief_pause` | 40 | Wait for review and `/proceed`. |
-| `classify` | 42-65 | Discover Themes, classify all labels, optionally refine `Other`. |
+| `themes` | 42 | Discover Themes from a comment sample. |
+| `classify` | 50-65 | Classify all labels, optionally refine `Other`. |
 | `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |
 | `report` | 77-88 | Write Report JSON, PDF, and CSVs. |
 | `complete` | 100 | Run complete. |

@@ -411,7 +411,7 @@ def _ser_campaign(row, conn) -> dict:
     }
 
 
-_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
+_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "themes", "classify",
                "emotion", "report", "complete", "error"}
 
 
