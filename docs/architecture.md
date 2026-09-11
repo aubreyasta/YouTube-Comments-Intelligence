@@ -147,7 +147,7 @@ The adapter thread then:
 7. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
 8. Marks the run complete. An exception marks it failed.
 
-Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. The lost run stays `running` in the database and blocks every new run until someone clears it (#3).
+Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. No thread survives a restart, so the startup hook marks every `queued` or `running` row failed with an interrupted error. The global guard then admits the next run.
 
 ### Progress
 
@@ -217,7 +217,7 @@ Every number in the results view links to deterministic evidence rows. The drawe
 | A 27B model exhausts memory | Use a 4-bit build and a 32,768 context. Batch size 16 is validated; lower it only if a real run on the host shows memory pressure. |
 | Two users start together | SQLite `BEGIN IMMEDIATE` admits only one active analysis. |
 | Browser closes during a run | The backend thread continues; persisted state restores the view. |
-| FastAPI or host restarts during a run | The active run is lost. Recovery is out of scope. The stale `running` row blocks new runs (#3). |
+| FastAPI or host restarts during a run | The active run is lost. Recovery is out of scope. Startup marks it failed, so new runs are not blocked. |
 | Cloudflare quick tunnel restarts | The public URL changes. |
 | Model or schema output drifts | Strict JSON Schema plus Python validation rejects invalid labels or row coverage. |
 | Public article resolves privately | Resolution pinning and redirect revalidation reject the request before asset creation. |
