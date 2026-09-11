@@ -463,6 +463,7 @@ def _ser_run(row, conn) -> dict:
         "message": "",
         "error": row["error"],
         "skipPause": bool(row["skip_pause"]),
+        "totalComments": row["total_comments"],
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
         "artifacts": [_ser_artifact(a) for a in public_arts],
     }

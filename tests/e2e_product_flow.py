@@ -624,6 +624,15 @@ def brief_pause_reopen_persisted(page, base):
     page.wait_for_selector("#brief-review:visible")
     _wait_text(page, "#brief-h", "Key Messages we'll test for transfer")
 
+    # Issue #4: a page opened after collect finished (no SSE replay) must
+    # still show the analysis-base comment count on the "Collected the
+    # comments" step, not the never-populated "—" sentinel.
+    collect_detail = page.text_content("#stepper .step-row:nth-child(1) .step-detail")
+    _expect(collect_detail is not None and "3" in collect_detail,
+            f"'Collected the comments' step showed {collect_detail!r} on a "
+            "reopened brief_pause page, expected the 3-comment analysis base "
+            "count from _fake_comments_df to survive the reopen")
+
     row_count = page.locator(".brief-item").count()
     _expect(row_count > 0, "no .brief-item rows rendered on brief_pause reopen")
     # The app renders EVERY point and marks excluded ones with the excluded
@@ -732,6 +741,15 @@ def run_completes(page, base):
                 f"error: {snap.get('error')!r}")
     _expect(snap.get("status") == "complete",
             f"run finished with status {snap.get('status')!r}, expected complete")
+
+    # Issue #4: onEvent() replaced state.detail wholesale on every SSE event,
+    # so the "N labelled" count from the collect total was wiped out by the
+    # classify/emotion/report events that followed it on the way to complete.
+    labelled_detail = page.text_content("#stepper .step-row:nth-child(3) .step-detail")
+    _expect(labelled_detail == "3 labelled",
+            f"'Labelling every comment' step showed {labelled_detail!r} after "
+            "completion, expected '3 labelled' (the analysis-base count from "
+            "_fake_comments_df)")
 
     page.wait_for_selector("a#btn-results")
     href = page.get_attribute("a#btn-results", "href")
@@ -947,13 +965,12 @@ def skip_pause_failed_start_retains_state(page, base):
     finally:
         page.unroute("**/api/sessions/*/runs", _fail)
 
-    # The failure path raises a native alert, which the module dialog handler
-    # records. It is expected here, so clear it rather than letting
-    # no_console_errors report it as an unexplained dialog.
-    _expect(any("Injected start failure." in m for m in _DIALOG_MESSAGES),
-            f"no alert carrying the injected start error was raised; dialogs "
-            f"were {_DIALOG_MESSAGES!r}")
-    _DIALOG_MESSAGES.clear()
+    # The failure path renders an inline banner (#3's fix moved this off
+    # alert(), which blocked the tab); no native dialog fires here anymore.
+    banner_text = page.text_content("#run-start-err .banner.error")
+    _expect(banner_text is not None and "Injected start failure." in banner_text,
+            f"#run-start-err did not render a .banner.error carrying the "
+            f"injected start error; got {banner_text!r}")
 
     # Chromium logs the injected 500 as a console error. It is this case's own
     # fixture, not an app defect, so assert it arrived and then clear it rather
