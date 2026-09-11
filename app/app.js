@@ -1871,6 +1871,8 @@ async function renderCampaign(sessionId, campaignId) {
         const proceedOverwrite = async () => {
           const chk = document.getElementById("chk-skip-pause");
           const skipPause = !!(chk && chk.checked);
+          const errEl = document.getElementById("run-start-err");
+          errEl.innerHTML = "";
           runBtn.disabled = true;
           if (chk) chk.disabled = true;
           try {
@@ -1879,7 +1881,7 @@ async function renderCampaign(sessionId, campaignId) {
           } catch (err) {
             runBtn.disabled = false;
             if (chk) { chk.disabled = false; chk.focus(); }
-            alert(err.message);
+            errEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
           }
         };
         // Live mode: confirm overwrite when session is not fresh (a previous result exists).
@@ -1943,6 +1945,7 @@ async function renderCampaign(sessionId, campaignId) {
   view.innerHTML = `
   <div class="campaign-layout single-col">
     <div class="campaign-main">
+      <div id="run-start-err" style="display:contents"></div>
       ${priorResultWarning}
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2315,11 +2318,20 @@ async function renderRun(runId) {
         <div style="display:flex;gap:10px;margin-top:12px">
           <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaignId}">Return to campaign</a>
           <button class="btn primary" type="button" id="btn-fresh-run">Start a fresh run</button>
-        </div>`;
+        </div>
+        <div id="fresh-run-err"></div>`;
       const fresh = document.getElementById("btn-fresh-run");
       if (fresh) fresh.addEventListener("click", async () => {
-        const r = await demoApi.startRun(session.id);
-        location.hash = `#/runs/${r.id}`;
+        const errEl = document.getElementById("fresh-run-err");
+        errEl.innerHTML = "";
+        fresh.disabled = true;
+        try {
+          const r = await demoApi.startRun(session.id);
+          location.hash = `#/runs/${r.id}`;
+        } catch (err) {
+          fresh.disabled = false;
+          errEl.innerHTML = `<div class="banner error" role="alert" style="margin-top:12px">${esc(err.message)}</div>`;
+        }
       });
     } else if (state.completed) {
       titleEl.textContent = "Your note is ready";

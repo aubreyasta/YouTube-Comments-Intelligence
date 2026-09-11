@@ -63,6 +63,18 @@ def _startup():
     if not _app_password():
         raise RuntimeError("APP_PASSWORD must be set before the server can start.")
     db.init()
+    # Run threads die with the process, so an active row at startup has no
+    # worker behind it and would block every new run forever.
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
+            "WHERE state IN ('queued', 'running')",
+            (_now(), "Interrupted: the server restarted before this run finished.")
+        )
+        conn.commit()
+    finally:
+        conn.close()
     for key in ("YOUTUBE_API_KEY",):
         if not os.environ.get(key):
             logger.warning("%s is not set - runs will fail without it", key)
