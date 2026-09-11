@@ -25,8 +25,8 @@ Public API (for server.py / Wave 3):
 PROGRESS_SHAPE:
   {
     "run_id":  str,           # the run UUID
-    "stage":   str,           # collect | brief | brief_pause | classify |
-                              # emotion | report | complete | error
+    "stage":   str,           # collect | brief | brief_pause | themes |
+                              # classify | emotion | report | complete | error
     "message": str,           # human-readable status line
     "pct":     int,           # 0-100
     "detail":  str | None,    # extra context (error message, counts, etc.)
@@ -1139,7 +1139,7 @@ def _execute(run_id: str) -> None:
                 "All brief points were excluded. At least one must be included.")
 
         # --- 9. Classify ----------------------------------------------------
-        _push(run_id, "classify", "Discovering themes", 42)
+        _push(run_id, "themes", "Discovering themes", 42)
         themes = analyze.build(base_df, summary_str, cfg)
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
