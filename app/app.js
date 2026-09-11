@@ -2130,7 +2130,7 @@ const STEP_DEFS = [
   { key: "report", label: "Writing your note", pending: "Two charts, the verdicts, and the quotes behind them" },
 ];
 // error -> -2 (live terminal failure), running -> -1 (live pre-collect stage).
-const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
+const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, themes: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
 
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
@@ -2357,6 +2357,7 @@ async function renderRun(runId) {
         connecting: "Connecting\u2026", running: "Connecting\u2026",
         collect: "Reading " + fmtNum(totalComments()) + " comments",
         brief: "Reading the brief\u2026", brief_pause: "Confirm the ideas before we label",
+        themes: "Finding what people are talking about",
         classify: "Reading " + fmtNum(totalComments()) + " comments",
         emotion: "Reading " + fmtNum(totalComments()) + " comments",
         report: "Reading " + fmtNum(totalComments()) + " comments",
