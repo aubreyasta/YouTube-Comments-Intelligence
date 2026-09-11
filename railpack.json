@@ -1,8 +1,17 @@
 {
     "$schema": "https://schema.railpack.com",
+    "provider": "python",
     "steps": {
         "install": {
             "commands": [
+                {
+                    "src": "requirements.txt",
+                    "dest": "requirements.txt"
+                },
+                {
+                    "src": "requirements-server.txt",
+                    "dest": "requirements-server.txt"
+                },
                 "pip install -r requirements.txt -r requirements-server.txt",
                 "python -m playwright install --with-deps chromium",
                 "curl -Lo /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)",

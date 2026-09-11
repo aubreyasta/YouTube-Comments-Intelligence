@@ -1,0 +1,20 @@
+name: Trigger Deploy Webhook
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+jobs:
+  webhook:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger webhook
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            WEBHOOK_URL="${{ secrets.WEBHOOK_MAIN }}"
+          fi
+
+          curl -fsS -X POST "$WEBHOOK_URL"
