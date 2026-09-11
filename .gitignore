@@ -5,6 +5,13 @@
 config.py
 .vscode
 
+# ── Local-only agent docs ─────────────────────────────────────────────────────
+AGENTS.md
+PLAN.md
+DESIGN.md
+PRODUCT.md
+CLAUDE.md
+
 # ── Pipeline outputs ──────────────────────────────────────────────────────────
 output/
 

@@ -114,9 +114,11 @@ def classification_schema(theme_names: list[str], point_labels: list[str]) -> di
     """Build the strict per-batch classification schema."""
     themes = list(dict.fromkeys([*theme_names, "Other"]))
     if point_labels:
+        # uniqueItems is enforced by validate_classification instead: some
+        # structured-output runtimes (LM Studio's MLX backend included)
+        # reject the "uniqueItems" schema keyword outright.
         echoed_schema = {"type": "array",
-                         "items": {"type": "string", "enum": list(point_labels)},
-                         "uniqueItems": True}
+                         "items": {"type": "string", "enum": list(point_labels)}}
     else:
         # No Key Messages for this video: only the empty array is valid.
         # `enum: []` on items would be impossible to satisfy for any
@@ -219,7 +221,9 @@ def validate_classification(value: object, expected_indices: list[int],
         raise ValueError("expected indices must be integers, not booleans")
     allowed_themes = {*theme_names, "Other"}
     allowed_points = set(point_labels)
+    expected = set(expected_indices)
     seen = []
+    kept = []
     for row in value:
         row = _object(row, {"index", "theme", "echoed", "sentiment", "emotion"}, "classification row")
         index = row["index"]
@@ -236,10 +240,17 @@ def validate_classification(value: object, expected_indices: list[int],
             raise ValueError("classification contains an unknown sentiment")
         if row["emotion"] not in EMOTION_LABELS:
             raise ValueError("classification contains an unknown emotion")
-        seen.append(index)
-    if len(seen) != len(set(seen)) or set(seen) != set(expected_indices) or len(seen) != len(expected_indices):
+        # Some structured-output backends over-generate rows for indices
+        # nobody asked about (observed on LM Studio's MLX backend: a batch
+        # of 4 requested indices came back with 6 rows). The schema can't
+        # bound the array to the exact requested indices, so drop the
+        # noise here instead of failing the whole batch on it.
+        if index in expected:
+            seen.append(index)
+            kept.append(row)
+    if len(seen) != len(set(seen)) or set(seen) != expected or len(seen) != len(expected):
         raise ValueError("classification indices must exactly cover the requested indices once")
-    return value
+    return kept
 
 
 def _validated_base_url(cfg: PipelineConfig) -> str:
@@ -424,6 +435,7 @@ def ask_json(prompt: str, cfg: PipelineConfig, *, schema: dict,
             return validation(value) if validation else value
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             last_error = f"{exc.__class__.__name__}: {exc}"
+            print(f"    ! ask_json validation failed ({last_error}); raw response: {raw[:4000]}")
     raise LMStudioResponseError(
         f"LM Studio failed to return a valid structured response after {retries} attempts ({last_error}).")
 
