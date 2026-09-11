@@ -5,6 +5,12 @@
         "install": {
             "commands": [
                 {
+                    "cmd": "python -m venv /app/.venv"
+                },
+                {
+                    "path": "/app/.venv/bin"
+                },
+                {
                     "src": "requirements.txt",
                     "dest": "requirements.txt"
                 },
@@ -13,13 +19,11 @@
                     "dest": "requirements-server.txt"
                 },
                 "pip install -r requirements.txt -r requirements-server.txt",
-                "python -m playwright install --with-deps chromium",
-                "curl -Lo /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)",
-                "chmod +x /usr/local/bin/cloudflared"
+                "python -m playwright install --with-deps chromium"
             ]
         }
     },
     "deploy": {
-        "startCommand": "sh start.sh"
+        "startCommand": "python server.py"
     }
 }
