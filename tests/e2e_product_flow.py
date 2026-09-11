@@ -965,13 +965,12 @@ def skip_pause_failed_start_retains_state(page, base):
     finally:
         page.unroute("**/api/sessions/*/runs", _fail)
 
-    # The failure path raises a native alert, which the module dialog handler
-    # records. It is expected here, so clear it rather than letting
-    # no_console_errors report it as an unexplained dialog.
-    _expect(any("Injected start failure." in m for m in _DIALOG_MESSAGES),
-            f"no alert carrying the injected start error was raised; dialogs "
-            f"were {_DIALOG_MESSAGES!r}")
-    _DIALOG_MESSAGES.clear()
+    # The failure path renders an inline banner (#3's fix moved this off
+    # alert(), which blocked the tab); no native dialog fires here anymore.
+    banner_text = page.text_content("#run-start-err .banner.error")
+    _expect(banner_text is not None and "Injected start failure." in banner_text,
+            f"#run-start-err did not render a .banner.error carrying the "
+            f"injected start error; got {banner_text!r}")
 
     # Chromium logs the injected 500 as a console error. It is this case's own
     # fixture, not an app defect, so assert it arrived and then clear it rather
