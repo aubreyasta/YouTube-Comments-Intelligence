@@ -91,11 +91,11 @@ Full installation, model setup, deployment, and troubleshooting: [docs/setup.md]
 
 ## The model
 
-The approved deployment runs a multimodal `Qwen3.8-27B` 4-bit MLX build through LM Studio on a MacBook Pro M1 Max with 32 GB of unified memory. The model drafts grounded Key Messages from User Inputs and labels every comment with a Theme, Key Message mentions, Sentiment, and Emotion. Nothing is sent to an external model API.
+The tool runs a multimodal `Qwen3.8-27B` build through LM Studio (API key `qwen/qwen3.8-27b`). The model drafts grounded Key Messages from User Inputs and labels every comment with a Theme, Key Message mentions, Sentiment, and Emotion. Nothing is sent to an external model API.
 
 Python validates every label and counts every percentage. The model never emits report statistics directly.
 
-Local inference has no per-run API cost and keeps client material on the Mac. Throughput depends on the model build, context, corpus, and current unified-memory pressure.
+The server reaches LM Studio only through a loopback URL. Local inference has no per-run API cost and keeps client material on machines you control. Throughput depends on the model build, context, batch size, and corpus. With `CLASSIFY_BATCH_SIZE=16`, a 574-comment run finished in 32 minutes.
 
 ---
 
@@ -108,9 +108,16 @@ Local inference has no per-run API cost and keeps client material on the Mac. Th
 
 ---
 
-## Where the code is today
+## Status
 
-The pipeline, backend, frontend, Basic Auth, six public artifacts, merged classification pass, quick-tunnel deployment, and LM Studio `LLM_*` provider boundary are shipped.
+**Finished (2026-09-11).** The pipeline, backend, frontend, Basic Auth, six public artifacts, merged classification pass, and LM Studio `LLM_*` provider boundary are shipped.
+
+End-to-end acceptance passed on 2026-09-11:
+
+- The command suite passes: 19 `tests/*.py` scripts with 173 assertions, including `tests/e2e_product_flow.py` 20/20, plus `node --check` on both frontend files.
+- Two real Sessions ran through the web app against the live model. Each labelled all 574 comments.
+
+Known bugs and the planned UI refresh are open GitHub issues ([#2-#11](https://github.com/aubreyasta/YouTube-Comments-Intelligence/issues)). None blocks the finished status.
 
 Chat, source discovery, OCR, custom lenses, and run history are out of scope. Disabled controls remain disabled rather than pretending those features exist.
 
@@ -119,6 +126,6 @@ Chat, source discovery, OCR, custom lenses, and run history are out of scope. Di
 ## Docs
 
 - [docs/setup.md](docs/setup.md) install, configure, run, troubleshoot.
-- [docs/deployment.md](docs/deployment.md) prepare and accept the shared Mac service.
+- [docs/deployment.md](docs/deployment.md) current deployment state and the reference Mac procedure.
 - [docs/architecture.md](docs/architecture.md) how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) the HTTP contract.

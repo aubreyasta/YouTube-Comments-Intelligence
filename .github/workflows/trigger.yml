@@ -11,9 +11,12 @@ jobs:
 
     steps:
       - name: Trigger webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_MAIN }}
         run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            WEBHOOK_URL="${{ secrets.WEBHOOK_MAIN }}"
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::error::WEBHOOK_MAIN secret is not set or is empty."
+            exit 1
           fi
 
           curl -fsS -X POST "$WEBHOOK_URL"

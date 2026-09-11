@@ -1,10 +1,31 @@
-# Deployment record - MacBook Pro M1 Max
+# Deployment
 
-Use this file as the setup procedure and evidence record for the Mac that runs YouTube Intelligence. Run commands from the repository root unless a step says otherwise.
+This file records the current deployment state and keeps the reference procedure for a single Mac host. Run commands from the repository root unless a step says otherwise.
 
 Never record a password, API key, or `Authorization` header. Record `set/non-empty`, not the value.
 
-**Status:** this is the last-accepted production procedure, not the current running state. The working target right now is a Dokploy-managed remote workstation that only keeps a test copy synced with `main`; it does not serve real traffic. Which production path replaces this file (rebuilding the Dokploy deployment as a plain Docker Compose service, or another change) has not been decided. Keep this record until a new one is written and accepted. For local development against a remote LM Studio without deploying anything, see [Setup](setup.md#developing-against-a-remote-lm-studio).
+---
+
+## Current state (2026-09-11)
+
+The project is finished. Acceptance ran on a developer laptop against the real model through a local relay (see [Setup](setup.md#developing-against-a-remote-lm-studio)). No production deployment serves real users yet.
+
+A Dokploy instance on a remote workstation keeps a test copy in sync with `main`:
+
+- A push to `main` runs `.github/workflows/trigger.yml`, which calls the Dokploy deploy webhook stored in the `WEBHOOK_MAIN` secret. The job fails when that secret is empty.
+- Dokploy builds the image from `railpack.json`: a virtual environment at `/app/.venv`, the Python dependencies, and Playwright Chromium.
+- The container starts with `python server.py`. The image contains no `cloudflared`, and `start.sh` is unused.
+
+Open operational decisions:
+
+- **Model access.** The container cannot reach LM Studio. Dokploy runs the app as a Docker Swarm service, which has no host-network mode, and `pipeline/llm.py` accepts only a loopback `LLM_BASE_URL`. Either rebuild the service as plain Docker Compose, or relax the loopback check. Neither option is chosen.
+- **Persistence.** The Dokploy service has no persistent volume for `data/`. A redeploy loses Sessions, uploads, and reports.
+
+---
+
+## Reference procedure: single Mac host
+
+This procedure describes the original target: FastAPI, LM Studio, and `cloudflared` on one MacBook Pro M1 Max. Nobody ran it to completion. The evidence tables below are empty, and the 2026-09-11 web-app acceptance replaced it (see [README](../README.md#status)). Keep it as the procedure for any single-machine deployment.
 
 Target shape:
 
@@ -179,7 +200,7 @@ python -m pip install -r requirements.txt -r requirements-server.txt
 python -m playwright install chromium
 ```
 
-Start with no migrated application data. Do not copy `data/`, `config.py`, uploads, or artifacts from the Windows workstation.
+Start with no migrated application data. Do not copy `data/`, `config.py`, uploads, or artifacts from another machine.
 
 Confirm the exclusions:
 
@@ -201,7 +222,7 @@ LLM_BASE_URL=http://127.0.0.1:1234
 LLM_MODEL=<exact LM Studio API identifier>
 LLM_CONTEXT_LENGTH=32768
 LLM_TIMEOUT_SECONDS=600
-CLASSIFY_BATCH_SIZE=8
+CLASSIFY_BATCH_SIZE=16
 ```
 
 Keep `APP_PASSWORD` long and unique. Anyone who has it can read every Session, upload, and report. There are no accounts or per-user permissions.
@@ -474,7 +495,7 @@ A FastAPI restart requires no new public URL while `cloudflared` remains running
 
 **The run reaches the report stage and fails.** Run `python -m playwright install chromium` inside the active virtual environment.
 
-**Memory Pressure turns yellow or red.** Close other memory-heavy applications. Record the run state and swap first. Lower `LLM_CONTEXT_LENGTH` only in a separate test. Keep the model at 4-bit and classification batch at 8 until evidence supports another change.
+**Memory Pressure turns yellow or red.** Close other memory-heavy applications. Record the run state and swap first. Lower `LLM_CONTEXT_LENGTH` only in a separate test. Keep the model at 4-bit. Lower `CLASSIFY_BATCH_SIZE` from 16 to 8 only if a real run on this Mac shows memory pressure.
 
 **The public URL stopped working.** Read the current `cloudflared` log. A restarted quick tunnel has a new hostname.
 

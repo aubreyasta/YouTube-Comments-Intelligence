@@ -8,14 +8,13 @@ Related: [Deployment](deployment.md), [Architecture](architecture.md), [API refe
 
 ## Prerequisites
 
-The shared deployment target is a MacBook Pro M1 Max with 32 GB of unified memory.
+The server runs wherever Python 3.10 or newer runs. LM Studio must answer on a loopback port of the server's machine: either directly, or through a local relay (see [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio)). The shell commands below target macOS and Linux. On Windows, use `python` and `.venv\Scripts\activate`.
 
 Install:
 
-- macOS 14 or newer.
 - Python 3.10 or newer.
 - Git.
-- LM Studio with the `lms` CLI.
+- LM Studio with the `lms` CLI, on the machine that serves the model.
 - `cloudflared` for public access.
 
 Check the local tools:
@@ -91,14 +90,15 @@ LLM_BASE_URL=http://127.0.0.1:1234
 LLM_MODEL=<exact model key returned by LM Studio>
 LLM_CONTEXT_LENGTH=32768
 LLM_TIMEOUT_SECONDS=600
-CLASSIFY_BATCH_SIZE=8
+CLASSIFY_BATCH_SIZE=16
 ```
 
-- `YOUTUBE_API_KEY` stays on the Mac. The browser never receives it.
+- `YOUTUBE_API_KEY` stays on the server. The browser never receives it.
 - `APP_PASSWORD` protects the frontend, API, downloads, and SSE stream. The server refuses to start when it is empty.
 - `LLM_BASE_URL` must be a loopback HTTP origin without a path, credentials, query, or fragment.
 - `LLM_MODEL` must exactly match the LM Studio model inventory.
-- `LLM_CONTEXT_LENGTH` and `CLASSIFY_BATCH_SIZE` are starting values. Change them only after a real-device run shows memory pressure or unacceptable throughput.
+- `CLASSIFY_BATCH_SIZE=16` is validated for `qwen/qwen3.8-27b`: a 574-comment run labelled every comment with no validation failure in 32 minutes, against 2h27m at batch 4. The code default is `8`, so set `16` explicitly.
+- `LLM_CONTEXT_LENGTH` is a starting value. Change it only after a real run shows memory pressure.
 - `.env`, `config.py`, and `data/` are gitignored. Never commit them.
 - The application has no LM Studio API-token setting. Keep LM Studio on loopback. Do not publish port 1234 or replace `LLM_BASE_URL` with a remote URL.
 
@@ -108,7 +108,7 @@ Check the exclusions:
 git check-ignore -v .env config.py data/
 ```
 
-The Mac deployment starts with an empty `data/` directory. Do not copy the Windows workstation database, uploads, runs, or artifacts.
+A new deployment starts with an empty `data/` directory. Do not copy another machine's database, uploads, runs, or artifacts.
 
 ---
 
@@ -195,20 +195,19 @@ Use this entry point only for pipeline debugging. The deployed product uses `ser
 
 ## Verify a change
 
-Run the focused assert-based scripts directly:
+Run every assert-based script directly. Each prints `PASS (n/n)` and exits `0`:
 
 ```bash
-python tests/test_llm.py
-python tests/test_classify.py
-python tests/test_evidence.py
-python tests/e2e_product_flow.py
+for f in tests/*.py; do python "$f" || echo "FAILED: $f"; done
 node --check app/app.js
 node --check app/live.js
 ```
 
+The accepted baseline (2026-09-11) is 19 scripts and 173 assertions, including `tests/e2e_product_flow.py` 20/20.
+
 Open `app/self-check.html` for the frontend state-machine checks.
 
-After a provider or model change, complete the real-device acceptance procedure in [Deployment](deployment.md). Offline tests cannot prove MLX memory fit, vision support, structured-output behavior, or throughput on the M1 Max.
+After a provider or model change, run one real Session through the web app against the target model, as in [Deployment](deployment.md#step-7---run-one-real-external-session). Offline tests cannot prove memory fit, vision support, structured-output behavior, or throughput on the model host.
 
 ---
 
@@ -218,6 +217,7 @@ After a provider or model change, complete the real-device acceptance procedure 
 |---|---|---|
 | `RuntimeError: APP_PASSWORD must be set before the server can start.` | `.env` is missing or `APP_PASSWORD` is empty | Create `.env` in the repository root and restart FastAPI. |
 | LM Studio connection failure | The daemon or API server is stopped | Run `lms daemon up`, then `lms server start --port 1234`. |
+| `LLM_BASE_URL host must be loopback` | `LLM_BASE_URL` points at another machine | Run a local relay and point `LLM_BASE_URL` at it. See [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio). |
 | Model not found | `LLM_MODEL` does not exactly match LM Studio's model key | Read `curl -s http://127.0.0.1:1234/api/v1/models` and copy the exact key. |
 | Vision preflight failure | The downloaded build does not expose vision support | Download a vision-capable `Qwen3.8-27B` 4-bit MLX build. |
 | Structured response fails validation | Thinking is enabled or the local runtime did not enforce the schema | Disable thinking, confirm the selected model, and run the structured-output smoke test. |

@@ -10,7 +10,7 @@ Related: [Setup](setup.md), [Deployment](deployment.md), [API reference](api-ref
 
 ## System boundary
 
-The shared deployment runs on one MacBook Pro M1 Max:
+The reference deployment runs FastAPI and LM Studio on one host. [Deployment](deployment.md#current-state-2026-09-11) records where the service runs today.
 
 ```text
 external browser
@@ -21,10 +21,10 @@ external browser
 
 FastAPI pipeline
   -> LM Studio 127.0.0.1:1234
-  -> Qwen3.8-27B 4-bit MLX
+  -> Qwen3.8-27B
 ```
 
-Only FastAPI is published. LM Studio, YouTube credentials, Session data, uploads, and generated files stay on the Mac.
+Only FastAPI is published. LM Studio, YouTube credentials, Session data, uploads, and generated files stay on the host.
 
 The application has three code areas:
 
@@ -58,7 +58,7 @@ The local model fields are:
 - `LLM_CONTEXT_LENGTH`
 - `LLM_TIMEOUT_SECONDS`
 
-The backend also reads `CLASSIFY_BATCH_SIZE` from the environment. The deployment starts with a 32,768-token context and batch size 8.
+The backend also reads `CLASSIFY_BATCH_SIZE` from the environment. The code defaults are a 32,768-token context and batch size 8. Batch size 16 is validated for `qwen/qwen3.8-27b`; see [Setup](setup.md#configure-the-backend).
 
 ### Grounded Key Messages
 
@@ -124,7 +124,7 @@ The backend reads `.env` before reading configuration. It never sends `YOUTUBE_A
 | `brief_points` | Immutable run copy of the reconciled Key Messages. |
 | `run_artifacts` | Stored output file records. |
 
-`storage.py` owns paths and file writes under `data/`. The Mac disk is the only copy. Backups and active-run recovery after a process or Mac restart are out of scope.
+`storage.py` owns paths and file writes under `data/`. The host disk holds the only copy. Backups and active-run recovery after a process or host restart are out of scope.
 
 ### User Inputs
 
@@ -147,7 +147,7 @@ The adapter thread then:
 7. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
 8. Marks the run complete. An exception marks it failed.
 
-Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the Mac loses an active run.
+Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. The lost run stays `running` in the database and blocks every new run until someone clears it (#3).
 
 ### Progress
 
@@ -214,10 +214,10 @@ Every number in the results view links to deterministic evidence rows. The drawe
 
 | Risk | Current handling |
 |---|---|
-| A 27B model exhausts unified memory | Start with 4-bit MLX, 32,768 context, and batch size 8. Measure on the M1 Max before tuning. |
+| A 27B model exhausts memory | Use a 4-bit build and a 32,768 context. Batch size 16 is validated; lower it only if a real run on the host shows memory pressure. |
 | Two users start together | SQLite `BEGIN IMMEDIATE` admits only one active analysis. |
 | Browser closes during a run | The backend thread continues; persisted state restores the view. |
-| FastAPI or Mac restarts during a run | The active run is lost. Recovery is out of scope. |
+| FastAPI or host restarts during a run | The active run is lost. Recovery is out of scope. The stale `running` row blocks new runs (#3). |
 | Cloudflare quick tunnel restarts | The public URL changes. |
 | Model or schema output drifts | Strict JSON Schema plus Python validation rejects invalid labels or row coverage. |
 | Public article resolves privately | Resolution pinning and redirect revalidation reject the request before asset creation. |
