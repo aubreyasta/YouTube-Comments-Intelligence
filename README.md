@@ -15,7 +15,7 @@ A Key Message with a low travel score **did not arrive**, which is a different d
 
 ## Terms
 
-These are the only words used in this repo's prose. Code identifiers still carry older names in places; the mapping is in [AGENTS.md](AGENTS.md).
+These are the only words used in this repo's prose. Code identifiers still carry older names in places.
 
 | Term | Means |
 |---|---|
@@ -122,4 +122,3 @@ Chat, source discovery, OCR, custom lenses, and run history are out of scope. Di
 - [docs/deployment.md](docs/deployment.md) prepare and accept the shared Mac service.
 - [docs/architecture.md](docs/architecture.md) how the pipeline, backend, and frontend fit together.
 - [docs/api-reference.md](docs/api-reference.md) the HTTP contract.
-- [AGENTS.md](AGENTS.md) conventions for contributors and agents.
