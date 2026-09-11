@@ -51,7 +51,7 @@ client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3Q
 
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause",
+    "error", "briefPoints", "artifacts", "skipPause", "totalComments",
 }
 
 
@@ -334,7 +334,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
         _assert_snapshot_skip_pause_bool(get_resp.json(), False)
 
     print("  ok  RunSnapshot skipPause is type(...) is bool (not int 0/1) on "
-          "start, GET, and proceed responses; exact ten-key snapshot shape")
+          "start, GET, and proceed responses; exact eleven-key snapshot shape")
 
 
 def test_skip_true_with_included_message_skips_brief_pause():
