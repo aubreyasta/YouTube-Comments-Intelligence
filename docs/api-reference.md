@@ -497,6 +497,9 @@ Exact top-level keys:
   "emotions": [
     { "metricId": "m-em-joy", "label": "joy", "count": 30, "percent": 36.1 }
   ],
+  "sentiment": [
+    { "metricId": "m-se-positive", "label": "positive", "count": 34, "percent": 41.0 }
+  ],
   "keyMessageSentiment": [
     {
       "id": "...",
@@ -517,17 +520,24 @@ Exact top-level keys:
           "text": "...",
           "likes": 123,
           "videoId": "...",
-          "sentiment": "positive"
+          "sentiment": "positive",
+          "emotion": "joy"
         }
       ]
     }
-  ]
+  ],
+  "title": "The Meme Outlived\nthe Message",
+  "interpretation": "...\n\n...",
+  "quote": { "text": "...", "attr": "comment · 47 likes" },
+  "caveat": "..."
 }
 ```
 
-`overallTransfer` is the share of eligible rows that mention at least one applicable included Key Message. `keyMessages`, `themes`, `emotions`, and `keyMessageSentiment` carry Python-counted values. Percentages use one decimal.
+`overallTransfer` is the share of eligible rows that mention at least one applicable included Key Message. `keyMessages`, `themes`, `emotions`, `sentiment`, and `keyMessageSentiment` carry Python-counted values. Percentages use one decimal. `emotions` and `sentiment` count over every row in the analysis base, matching `emotions.csv` and `sentiment.csv`; `keyMessageSentiment` counts over the rows that mention that Key Message and carry a recognized Sentiment.
 
-Each evidence group contains up to eight comments, ranked by likes and then text length. Key Message Sentiment evidence selects up to four positive and four negative rows, then backfills from the best remaining recognized Sentiment rows. Metric IDs remain unique when labels slugify to the same value.
+Each evidence group contains up to eight comments, ranked by likes and then text length. Groups run in metric order: Key Messages, Themes, Emotions, Sentiment, Key Message Sentiment. Key Message Sentiment evidence selects up to four positive and four negative rows, then backfills from the best remaining recognized Sentiment rows. A comment's `sentiment` or `emotion` is `null` when the label is missing or unrecognized. Metric IDs remain unique when labels slugify to the same value.
+
+`title`, `interpretation`, `quote`, and `caveat` are the written read the results screen renders. They are the only model-written fields in the response; every number above them is counted in Python. A run that completed before these fields existed omits them, and the screen drops the section they feed.
 
 ---
 

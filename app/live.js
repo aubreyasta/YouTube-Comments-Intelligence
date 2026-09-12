@@ -260,14 +260,21 @@ const liveApi = {
           metricId: metric.metricId,
           text: c.text,
           likes: c.likes,
-          emotion: null,
+          sentiment: c.sentiment || null,
+          emotion: c.emotion || null,
         });
       }
     }
     const themeCount = themes.length;
+    // The written read (title/interpretation/quote/caveat) rides through the
+    // spread. A run completed before the pipeline wrote prose has none, so
+    // each field falls back and the renderer drops the section it feeds.
     return {
       ...raw,
-      title: "Results",
+      title: raw.title || "Results",
+      interpretation: raw.interpretation || "",
+      quote: raw.quote || { text: "", attr: "" },
+      caveat: raw.caveat || "",
       subtitle: `${keyMessages.length} Key Messages · ${themeCount} ${themeCount === 1 ? "theme" : "themes"}`,
       transfers: keyMessages.map((m) => ({
         id: m.metricId, label: m.label, value: m.percent, evidenceCount: m.count,

@@ -266,6 +266,11 @@ function finalizeRun(engine) {
     overallTransfer: rj.overallTransfer || 0,
     transfers,
     themes,
+    // Counted blocks the renderer reads by their report.json names, so both
+    // modes feed the same sections from the same shapes.
+    emotions: rj.emotions || [],
+    sentiment: rj.sentiment || [],
+    keyMessageSentiment: rj.keyMessageSentiment || [],
     interpretation: prose.interpretation || "",
     quote: prose.quote || { text: "", attr: "" },
     caveat: prose.caveat || "",
@@ -2642,6 +2647,22 @@ async function renderRun(runId) {
 /* ---------- Results ---------- */
 let evDrawerState = null;
 
+/* Drawer kicker per metric family. Order does not matter: the trailing dash
+   makes the prefixes mutually exclusive ("m-th-0" does not start with "m-t-"). */
+const EV_KICKERS = [
+  ["m-t-",  "IDEA FROM YOUR BRIEF"],
+  ["m-th-", "THEME"],
+  ["m-em-", "EMOTION"],
+  ["m-se-", "SENTIMENT"],
+  ["m-is-", "SENTIMENT ON THIS IDEA"],
+];
+
+/* Model labels are snake_case ("other_neutral"). Display only — filters and
+   metric IDs keep the raw value. */
+function fmtLabel(label) {
+  return String(label).replace(/_/g, " ");
+}
+
 function closeEvidenceDrawer() {
   if (!evDrawerState) return;
   const { root, prevFocus, keyHandler } = evDrawerState;
@@ -2661,8 +2682,9 @@ function openEvidenceDrawer(report, metric, originEl) {
   // Both modes derive pills from the emotion labels actually present in the
   // evidence, so a pill can never offer a filter that matches nothing.
   const emotionPills = [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
-    (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(em)}</button>`
+    (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(fmtLabel(em))}</button>`
   ).join("");
+  const kicker = (EV_KICKERS.find(([p]) => metric.id.startsWith(p)) || [null, "METRIC"])[1];
 
   const root = document.createElement("div");
   root.style.display = "contents";
@@ -2672,9 +2694,11 @@ function openEvidenceDrawer(report, metric, originEl) {
       <div class="ev-head">
         <div class="ev-title-row">
           <div class="ev-id">
-            <span class="ev-kicker">${metric.id.startsWith("m-t-") ? "IDEA FROM YOUR BRIEF" : "THEME"}</span>
+            <span class="ev-kicker">${kicker}</span>
             <span class="ev-title">${esc(metric.label)}</span>
-            <span class="ev-sub">${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments)} comments · ${metric.value}%</span>
+            <span class="ev-sub">${metric.sub
+              ? esc(metric.sub)
+              : `${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments)} comments · ${metric.value}%`}</span>
           </div>
           <button class="ev-close" type="button" data-ev-close aria-label="Close evidence">${ICONS.xLg}</button>
         </div>
@@ -2698,7 +2722,7 @@ function openEvidenceDrawer(report, metric, originEl) {
     else if (filter !== "All") list = list.filter((e) => e.emotion === filter);
     body.innerHTML = list.length
       ? list.map((e) => {
-      const meta = [e.emotion, fmtNum(e.likes) + " likes", e.sentiment]
+      const meta = [e.emotion && fmtLabel(e.emotion), fmtNum(e.likes) + " likes", e.sentiment]
         .filter(Boolean).map((part) => esc(String(part))).join(" · ");
           return `
         <div class="ev-card">
@@ -2804,6 +2828,48 @@ async function renderResults(runId) {
   const metaLine = live
     ? esc(report.subtitle)
     : esc(report.subtitle) + " · fixture data";
+
+  // report.json's counted blocks, mapped to the renderer's metric shape.
+  // Each carries its own evidence group, so every number stays clickable.
+  const asMetric = (m) => ({
+    id: m.metricId, label: fmtLabel(m.label),
+    value: m.percent, evidenceCount: m.count,
+  });
+  const sentiments = (report.sentiment || []).map(asMetric);
+  const emotions = (report.emotions || []).map(asMetric);
+  const splits = (report.keyMessageSentiment || []).map((m) => ({
+    id: m.metricId, label: m.label,
+    value: m.positivePercent, evidenceCount: m.baseN,
+    positivePercent: m.positivePercent, negativePercent: m.negativePercent,
+    baseN: m.baseN,
+    sub: `${fmtNum(m.positiveCount)} positive · ${fmtNum(m.negativeCount)} negative`
+       + ` of ${fmtNum(m.baseN)} comments that mentioned it`,
+  }));
+  // m-t-<slug> and m-is-<slug> share a slug by construction, so the split
+  // for a Key Message row is found by swapping the prefix.
+  const splitFor = new Map(splits.map((m) => [m.id.replace(/^m-is-/, "m-t-"), m]));
+  const metricIndex = new Map(
+    report.transfers.concat(report.themes, sentiments, emotions, splits)
+      .map((m) => [m.id, m]));
+
+  // Sentiment and Emotions render identically: a labelled percentage bar
+  // per label, in the count order report.json already sorted them into.
+  const labelChart = (key, heading, sub, metrics) => metrics.length ? `
+        <section class="chart" aria-labelledby="${key}-h">
+          <h2 id="${key}-h">${heading}</h2>
+          <p class="sub">${sub}</p>
+          <div class="bars">
+            ${metrics.map((m) => `
+            <div class="bar-row">
+              <div class="bar-head">
+                <span class="bar-label">${esc(m.label)}</span>
+                <button class="bar-val dark" type="button" data-metric="${esc(m.id)}">${m.value}%</button>
+              </div>
+              <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
+            </div>`).join("")}
+          </div>
+        </section>` : "";
+
   const artifactRow = (meta) => {
     const art = byKind.get(meta.kind);
     const btn = `<button class="btn ghost small" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
@@ -2828,14 +2894,23 @@ async function renderResults(runId) {
           <h2 id="chart-transfer-h">Which ideas arrived</h2>
           <p class="sub">Share of all ${fmtNum(report._totalComments)} comments that echoed each idea in the brief</p>
           <div class="bars">
-            ${report.transfers.map((m) => `
+            ${report.transfers.map((m) => {
+              const split = splitFor.get(m.id);
+              return `
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
                 <button class="bar-val" type="button" data-metric="${m.id}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill" style="width:${m.value}%"></div></div>
-            </div>`).join("")}
+              ${split && split.baseN ? `
+              <button class="bar-split" type="button" data-metric="${esc(split.id)}">
+                <span class="split-pos">${split.positivePercent}% positive</span>
+                <span class="split-neg">${split.negativePercent}% negative</span>
+                <span class="split-base">of the ${fmtNum(split.baseN)} that mentioned it</span>
+              </button>` : ""}
+            </div>`;
+            }).join("")}
           </div>
           <div class="method-line"><span>Counted from per-comment labels — never estimated.</span></div>
         </section>
@@ -2862,13 +2937,21 @@ async function renderResults(runId) {
           </div>
         </section>
 
-        ${live ? "" : `
+        ${labelChart("chart-sentiment", "How the audience felt",
+          "Every comment carries exactly one Sentiment label", sentiments)}
+
+        ${labelChart("chart-emotions", "The emotion behind the comments",
+          "Every comment carries exactly one Emotion label", emotions)}
+
+        ${report.interpretation ? `
         <section class="read" aria-labelledby="read-h">
           <h2 id="read-h">What we heard</h2>
           ${report.interpretation.split("\n\n").map((p) => `<p>${esc(p)}</p>`).join("")}
-          <blockquote class="quote">"${esc(report.quote.text)}"<span class="attr">${esc(report.quote.attr)}</span></blockquote>
-          <div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>
-        </section>`}
+          ${report.quote && report.quote.text
+            ? `<blockquote class="quote">"${esc(report.quote.text)}"<span class="attr">${esc(report.quote.attr)}</span></blockquote>`
+            : ""}
+          ${report.caveat ? `<div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>` : ""}
+        </section>` : ""}
 
         <section class="downloads" aria-labelledby="downloads-h">
           <h2 id="downloads-h">Files from this run</h2>
@@ -2883,7 +2966,7 @@ async function renderResults(runId) {
       const id = b.dataset.metric;
       const metric = id === "overall"
         ? { id: report.transfers[0] ? report.transfers[0].id : "none", label: "Overall transfer", value: report.overallTransfer, evidenceCount: Math.round(report.overallTransfer / 100 * report._totalComments) }
-        : report.transfers.concat(report.themes).find((m) => m.id === id);
+        : metricIndex.get(id);
       if (metric && metric.id !== "none") openEvidenceDrawer(report, metric, b);
     });
   });
