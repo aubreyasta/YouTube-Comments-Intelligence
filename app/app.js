@@ -1871,6 +1871,8 @@ async function renderCampaign(sessionId, campaignId) {
         const proceedOverwrite = async () => {
           const chk = document.getElementById("chk-skip-pause");
           const skipPause = !!(chk && chk.checked);
+          const errEl = document.getElementById("run-start-err");
+          errEl.innerHTML = "";
           runBtn.disabled = true;
           if (chk) chk.disabled = true;
           try {
@@ -1879,7 +1881,7 @@ async function renderCampaign(sessionId, campaignId) {
           } catch (err) {
             runBtn.disabled = false;
             if (chk) { chk.disabled = false; chk.focus(); }
-            alert(err.message);
+            errEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
           }
         };
         // Live mode: confirm overwrite when session is not fresh (a previous result exists).
@@ -1943,6 +1945,7 @@ async function renderCampaign(sessionId, campaignId) {
   view.innerHTML = `
   <div class="campaign-layout single-col">
     <div class="campaign-main">
+      <div id="run-start-err" style="display:contents"></div>
       ${priorResultWarning}
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2127,24 +2130,31 @@ const STEP_DEFS = [
   { key: "report", label: "Writing your note", pending: "Two charts, the verdicts, and the quotes behind them" },
 ];
 // error -> -2 (live terminal failure), running -> -1 (live pre-collect stage).
-const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
+const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, themes: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
 
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
-   Known patterns from adapter.py _push calls:
-     "total fetched: N"  -> { total: N }
-     "N themes"          -> { themes: N }
-     "other_share=X.Y"   -> { otherShare: X.Y }
-   Unparseable returns null; callers show "-". */
+   adapter.py's numeric details are ";"-joined "key=number" pairs, so one
+   parser covers every _push that carries counts:
+     "total=N"                                    -> { total: N }
+     "other_share=X.Y"                            -> { otherShare: X.Y }
+     "labelled=N;total=M;batch=B;batches=T"       -> all four
+   Keys arrive snake_case and are camelCased to match the demo detail
+   objects the same painters read. "N themes" is the one prose exception.
+   Anything else (error strings, artifact paths, caveats) returns null and
+   callers show "-". */
 function parseDetailStr(detail) {
   if (!detail || typeof detail !== "string") return null;
-  const m1 = detail.match(/^total fetched: (\d+)$/i);
-  if (m1) return { total: parseInt(m1[1], 10) };
-  const m2 = detail.match(/^(\d+)\s+themes?$/i);
-  if (m2) return { themes: parseInt(m2[1], 10) };
-  const m3 = detail.match(/other_share=([\d.]+)/i);
-  if (m3) return { otherShare: parseFloat(m3[1]) };
-  return null;
+  const themes = detail.match(/^(\d+)\s+themes?$/i);
+  if (themes) return { themes: parseInt(themes[1], 10) };
+  const out = {};
+  for (const part of detail.split(";")) {
+    const kv = part.match(/^\s*([a-z_]+)=(\d+(?:\.\d+)?)\s*$/i);
+    if (!kv) return null;
+    const key = kv[1].toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    out[key] = kv[2].includes(".") ? parseFloat(kv[2]) : parseInt(kv[2], 10);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 async function renderRun(runId) {
@@ -2248,9 +2258,9 @@ async function renderRun(runId) {
     const d = state.detail || {};
     const details = [
       state.stage === "collect" || currentStep > 0
-        ? (live && d.collected == null
+        ? (live && totalComments() === 0
             ? "—"
-            : `${fmtNum(d.collected || (currentStep > 0 ? totalComments() : 0))} across ${d.videos || videoCount()} videos, replies included`)
+            : `${fmtNum(live ? totalComments() : (d.collected || (currentStep > 0 ? totalComments() : 0)))} across ${d.videos || videoCount()} videos, replies included`)
         : STEP_DEFS[0].pending,
       currentStep > 1
         ? (d.themes ? d.themes + " themes, identified from the sample" : (live ? "Themes identified from the sample" : "7 themes, drawn from a 640-comment read"))
@@ -2296,10 +2306,12 @@ async function renderRun(runId) {
     return campaign ? (campaign.videoIds ? campaign.videoIds.length : (campaign.videos ? campaign.videos.length : 1)) : 1;
   }
 
-  // Live: no commentCount on videos; 0 is the sentinel so totalComments() uses detail.total.
+  // Live: the run snapshot's persisted total_comments once collect has
+  // finished (survives a reopen with no SSE replay); 0 is the sentinel
+  // before that, so totalComments() falls through to detail.total.
   // Demo: the real sum of the added videos' comment counts, with no floor and no
   // placeholder, so the progress screen never shows a number nothing counted.
-  const initialTotal = live ? 0 : (campaign
+  const initialTotal = live ? (run.totalComments || 0) : (campaign
     ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0)
     : 0);
 
@@ -2315,11 +2327,20 @@ async function renderRun(runId) {
         <div style="display:flex;gap:10px;margin-top:12px">
           <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaignId}">Return to campaign</a>
           <button class="btn primary" type="button" id="btn-fresh-run">Start a fresh run</button>
-        </div>`;
+        </div>
+        <div id="fresh-run-err"></div>`;
       const fresh = document.getElementById("btn-fresh-run");
       if (fresh) fresh.addEventListener("click", async () => {
-        const r = await demoApi.startRun(session.id);
-        location.hash = `#/runs/${r.id}`;
+        const errEl = document.getElementById("fresh-run-err");
+        errEl.innerHTML = "";
+        fresh.disabled = true;
+        try {
+          const r = await demoApi.startRun(session.id);
+          location.hash = `#/runs/${r.id}`;
+        } catch (err) {
+          fresh.disabled = false;
+          errEl.innerHTML = `<div class="banner error" role="alert" style="margin-top:12px">${esc(err.message)}</div>`;
+        }
       });
     } else if (state.completed) {
       titleEl.textContent = "Your note is ready";
@@ -2343,6 +2364,7 @@ async function renderRun(runId) {
         connecting: "Connecting\u2026", running: "Connecting\u2026",
         collect: "Reading " + fmtNum(totalComments()) + " comments",
         brief: "Reading the brief\u2026", brief_pause: "Confirm the ideas before we label",
+        themes: "Finding what people are talking about",
         classify: "Reading " + fmtNum(totalComments()) + " comments",
         emotion: "Reading " + fmtNum(totalComments()) + " comments",
         report: "Reading " + fmtNum(totalComments()) + " comments",
@@ -2518,7 +2540,11 @@ async function renderRun(runId) {
     // Live: detail is a string from adapter.py; parse it into an object.
     // Demo: detail is already an object.
     const parsedStr = (live && typeof e.detail === "string") ? parseDetailStr(e.detail) : null;
-    state.detail = parsedStr || (e.detail && typeof e.detail === "object" ? e.detail : {});
+    const newDetail = parsedStr || (e.detail && typeof e.detail === "object" ? e.detail : {});
+    // Merge, don't replace: an unparseable or object-less event (e.g. a
+    // classify batch progress string) must not erase a field an earlier
+    // event set (e.g. collect's total), since a later paint still needs it.
+    state.detail = Object.assign({}, state.detail, newDetail);
 
     // Live: terminal failure comes as stage === "error" (not "failed").
     if (e.stage === "error") {

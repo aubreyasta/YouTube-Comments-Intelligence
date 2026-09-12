@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- pause still happens when reconciliation leaves zero included
     -- messages, so this is a request, not a guarantee.
     skip_pause  INTEGER NOT NULL DEFAULT 0,
+    -- Analysis-base comment count, set once collect finishes (adapter.py
+    -- _set_run_total). NULL before then. Persisted so GET /runs/{id} can
+    -- paint it after a reopen with no SSE connection to replay from.
+    total_comments INTEGER,
     started_at  TEXT,
     finished_at TEXT,
     error       TEXT
@@ -121,6 +125,8 @@ def init() -> None:
         if "skip_pause" not in cols:
             conn.execute(
                 "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
+        if "total_comments" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
         conn.commit()
     finally:
         conn.close()
