@@ -276,6 +276,54 @@ def test_init_idempotent_on_skip_pause_column():
           "exactly one runs.skip_pause column")
 
 
+def test_init_migrates_pre_total_comments_database():
+    """A database created before `runs.total_comments` existed must gain
+    that nullable column the next time db.init() opens it, without losing
+    existing rows (mirrors test_init_migrates_pre_skip_pause_database)."""
+    tmp_dir = tempfile.mkdtemp()
+    path = __import__("pathlib").Path(tmp_dir) / "app.db"
+    saved_path = db._DB_PATH
+    db._DB_PATH = path
+    try:
+        pre_conn = sqlite3.connect(path)
+        pre_conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        pre_conn.execute(
+            "CREATE TABLE runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+            "state TEXT NOT NULL DEFAULT 'queued', stage TEXT NOT NULL DEFAULT 'queued', "
+            "skip_pause INTEGER NOT NULL DEFAULT 0, "
+            "started_at TEXT, finished_at TEXT, error TEXT)"
+        )
+        session_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        pre_conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) "
+            "VALUES (?, 'pre-total-comments', 't', 't')", (session_id,))
+        pre_conn.execute(
+            "INSERT INTO runs (id, session_id) VALUES (?, ?)", (run_id, session_id))
+        pre_conn.commit()
+        pre_conn.close()
+
+        cols_before = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(runs)")}
+        assert "total_comments" not in cols_before, "test setup already has a total_comments column"
+
+        db.init()
+
+        conn = db.get_conn()
+        cols_after = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        assert "total_comments" in cols_after, (
+            "db.init() did not add runs.total_comments to a pre-total_comments database")
+        row = conn.execute("SELECT total_comments FROM runs WHERE id = ?", (run_id,)).fetchone()
+        assert row["total_comments"] is None, row["total_comments"]
+        conn.close()
+    finally:
+        db._DB_PATH = saved_path
+    print("  ok  db.init() migrates a pre-total_comments database by adding "
+          "runs.total_comments INTEGER, existing row reads NULL")
+
+
 def test_key_messages_orphan_session_rejected():
     conn = _fresh_db()
     try:
@@ -301,6 +349,7 @@ if __name__ == "__main__":
         test_fresh_db_runs_skip_pause_column_shape,
         test_init_migrates_pre_skip_pause_database,
         test_init_idempotent_on_skip_pause_column,
+        test_init_migrates_pre_total_comments_database,
         test_key_messages_orphan_session_rejected,
     ]
     failed = 0

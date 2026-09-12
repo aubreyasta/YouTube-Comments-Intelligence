@@ -239,8 +239,38 @@ def test_terminal_run_in_another_session_does_not_block():
     print("  ok  a terminal run in another Session neither blocks a new start nor is deleted by it")
 
 
+def test_startup_fails_orphaned_active_runs():
+    """No run thread survives a restart, so the startup hook must fail every
+    queued/running row. Otherwise the orphan blocks every new run (#3)."""
+    _clear_runs()
+    queued_id = _seed_run(_new_session(), "queued")
+    running_id = _seed_run(_new_session(), "running")
+    complete_id = _seed_run(_new_session(), "complete")
+
+    server._startup()
+
+    conn = db.get_conn()
+    try:
+        rows = {r["id"]: r for r in conn.execute("SELECT * FROM runs").fetchall()}
+    finally:
+        conn.close()
+    for rid in (queued_id, running_id):
+        row = rows[rid]
+        assert (row["state"], row["stage"]) == ("failed", "error"), dict(row)
+        assert row["error"].startswith("Interrupted"), row["error"]
+        assert row["finished_at"], "orphaned run has no finished_at"
+    assert rows[complete_id]["state"] == "complete", "startup touched a complete run"
+    assert rows[complete_id]["error"] is None
+
+    with patch.object(adapter, "start_run", return_value=None):
+        resp = client.post(f"/api/sessions/{_new_session()}/runs")
+        assert resp.status_code == 202, resp.text
+    print("  ok  startup fails orphaned queued/running runs, leaves complete runs alone, and unblocks new runs")
+
+
 if __name__ == "__main__":
     tests = [
+        test_startup_fails_orphaned_active_runs,
         test_queued_run_blocks_second_start_in_the_same_session,
         test_running_run_blocks_second_start_in_the_same_session,
         test_active_run_in_another_session_blocks_with_the_cross_session_message,

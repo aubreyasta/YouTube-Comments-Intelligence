@@ -25,8 +25,8 @@ Public API (for server.py / Wave 3):
 PROGRESS_SHAPE:
   {
     "run_id":  str,           # the run UUID
-    "stage":   str,           # collect | brief | brief_pause | classify |
-                              # emotion | report | complete | error
+    "stage":   str,           # collect | brief | brief_pause | themes |
+                              # classify | emotion | report | complete | error
     "message": str,           # human-readable status line
     "pct":     int,           # 0-100
     "detail":  str | None,    # extra context (error message, counts, etc.)
@@ -180,6 +180,18 @@ def _set_run_stage(run_id: str, stage: str) -> None:
     conn = db.get_conn()
     try:
         conn.execute("UPDATE runs SET stage = ? WHERE id = ?", (stage, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_run_total(run_id: str, total: int) -> None:
+    """Persist the analysis-base comment count once collect finishes, so
+    GET /runs/{id} can paint it after a reopen with no SSE connection to
+    replay from (see _push). Best-effort, same as _set_run_stage."""
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE runs SET total_comments = ? WHERE id = ?", (total, run_id))
         conn.commit()
     finally:
         conn.close()
@@ -1062,9 +1074,10 @@ def _execute(run_id: str) -> None:
         comments_df, meta_df = collect.fetch(cfg)
         comments_df = collect.clean(comments_df, cfg)
         base_df = comments_df[comments_df["in_base"]].reset_index(drop=True)
+        _set_run_total(run_id, len(base_df))
         _push(run_id, "collect",
               f"Collected {len(base_df)} comments in analysis base", 20,
-              detail=f"total fetched: {len(comments_df)}")
+              detail=f"total={len(base_df)}")
 
         # --- 6. Brief: reconcile the snapshot against transcripts -----------
         # brief.reconcile() keeps edited entries and stable ids verbatim,
@@ -1126,16 +1139,17 @@ def _execute(run_id: str) -> None:
                 "All brief points were excluded. At least one must be included.")
 
         # --- 9. Classify ----------------------------------------------------
-        _push(run_id, "classify", "Discovering themes", 42)
+        _push(run_id, "themes", "Discovering themes", 42)
         themes = analyze.build(base_df, summary_str, cfg)
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
               detail=f"{len(themes)} themes")
-        def classify_progress(completed, total):
+        def classify_progress(completed, total, labelled):
             pct = 50 + int(completed / max(total, 1) * 9)
             _push(run_id, "classify",
                   f"Classified batch {completed} of {total}", pct,
-                  detail=f"completed_batches={completed};total_batches={total}")
+                  detail=(f"labelled={labelled};total={len(base_df)};"
+                          f"batch={completed};batches={total}"))
 
         base_df, columns = analyze.classify(
             base_df, themes, classifier_points, cfg,

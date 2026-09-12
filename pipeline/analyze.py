@@ -156,7 +156,7 @@ def build(df, summary, cfg: "PipelineConfig"):
 # ------------------------------------------------------------- classification
 
 def classify(df, themes, points, cfg: "PipelineConfig" = None,
-             on_progress: Callable[[int, int], None] | None = None):
+             on_progress: Callable[[int, int, int], None] | None = None):
     """
     LLM labels every comment with a theme, mentioned Key Messages, a
     sentiment, and an emotion.
@@ -244,6 +244,10 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
 
     total_batches = len(batches)
     completed_batches = 0
+    # Comments whose labels are applied, not batches: batches vary in size
+    # (each video's last chunk is partial), so a batch fraction would be a
+    # different number from the one the progress screen claims to show.
+    labelled = 0
     activated_videos = set()
 
     for vid, group_index, chunk_idx, prompt in batches:
@@ -292,8 +296,9 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
                 df.at[idx, label_to_col[label]] = True
 
         completed_batches += 1
+        labelled += len(chunk_idx)
         if on_progress:
-            on_progress(completed_batches, total_batches)
+            on_progress(completed_batches, total_batches, labelled)
 
     return df, columns
 

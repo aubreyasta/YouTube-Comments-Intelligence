@@ -93,6 +93,7 @@ type RunStage =
   | "collect"
   | "brief"
   | "brief_pause"
+  | "themes"
   | "classify"
   | "emotion"
   | "report"
@@ -109,12 +110,13 @@ type RunSnapshot = {
   message: string;
   error: string | null;
   skipPause: boolean;
+  totalComments: number | null;
   briefPoints: KeyMessage[];
   artifacts: Artifact[];
 };
 ```
 
-`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay.
+`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
 
 ### Artifact
 
@@ -177,7 +179,7 @@ List Sessions newest first. Each item adds `campaignCount`.
 {
   "id": "...",
   "status": "queued | running | complete | failed",
-  "stage": "queued | collect | brief | brief_pause | classify | emotion | report | complete | error",
+  "stage": "queued | collect | brief | brief_pause | themes | classify | emotion | report | complete | error",
   "pct": 0,
   "message": "",
   "error": null
@@ -442,11 +444,23 @@ Stages:
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
 | `brief_pause` | 40 | Wait for review and `/proceed`. |
-| `classify` | 42-65 | Discover Themes, classify all labels, optionally refine `Other`. |
+| `themes` | 42 | Discover Themes from a comment sample. |
+| `classify` | 50-65 | Classify all labels, optionally refine `Other`. |
 | `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |
 | `report` | 77-88 | Write Report JSON, PDF, and CSVs. |
 | `complete` | 100 | Run complete. |
 | `error` | 0 | Run failed; `detail` carries the exception string. |
+
+`detail` is a free-text string. When it carries counts it is `;`-joined `key=number` pairs, and clients parse it:
+
+| Stage | `detail` | Meaning |
+|---|---|---|
+| `collect` | `total=N` | Comments in the analysis base. |
+| `classify` | `N themes` | Themes discovered. |
+| `classify` | `labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
+| `classify` | `other_share=X.Y` | Percent left in `Other`. |
+
+Any other `detail` is prose and carries no counts.
 
 An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. A terminal run replays one terminal event and closes.
 

@@ -203,6 +203,23 @@ def _fake_reconcile(existing, meta_df, cfg, context_map=None, images_map=None,
     return ("# grounded", reconciled)
 
 
+# Held closed while classify is "running" so classify_progress_paints can
+# read the run page mid-classification instead of racing a stub that
+# returns instantly. Released by that case; every later run sails through.
+_CLASSIFY_GATE = threading.Event()
+
+
+def _fake_classify(df, themes, points, cfg=None, on_progress=None):
+    """Two batches over the three fixture comments, with the run parked
+    between them. Real classify reports (completed, total, labelled)."""
+    if on_progress:
+        on_progress(1, 2, 2)
+    _CLASSIFY_GATE.wait(30.0)
+    if on_progress:
+        on_progress(2, 2, len(df))
+    return df, {}
+
+
 def _patches():
     return [
         patch.object(server.assets, "extract_upload", return_value=""),
@@ -217,9 +234,13 @@ def _patches():
                     return_value=(_fake_comments_df(), _fake_meta_df())),
         patch.object(adapter.collect, "clean", side_effect=lambda df, cfg: df),
         patch.object(adapter.brief, "reconcile", side_effect=_fake_reconcile),
-        patch.object(adapter.analyze, "build", return_value=[]),
-        patch.object(adapter.analyze, "classify",
-                    side_effect=lambda df, themes, points, cfg=None, on_progress=None: (df, {})),
+        # Two themes, not zero: the run page prints the count, so a theme
+        # set of length 0 would hide a regression that drops it.
+        patch.object(adapter.analyze, "build", return_value=[
+            {"name": "Price", "description": "Cost talk."},
+            {"name": "Build quality", "description": "Durability talk."},
+        ]),
+        patch.object(adapter.analyze, "classify", side_effect=_fake_classify),
         patch.object(adapter.analyze, "extend",
                     side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
         patch.object(adapter.analyze, "affect",
@@ -624,6 +645,15 @@ def brief_pause_reopen_persisted(page, base):
     page.wait_for_selector("#brief-review:visible")
     _wait_text(page, "#brief-h", "Key Messages we'll test for transfer")
 
+    # Issue #4: a page opened after collect finished (no SSE replay) must
+    # still show the analysis-base comment count on the "Collected the
+    # comments" step, not the never-populated "—" sentinel.
+    collect_detail = page.text_content("#stepper .step-row:nth-child(1) .step-detail")
+    _expect(collect_detail is not None and "3" in collect_detail,
+            f"'Collected the comments' step showed {collect_detail!r} on a "
+            "reopened brief_pause page, expected the 3-comment analysis base "
+            "count from _fake_comments_df to survive the reopen")
+
     row_count = page.locator(".brief-item").count()
     _expect(row_count > 0, "no .brief-item rows rendered on brief_pause reopen")
     # The app renders EVERY point and marks excluded ones with the excluded
@@ -721,6 +751,31 @@ def brief_pause_edit_and_proceed(page, base):
     _expect(hidden_or_empty, "#brief-review did not become hidden or empty after proceed")
 
 
+def classify_progress_paints(page, base):
+    """Issue #6: batch progress must reach the run page while classify runs.
+
+    The classify stub parks between its two batches, so the page is read at
+    a real mid-classification moment: one batch done, two of three comments
+    labelled. Before the fix, parseDetailStr() could not read the batch
+    detail string, so the step detail, the progress bar, and the LIVE COUNTS
+    labelled figure all stayed at the "-" sentinel."""
+    _require_run_id()
+    try:
+        step = "#stepper .step-row:nth-child(3)"
+        _wait_text(page, f"{step} .step-detail", "2 of 3 · batch 1 of 2",
+                   timeout_ms=20000)
+        _expect(page.locator(f"{step} .progressbar").count() == 1,
+                "no progress bar rendered on the 'Labelling every comment' "
+                "step while classify was running")
+        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
+        # The batch events must not erase the theme count an earlier event set.
+        _wait_text(page, "#stepper .step-row:nth-child(2) .step-detail",
+                   "2 themes, identified from the sample", timeout_ms=5000)
+        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+    finally:
+        _CLASSIFY_GATE.set()
+
+
 def run_completes(page, base):
     run_id = _require_run_id()
     snap = _poll_run_snapshot(
@@ -732,6 +787,15 @@ def run_completes(page, base):
                 f"error: {snap.get('error')!r}")
     _expect(snap.get("status") == "complete",
             f"run finished with status {snap.get('status')!r}, expected complete")
+
+    # Issue #4: onEvent() replaced state.detail wholesale on every SSE event,
+    # so the "N labelled" count from the collect total was wiped out by the
+    # classify/emotion/report events that followed it on the way to complete.
+    labelled_detail = page.text_content("#stepper .step-row:nth-child(3) .step-detail")
+    _expect(labelled_detail == "3 labelled",
+            f"'Labelling every comment' step showed {labelled_detail!r} after "
+            "completion, expected '3 labelled' (the analysis-base count from "
+            "_fake_comments_df)")
 
     page.wait_for_selector("a#btn-results")
     href = page.get_attribute("a#btn-results", "href")
@@ -947,13 +1011,12 @@ def skip_pause_failed_start_retains_state(page, base):
     finally:
         page.unroute("**/api/sessions/*/runs", _fail)
 
-    # The failure path raises a native alert, which the module dialog handler
-    # records. It is expected here, so clear it rather than letting
-    # no_console_errors report it as an unexplained dialog.
-    _expect(any("Injected start failure." in m for m in _DIALOG_MESSAGES),
-            f"no alert carrying the injected start error was raised; dialogs "
-            f"were {_DIALOG_MESSAGES!r}")
-    _DIALOG_MESSAGES.clear()
+    # The failure path renders an inline banner (#3's fix moved this off
+    # alert(), which blocked the tab); no native dialog fires here anymore.
+    banner_text = page.text_content("#run-start-err .banner.error")
+    _expect(banner_text is not None and "Injected start failure." in banner_text,
+            f"#run-start-err did not render a .banner.error carrying the "
+            f"injected start error; got {banner_text!r}")
 
     # Chromium logs the injected 500 as a console error. It is this case's own
     # fixture, not an app defect, so assert it arrived and then clear it rather
@@ -1093,6 +1156,7 @@ def main():
             ("brief_pause_reopen_persisted", brief_pause_reopen_persisted),
             ("brief_pause_all_excluded_rejected", brief_pause_all_excluded_rejected),
             ("brief_pause_edit_and_proceed", brief_pause_edit_and_proceed),
+            ("classify_progress_paints", classify_progress_paints),
             ("run_completes", run_completes),
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
