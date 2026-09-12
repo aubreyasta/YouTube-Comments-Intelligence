@@ -445,6 +445,9 @@ def _ser_run(row, conn) -> dict:
     return {
         "id": rid,
         "sessionId": row["session_id"],
+        # The run's start time, under the name the demo store already uses, so
+        # the results page dates the strategy note from one field in both modes.
+        "createdAt": row["started_at"],
         "status": state,
         "stage": stage,
         "pct": 100 if state == "complete" else 0,
