@@ -103,6 +103,7 @@ type RunStage =
 type RunSnapshot = {
   id: string;
   sessionId: string;
+  createdAt: string;
   status: "queued" | "running" | "complete" | "failed";
   stage: RunStage;
   pct: number;
@@ -115,7 +116,7 @@ type RunSnapshot = {
 };
 ```
 
-`briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
+`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
 
 ### Artifact
 
