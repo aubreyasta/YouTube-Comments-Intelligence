@@ -118,23 +118,26 @@ def _api_log(substring=None):
 
 
 def _fake_comments_df():
+    # Named themes, not "Other": the results screen renders "Other" as static
+    # text, so a corpus labelled only "Other" leaves no clickable theme and
+    # cannot exercise the evidence drawer.
     rows = [
         {"group": "C", "kind": "auto", "video_id": "e2eAAAAAAA1",
          "comment": "Great value for the price", "likes": 5,
          "published_at": "2026-08-01T00:00:00+00:00", "is_reply": False,
-         "reply_count": 0, "in_base": True, "theme": "Other",
+         "reply_count": 0, "in_base": True, "theme": "Price",
          "sentiment": "positive", "sentiment_confidence": 0.9,
          "emotion": "joy", "emotion_confidence": 0.8},
         {"group": "C", "kind": "auto", "video_id": "e2eAAAAAAA1",
          "comment": "Feels sturdy and well built", "likes": 2,
          "published_at": "2026-08-02T00:00:00+00:00", "is_reply": False,
-         "reply_count": 1, "in_base": True, "theme": "Other",
+         "reply_count": 1, "in_base": True, "theme": "Build quality",
          "sentiment": "positive", "sentiment_confidence": 0.85,
          "emotion": "joy", "emotion_confidence": 0.7},
         {"group": "C", "kind": "auto", "video_id": "e2eAAAAAAA1",
          "comment": "Not sure this is worth it", "likes": 0,
          "published_at": "2026-08-03T00:00:00+00:00", "is_reply": True,
-         "reply_count": 0, "in_base": True, "theme": "Other",
+         "reply_count": 0, "in_base": True, "theme": "Price",
          "sentiment": "negative", "sentiment_confidence": 0.6,
          "emotion": "neutral", "emotion_confidence": 0.5},
     ]
@@ -891,6 +894,40 @@ def report_json_never_exposed(page, base):
             f"exactly the six public kinds in order {allowed_kinds!r}")
 
 
+def evidence_drawer_shows_metric_count(page, base):
+    """The drawer header and footer both print the metric's comment count.
+    Live getReport() used to drop `count` from the report, so every drawer
+    read "0 of N comments" and "Showing K of 0 labelled comments"."""
+    run_id = _require_run_id()
+    report = page.request.get(base + "/api/runs/" + run_id + "/report").json()
+
+    clickable = [m for m in report["themes"] if m["label"] != "Other"]
+    _expect(clickable, f"report.json carried no clickable theme: {report['themes']!r}")
+    metric = clickable[0]
+    _expect(metric["count"] > 0,
+            f"theme {metric['label']!r} counted {metric['count']} comments; the "
+            "case needs a non-zero count to tell a real count from a dropped one")
+
+    page.goto(base + "/#/runs/" + run_id + "/results")
+    page.wait_for_selector(".bars")
+    page.click(f'[data-metric="{metric["metricId"]}"]')
+    page.wait_for_selector(".ev-drawer")
+
+    head = page.text_content(".ev-drawer .ev-sub").strip()
+    expected_head = f"{metric['count']} of "
+    _expect(head.startswith(expected_head),
+            f"evidence drawer header was {head!r}, expected it to start with "
+            f"{expected_head!r}")
+
+    foot = page.text_content(".ev-drawer .ev-count").strip()
+    expected_foot = f"of {metric['count']} labelled comments"
+    _expect(expected_foot in foot,
+            f"evidence drawer footer was {foot!r}, expected it to contain "
+            f"{expected_foot!r}")
+
+    page.keyboard.press("Escape")
+
+
 def aria_and_keyboard(page, base):
     page.goto(base + "/#/sessions/" + _STATE["session_id"] +
               "/campaigns/" + _STATE["campaign_id"])
@@ -1160,6 +1197,7 @@ def main():
             ("run_completes", run_completes),
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
+            ("evidence_drawer_shows_metric_count", evidence_drawer_shows_metric_count),
             ("aria_and_keyboard", aria_and_keyboard),
             ("skip_pause_control_is_accessible", skip_pause_control_is_accessible),
             ("skip_pause_failed_start_retains_state", skip_pause_failed_start_retains_state),
