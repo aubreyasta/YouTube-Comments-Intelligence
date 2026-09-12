@@ -203,6 +203,23 @@ def _fake_reconcile(existing, meta_df, cfg, context_map=None, images_map=None,
     return ("# grounded", reconciled)
 
 
+# Held closed while classify is "running" so classify_progress_paints can
+# read the run page mid-classification instead of racing a stub that
+# returns instantly. Released by that case; every later run sails through.
+_CLASSIFY_GATE = threading.Event()
+
+
+def _fake_classify(df, themes, points, cfg=None, on_progress=None):
+    """Two batches over the three fixture comments, with the run parked
+    between them. Real classify reports (completed, total, labelled)."""
+    if on_progress:
+        on_progress(1, 2, 2)
+    _CLASSIFY_GATE.wait(30.0)
+    if on_progress:
+        on_progress(2, 2, len(df))
+    return df, {}
+
+
 def _patches():
     return [
         patch.object(server.assets, "extract_upload", return_value=""),
@@ -217,9 +234,13 @@ def _patches():
                     return_value=(_fake_comments_df(), _fake_meta_df())),
         patch.object(adapter.collect, "clean", side_effect=lambda df, cfg: df),
         patch.object(adapter.brief, "reconcile", side_effect=_fake_reconcile),
-        patch.object(adapter.analyze, "build", return_value=[]),
-        patch.object(adapter.analyze, "classify",
-                    side_effect=lambda df, themes, points, cfg=None, on_progress=None: (df, {})),
+        # Two themes, not zero: the run page prints the count, so a theme
+        # set of length 0 would hide a regression that drops it.
+        patch.object(adapter.analyze, "build", return_value=[
+            {"name": "Price", "description": "Cost talk."},
+            {"name": "Build quality", "description": "Durability talk."},
+        ]),
+        patch.object(adapter.analyze, "classify", side_effect=_fake_classify),
         patch.object(adapter.analyze, "extend",
                     side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
         patch.object(adapter.analyze, "affect",
@@ -730,6 +751,31 @@ def brief_pause_edit_and_proceed(page, base):
     _expect(hidden_or_empty, "#brief-review did not become hidden or empty after proceed")
 
 
+def classify_progress_paints(page, base):
+    """Issue #6: batch progress must reach the run page while classify runs.
+
+    The classify stub parks between its two batches, so the page is read at
+    a real mid-classification moment: one batch done, two of three comments
+    labelled. Before the fix, parseDetailStr() could not read the batch
+    detail string, so the step detail, the progress bar, and the LIVE COUNTS
+    labelled figure all stayed at the "-" sentinel."""
+    _require_run_id()
+    try:
+        step = "#stepper .step-row:nth-child(3)"
+        _wait_text(page, f"{step} .step-detail", "2 of 3 · batch 1 of 2",
+                   timeout_ms=20000)
+        _expect(page.locator(f"{step} .progressbar").count() == 1,
+                "no progress bar rendered on the 'Labelling every comment' "
+                "step while classify was running")
+        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
+        # The batch events must not erase the theme count an earlier event set.
+        _wait_text(page, "#stepper .step-row:nth-child(2) .step-detail",
+                   "2 themes, identified from the sample", timeout_ms=5000)
+        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+    finally:
+        _CLASSIFY_GATE.set()
+
+
 def run_completes(page, base):
     run_id = _require_run_id()
     snap = _poll_run_snapshot(
@@ -1110,6 +1156,7 @@ def main():
             ("brief_pause_reopen_persisted", brief_pause_reopen_persisted),
             ("brief_pause_all_excluded_rejected", brief_pause_all_excluded_rejected),
             ("brief_pause_edit_and_proceed", brief_pause_edit_and_proceed),
+            ("classify_progress_paints", classify_progress_paints),
             ("run_completes", run_completes),
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
