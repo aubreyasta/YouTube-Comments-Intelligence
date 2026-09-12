@@ -270,10 +270,10 @@ const liveApi = {
       title: "Results",
       subtitle: `${keyMessages.length} Key Messages · ${themeCount} ${themeCount === 1 ? "theme" : "themes"}`,
       transfers: keyMessages.map((m) => ({
-        id: m.metricId, label: m.label, value: m.percent,
+        id: m.metricId, label: m.label, value: m.percent, evidenceCount: m.count,
       })),
       themes: themes.map((m) => ({
-        id: m.metricId, label: m.label, value: m.percent,
+        id: m.metricId, label: m.label, value: m.percent, evidenceCount: m.count,
       })),
       evidence: flatEvidence,
     };
