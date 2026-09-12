@@ -1144,11 +1144,12 @@ def _execute(run_id: str) -> None:
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
               detail=f"{len(themes)} themes")
-        def classify_progress(completed, total):
+        def classify_progress(completed, total, labelled):
             pct = 50 + int(completed / max(total, 1) * 9)
             _push(run_id, "classify",
                   f"Classified batch {completed} of {total}", pct,
-                  detail=f"completed_batches={completed};total_batches={total}")
+                  detail=(f"labelled={labelled};total={len(base_df)};"
+                          f"batch={completed};batches={total}"))
 
         base_df, columns = analyze.classify(
             base_df, themes, classifier_points, cfg,
