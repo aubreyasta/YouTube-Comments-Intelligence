@@ -607,6 +607,17 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
 .bar-fill { height: 100%; background: var(--pink); }
 .bar-fill.dark { background: var(--ink); }
 .bar-fill.dim { background: var(--chev); }
+.bar-split {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  margin-top: 1px; padding: 2px 0; background: none; border: none;
+  font-family: var(--font); font-size: 11.5px; text-align: left; cursor: pointer;
+}
+.bar-split .split-pos,
+.bar-split .split-neg { font-weight: 700; border-bottom: 1.5px dotted currentColor; }
+.bar-split .split-pos { color: var(--ink); }
+.bar-split .split-neg { color: var(--danger); }
+.bar-split .split-base { color: var(--quiet); }
+.bar-split:hover .split-pos, .bar-split:hover .split-neg { color: var(--pink); }
 .method-line { display: flex; gap: 14px; align-items: center; font-size: 11.5px; color: var(--quiet); margin-top: 14px; flex-wrap: wrap; }
 .method-line a { font-weight: 700; }
 
