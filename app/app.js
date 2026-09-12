@@ -2134,20 +2134,27 @@ const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief
 
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
-   Known patterns from adapter.py _push calls:
-     "total=N"            -> { total: N }
-     "N themes"          -> { themes: N }
-     "other_share=X.Y"   -> { otherShare: X.Y }
-   Unparseable returns null; callers show "-". */
+   adapter.py's numeric details are ";"-joined "key=number" pairs, so one
+   parser covers every _push that carries counts:
+     "total=N"                                    -> { total: N }
+     "other_share=X.Y"                            -> { otherShare: X.Y }
+     "labelled=N;total=M;batch=B;batches=T"       -> all four
+   Keys arrive snake_case and are camelCased to match the demo detail
+   objects the same painters read. "N themes" is the one prose exception.
+   Anything else (error strings, artifact paths, caveats) returns null and
+   callers show "-". */
 function parseDetailStr(detail) {
   if (!detail || typeof detail !== "string") return null;
-  const m1 = detail.match(/^total=(\d+)$/i);
-  if (m1) return { total: parseInt(m1[1], 10) };
-  const m2 = detail.match(/^(\d+)\s+themes?$/i);
-  if (m2) return { themes: parseInt(m2[1], 10) };
-  const m3 = detail.match(/other_share=([\d.]+)/i);
-  if (m3) return { otherShare: parseFloat(m3[1]) };
-  return null;
+  const themes = detail.match(/^(\d+)\s+themes?$/i);
+  if (themes) return { themes: parseInt(themes[1], 10) };
+  const out = {};
+  for (const part of detail.split(";")) {
+    const kv = part.match(/^\s*([a-z_]+)=(\d+(?:\.\d+)?)\s*$/i);
+    if (!kv) return null;
+    const key = kv[1].toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    out[key] = kv[2].includes(".") ? parseFloat(kv[2]) : parseInt(kv[2], 10);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 async function renderRun(runId) {

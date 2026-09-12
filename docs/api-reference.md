@@ -450,6 +450,17 @@ Stages:
 | `complete` | 100 | Run complete. |
 | `error` | 0 | Run failed; `detail` carries the exception string. |
 
+`detail` is a free-text string. When it carries counts it is `;`-joined `key=number` pairs, and clients parse it:
+
+| Stage | `detail` | Meaning |
+|---|---|---|
+| `collect` | `total=N` | Comments in the analysis base. |
+| `classify` | `N themes` | Themes discovered. |
+| `classify` | `labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
+| `classify` | `other_share=X.Y` | Percent left in `Other`. |
+
+Any other `detail` is prose and carries no counts.
+
 An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. A terminal run replays one terminal event and closes.
 
 Error: `404` before the stream opens.
