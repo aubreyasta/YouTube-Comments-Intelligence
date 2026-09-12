@@ -55,7 +55,7 @@ _RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
               "emotion", "report", "complete", "error"}
 _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order"}
 _RUN_SNAPSHOT_KEYS = {
-    "id", "sessionId", "status", "stage", "pct", "message",
+    "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause",
 }
 
