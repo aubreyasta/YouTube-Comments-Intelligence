@@ -50,7 +50,7 @@ db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})
 
 _RUN_SNAPSHOT_KEYS = {
-    "id", "sessionId", "status", "stage", "pct", "message",
+    "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause", "totalComments",
 }
 
