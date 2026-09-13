@@ -1,6 +1,15 @@
 /* Resonance local demo — locked pink visual language from
    "UI mockups for backend flows (1)/Resonance MVP Screens.dc.html". */
 
+/* Self-hosted Plus Jakarta Sans (OFL, see fonts/OFL.txt), latin variable build. */
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-latin-wght.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --ink: #1A1A2E;
   --body: #3D3C52;
@@ -129,10 +138,10 @@ a.sb-item:hover { color: var(--pink); background: var(--pink-tint); }
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  font-family: var(--font); font-size: 13px; font-weight: 600;
+  font-family: var(--font); font-size: 13px; font-weight: 600; line-height: 1.2;
   padding: 9px 16px; border-radius: var(--radius-btn);
   border: 1px solid var(--border); background: #fff; color: var(--ink);
-  cursor: pointer; min-height: 36px; text-decoration: none;
+  cursor: pointer; min-height: 34px; text-decoration: none;
 }
 a.btn:hover { text-decoration: none; }
 .btn.secondary:hover { border-color: var(--pink); color: var(--pink); }
@@ -141,7 +150,7 @@ a.btn:hover { text-decoration: none; }
 }
 .btn.primary:hover { background: var(--pink-hover); border-color: var(--pink-hover); color: #fff; }
 .btn.primary:focus-visible { outline-color: #fff; box-shadow: 0 0 0 3px var(--pink); }
-.btn.lg { font-size: 13.5px; padding: 11px 20px; min-height: 42px; }
+.btn.lg { font-size: 13.5px; padding: 11px 20px; min-height: 39px; }
 .btn:disabled, .btn[aria-disabled="true"] {
   background: var(--surface); border-color: var(--border);
   color: var(--disabled); cursor: not-allowed;
@@ -328,6 +337,8 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .crumb a:hover { color: var(--pink); text-decoration: none; }
 .crumb .sep { color: var(--chev); }
 .crumb .here { font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.session-title .name { font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crumb-back {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 13.5px; font-weight: 600; color: var(--ink);
@@ -459,6 +470,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 /* ---------- Confirmation dialog (reuses .modal-backdrop / .modal) ---------- */
 .confirm-modal { max-width: 440px; }
 .confirm-body { flex-direction: column; align-items: stretch; gap: 18px; padding: 22px; background: #fff; }
+.confirm-title { margin: 0 0 -10px; font-size: 16px; font-weight: 800; color: var(--ink); }
 .confirm-msg { margin: 0; font-size: 14px; color: var(--ink); line-height: 1.5; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 

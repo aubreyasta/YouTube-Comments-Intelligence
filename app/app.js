@@ -664,9 +664,8 @@ const demoApi = {
       pct: 0, message: "Queued", briefPointIds: [], error: null,
       skipPause: !!skipPause, createdAt: nowIso(),
     };
-    // Fresh brief points per run, seeded from the campaign's assets/brief.
-    const campaign = store.campaigns.get(s.campaignIds[0]);
-    const pointCount = campaign && campaign.assetIds.length ? 5 : 4;
+    // Fresh brief points per run, one per fixture point.
+    const pointCount = FIXTURE_POINTS.length;
     for (let i = 0; i < pointCount; i++) {
       const fx = FIXTURE_POINTS[i];
       const p = {
@@ -1088,6 +1087,18 @@ function closeModal() {
 
 function setTopbar(html) { topbar.innerHTML = html; }
 
+/* Session screens: the Session name at 14px/700 plus a status badge on the
+   left, caller-built controls on the right. badgeHtml and rightHtml are
+   trusted markup; name is escaped here. */
+function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
+  setTopbar(`
+    <div class="topbar-left">
+      <a class="crumb-back" href="#/sessions" aria-label="Back to Sessions">${ICONS.chevL}</a>
+      <div class="session-title"><span class="name">${esc(name)}</span>${badgeHtml}</div>
+    </div>
+    <div class="topbar-right">${rightHtml}</div>`);
+}
+
 function setSidebarActive(which) {
   for (const id of ["sb-sessions", "sb-files"]) {
     document.getElementById(id).classList.toggle("active", id === "sb-" + which);
@@ -1458,18 +1469,19 @@ async function renderNewSession() {
    Reuses the existing modal/overlay foundation minimally: focus trap, Escape,
    and focus restoration all come from openModal/closeModal. This wraps that
    with a Continue/Cancel choice instead of a single close button. */
-function openConfirm(message, onContinue) {
+function openConfirm(message, onContinue, { title = "", confirmLabel = "Continue" } = {}) {
   closeModal();
   const prevFocus = document.activeElement;
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
-    <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm">
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" ${title ? `aria-labelledby="confirm-title"` : `aria-label="Confirm"`}>
       <div class="modal-body confirm-body">
+        ${title ? `<h2 class="confirm-title" id="confirm-title">${esc(title)}</h2>` : ""}
         <p class="confirm-msg">${esc(message)}</p>
         <div class="confirm-actions">
           <button class="btn secondary" type="button" data-confirm-cancel>Cancel</button>
-          <button class="btn primary" type="button" data-confirm-continue>Continue</button>
+          <button class="btn primary" type="button" data-confirm-continue>${esc(confirmLabel)}</button>
         </div>
       </div>
     </div>`;

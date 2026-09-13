@@ -10,6 +10,7 @@ import binascii
 import csv
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -1607,6 +1608,8 @@ def download_artifact(run_id: str, artifact_id: str):
 # ---------------------------------------------------------------------------
 
 _APP_DIR = Path(__file__).parent / "app"
+# Windows' mimetypes registry lacks .woff2, so StaticFiles would send octet-stream.
+mimetypes.add_type("font/woff2", ".woff2")
 if _APP_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_APP_DIR), html=True), name="static")
 
