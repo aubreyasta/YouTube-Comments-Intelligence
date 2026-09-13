@@ -324,6 +324,56 @@ def test_init_migrates_pre_total_comments_database():
           "runs.total_comments INTEGER, existing row reads NULL")
 
 
+def test_init_migrates_pre_source_brief_points():
+    """A database whose brief_points table predates `source` must gain
+    `source TEXT NOT NULL DEFAULT 'input'` on db.init(), old rows reading
+    'input'. A fresh database gets the same column shape."""
+    tmp_dir = tempfile.mkdtemp()
+    path = __import__("pathlib").Path(tmp_dir) / "app.db"
+    saved_path = db._DB_PATH
+    db._DB_PATH = path
+    try:
+        pre_conn = sqlite3.connect(path)
+        pre_conn.execute(
+            "CREATE TABLE brief_points (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, "
+            "campaign_id TEXT NOT NULL, video_id TEXT, label TEXT NOT NULL, "
+            "description TEXT NOT NULL, approved INTEGER NOT NULL DEFAULT 0, "
+            "edited INTEGER NOT NULL DEFAULT 0, included INTEGER NOT NULL DEFAULT 1, "
+            "sort_order INTEGER NOT NULL DEFAULT 0)"
+        )
+        pre_conn.execute(
+            "INSERT INTO brief_points (id, run_id, campaign_id, label, description) "
+            "VALUES ('bp1', 'r1', 'c1', 'Old', 'old row')")
+        pre_conn.commit()
+        pre_conn.close()
+
+        db.init()
+        db.init()  # idempotent
+
+        conn = db.get_conn()
+        try:
+            cols = {row[1]: row for row in conn.execute("PRAGMA table_info(brief_points)")}
+            row = conn.execute("SELECT source FROM brief_points WHERE id = 'bp1'").fetchone()
+        finally:
+            conn.close()
+        assert "source" in cols, "db.init() did not add brief_points.source"
+        assert cols["source"][2] == "TEXT", cols["source"][2]
+        assert cols["source"][3] == 1, "brief_points.source is not NOT NULL"
+        assert cols["source"][4] == "'input'", cols["source"][4]
+        assert row["source"] == "input", row["source"]
+
+        fresh = _fresh_db()
+        try:
+            fresh_cols = {row[1]: row for row in fresh.execute("PRAGMA table_info(brief_points)")}
+        finally:
+            fresh.close()
+        assert fresh_cols["source"][4] == "'input'", fresh_cols.get("source")
+    finally:
+        db._DB_PATH = saved_path
+    print("  ok  db.init() adds brief_points.source TEXT NOT NULL DEFAULT 'input' "
+          "to an old database (old rows read 'input') and to a fresh one")
+
+
 def test_key_messages_orphan_session_rejected():
     conn = _fresh_db()
     try:
@@ -350,6 +400,7 @@ if __name__ == "__main__":
         test_init_migrates_pre_skip_pause_database,
         test_init_idempotent_on_skip_pause_column,
         test_init_migrates_pre_total_comments_database,
+        test_init_migrates_pre_source_brief_points,
         test_key_messages_orphan_session_rejected,
     ]
     failed = 0

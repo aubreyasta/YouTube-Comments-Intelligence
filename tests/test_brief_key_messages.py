@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipeline import brief, llm
 from pipeline.config_types import PipelineConfig
 
-_KEY_MESSAGE_KEYS = {"id", "label", "description", "included", "order", "edited"}
+_KEY_MESSAGE_KEYS = {"id", "label", "description", "included", "order", "edited", "source"}
 
 
 def make_cfg():
@@ -89,7 +89,9 @@ def test_draft_from_inputs_excludes_transcripts():
     assert result[0]["included"] is True
     assert result[0]["order"] == 0
     assert result[0]["edited"] is False
-    print("  ok  draft_from_inputs excludes transcripts, returns KeyMessage shape")
+    assert result[0]["source"] == "input", result[0]["source"]
+    print("  ok  draft_from_inputs excludes transcripts, returns KeyMessage shape "
+          "with source 'input'")
 
 
 def test_draft_from_inputs_empty_source_yields_empty_list():
@@ -123,8 +125,64 @@ def test_reconcile_empty_existing_drafts_from_transcripts():
     assert set(result[0].keys()) == _KEY_MESSAGE_KEYS, result[0].keys()
     assert result[0]["label"] == "Durability"
     assert result[0]["order"] == 0
+    assert result[0]["source"] == "transcript", result[0]["source"]
     print("  ok  reconcile with an empty existing list drafts the initial list "
-          "from transcripts")
+          "from transcripts, source 'transcript'")
+
+
+def test_reconcile_source_rules():
+    def fake_ask_json(prompt, cfg, **kwargs):
+        return {
+            "summary": "s",
+            "points": [
+                {"label": "lower PRICE", "video_id": "v1",
+                 "description": "Fresh transcript wording."},
+                {"label": "Durability", "video_id": "v1",
+                 "description": "Same words."},
+                {"label": "Edited idea", "video_id": "v1",
+                 "description": "Transcript would change this."},
+                {"label": "Kept sharpened", "video_id": "v1",
+                 "description": "Already sharpened."},
+                {"label": "Transcript only", "video_id": "v1",
+                 "description": "Only in the video."},
+            ],
+        }
+
+    existing = [
+        {"id": "sharp", "label": "Lower price", "description": "Old wording.",
+         "included": True, "order": 0, "edited": False},
+        {"id": "same", "label": "Durability", "description": "Same words.",
+         "included": True, "order": 1, "edited": False},
+        {"id": "edited", "label": "Edited idea", "description": "Mine.",
+         "included": True, "order": 2, "edited": True},
+        {"id": "unmatched", "label": "Not in video", "description": "d",
+         "included": True, "order": 3, "edited": False},
+        {"id": "kept", "label": "Kept sharpened", "description": "Already sharpened.",
+         "included": True, "order": 4, "edited": False, "source": "sharpened"},
+    ]
+
+    restore = _patch(monkeypatch_ask_json=fake_ask_json)
+    try:
+        result = brief.reconcile(existing, make_meta_df(), make_cfg(),
+                                 id_factory=lambda: "new-id")
+    finally:
+        restore()
+
+    for m in result:
+        assert set(m.keys()) == _KEY_MESSAGE_KEYS, m.keys()
+    sources = {m["id"]: m["source"] for m in result}
+    assert sources == {
+        "sharp": "sharpened",
+        "same": "input",
+        "edited": "input",
+        "unmatched": "input",
+        "kept": "sharpened",
+        "new-id": "transcript",
+    }, sources
+    assert [m["id"] for m in result][-1] == "new-id"
+    print("  ok  reconcile source: changed description on an unedited match is "
+          "'sharpened'; identical, edited and unmatched keep their source or "
+          "'input'; transcript-only appends are 'transcript'")
 
 
 def test_reconcile_preserves_edited_entry_and_stable_id_on_match():
@@ -195,6 +253,7 @@ if __name__ == "__main__":
         test_draft_from_inputs_empty_source_yields_empty_list,
         test_reconcile_empty_existing_drafts_from_transcripts,
         test_reconcile_preserves_edited_entry_and_stable_id_on_match,
+        test_reconcile_source_rules,
         test_reconcile_no_source_yields_empty_list,
     ]
     failed = 0

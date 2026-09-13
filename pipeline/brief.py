@@ -18,7 +18,7 @@ Session-level Key Messages the setup screen shows before any run:
   transcripts at run time, preserving stable ids and manual edits.
 
 Both return plain KeyMessage-shaped dicts (id, label, description,
-included, order, edited); DB storage is the caller's job.
+included, order, edited, source); DB storage is the caller's job.
 """
 
 import uuid
@@ -151,8 +151,11 @@ def run(meta_df, cfg: PipelineConfig, context_map=None,
 # `run()` above produces (grounded_markdown, points) keyed by group/video_id,
 # for the per-comment classification step. The two entry points below
 # produce the separate KeyMessage shape the setup screen stores and edits:
-# {id, label, description, included, order, edited}. Neither touches the
-# DB; the caller (server.py, later) is responsible for storage.
+# {id, label, description, included, order, edited, source}. Neither
+# touches the DB; the caller (server.py, later) is responsible for storage.
+# source is input (from User Inputs), sharpened (an input message whose
+# description reconcile() refreshed from transcripts), or transcript
+# (derived from transcripts alone).
 
 INPUTS_PROMPT = """Read the material a campaign owner supplied about their \
 own campaign (documents, article text, and any image observations below).
@@ -181,7 +184,7 @@ Give 3 to 8 points, ordered by how central they are."""
 
 
 def _key_message(label, description, *, included=True, order=0, edited=False,
-                 id_factory=uuid.uuid4):
+                 source="input", id_factory=uuid.uuid4):
     return {
         "id": str(id_factory()),
         "label": label,
@@ -189,6 +192,7 @@ def _key_message(label, description, *, included=True, order=0, edited=False,
         "included": included,
         "order": order,
         "edited": edited,
+        "source": source,
     }
 
 
@@ -243,6 +247,10 @@ def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
     with no transcript match are kept as-is (nothing here re-grounds or
     drops a message the model didn't happen to re-derive).
 
+    source: an unedited match whose description actually changed becomes
+    `sharpened`; every other existing entry keeps its source (default
+    `input`); appended transcript-only entries are `transcript`.
+
     If `existing` is empty, the transcript-derived points become the
     initial list. If there is neither an existing list nor any
     transcript-derived points, returns [].
@@ -276,9 +284,12 @@ def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
     reconciled = []
     for entry in existing:
         entry = dict(entry)
+        entry.setdefault("source", "input")
         if not entry.get("edited"):
             match = derived_by_key.get(str(entry.get("label", "")).strip().lower())
             if match is not None:
+                if match["description"] != entry.get("description"):
+                    entry["source"] = "sharpened"
                 entry["description"] = match["description"]
                 matched_keys.add(str(entry.get("label", "")).strip().lower())
         reconciled.append(entry)
@@ -291,7 +302,8 @@ def reconcile(existing, meta_df, cfg: PipelineConfig, context_map=None,
         }:
             continue
         reconciled.append(_key_message(item["label"], item["description"],
-                                       order=next_order, id_factory=id_factory))
+                                       order=next_order, source="transcript",
+                                       id_factory=id_factory))
         next_order += 1
 
     for order, entry in enumerate(reconciled):
