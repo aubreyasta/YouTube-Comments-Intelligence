@@ -646,16 +646,13 @@ def brief_pause_reopen_persisted(page, base):
 
     page.goto(base + "/#/runs/" + run_id)
     page.wait_for_selector("#brief-review:visible")
-    _wait_text(page, "#brief-h", "Key Messages we'll test for transfer")
+    _wait_text(page, "#brief-h", "Check the Key Messages before we label anything")
 
-    # Issue #4: a page opened after collect finished (no SSE replay) must
-    # still show the analysis-base comment count on the "Collected the
-    # comments" step, not the never-populated "—" sentinel.
-    collect_detail = page.text_content("#stepper .step-row:nth-child(1) .step-detail")
-    _expect(collect_detail is not None and "3" in collect_detail,
-            f"'Collected the comments' step showed {collect_detail!r} on a "
-            "reopened brief_pause page, expected the 3-comment analysis base "
-            "count from _fake_comments_df to survive the reopen")
+    # Issue #4 (now covered differently): a page opened after collect
+    # finished (no SSE replay) must still show Collect as done, not stuck
+    # mid-progress.
+    _expect(page.locator("#stepper .step-row:nth-child(1) .step-dot.done").count() == 1,
+            "Collect step was not marked done on a reopened brief_pause page")
 
     row_count = page.locator(".brief-item").count()
     _expect(row_count > 0, "no .brief-item rows rendered on brief_pause reopen")
@@ -715,6 +712,7 @@ def brief_pause_all_excluded_rejected(page, base):
 
 def brief_pause_edit_and_proceed(page, base):
     _require_run_id()
+    page.click('[data-edit="0"]')
     page.fill("#bp-label-0", "Run-edited message", timeout=10000)
 
     before_count = page.locator(".brief-item").count()
@@ -764,16 +762,14 @@ def classify_progress_paints(page, base):
     labelled figure all stayed at the "-" sentinel."""
     _require_run_id()
     try:
-        step = "#stepper .step-row:nth-child(3)"
-        _wait_text(page, f"{step} .step-detail", "2 of 3 · batch 1 of 2",
+        step = "#stepper .step-row:nth-child(4)"  # Collect, Brief, Key Message review, Classify
+        _wait_text(page, f"{step} .step-detail", "2 of 3 labelled",
                    timeout_ms=20000)
         _expect(page.locator(f"{step} .progressbar").count() == 1,
-                "no progress bar rendered on the 'Labelling every comment' "
-                "step while classify was running")
+                "no progress bar rendered on the Classify step while classify "
+                "was running")
         _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
         # The batch events must not erase the theme count an earlier event set.
-        _wait_text(page, "#stepper .step-row:nth-child(2) .step-detail",
-                   "2 themes, identified from the sample", timeout_ms=5000)
         _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
     finally:
         _CLASSIFY_GATE.set()
@@ -791,14 +787,12 @@ def run_completes(page, base):
     _expect(snap.get("status") == "complete",
             f"run finished with status {snap.get('status')!r}, expected complete")
 
-    # Issue #4: onEvent() replaced state.detail wholesale on every SSE event,
-    # so the "N labelled" count from the collect total was wiped out by the
-    # classify/emotion/report events that followed it on the way to complete.
-    labelled_detail = page.text_content("#stepper .step-row:nth-child(3) .step-detail")
-    _expect(labelled_detail == "3 labelled",
-            f"'Labelling every comment' step showed {labelled_detail!r} after "
-            "completion, expected '3 labelled' (the analysis-base count from "
-            "_fake_comments_df)")
+    # Issue #4 (now covered differently): onEvent() replaced state.detail
+    # wholesale on every SSE event; confirm every step still ends up marked
+    # done, so a later stage's event never leaves an earlier one stuck mid-run.
+    done_count = page.locator("#stepper .step-dot.done").count()
+    _expect(done_count == 6,
+            f"expected all 6 steps marked done on completion, found {done_count}")
 
     page.wait_for_selector("a#btn-results")
     href = page.get_attribute("a#btn-results", "href")

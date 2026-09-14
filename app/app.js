@@ -115,10 +115,10 @@ function demoVideoMeta(videoId, kind) {
 }
 
 const FIXTURE_POINTS = [
-  { label: "Authentic green chili flavor", description: "The relaunch tastes like the original green chili recipe." },
-  { label: "Bolder, upgraded taste", description: "Spicier and more savoury than the flavour people remember." },
-  { label: "Real green chili", description: "Made with actual green chili, not a synthetic flavouring." },
-  { label: "Jumbo Size Variant", description: "The relaunch arrives in a larger jumbo portion." },
+  { label: "Authentic green chili flavor", description: "The relaunch tastes like the original green chili recipe.", source: "input" },
+  { label: "Bolder, upgraded taste", description: "Spicier and more savoury than the flavour people remember.", source: "sharpened" },
+  { label: "Real green chili", description: "Made with actual green chili, not a synthetic flavouring.", source: "input" },
+  { label: "Jumbo Size Variant", description: "The relaunch arrives in a larger jumbo portion.", source: "transcript" },
 ];
 
 /* ============================== Run engine ============================== */
@@ -127,10 +127,10 @@ const STAGE_MESSAGES = {
   connecting: "Connecting to YouTube",
   collect: "Collecting the comments",
   brief: "Reading the brief and transcripts",
-  brief_pause: "Waiting for you to confirm the ideas",
+  brief_pause: "Waiting for you to confirm the Key Messages",
   classify: "Labelling every comment",
   emotion: "Double-checking the leftovers",
-  report: "Writing your note",
+  report: "Writing the report",
   complete: "Complete",
   failed: "Failed",
 };
@@ -330,6 +330,7 @@ function startEngineSchedule(engine) {
           { collected, total: engine.counts.total, videos: engine.counts.videos });
         if (collected >= engine.counts.total) {
           engine.clearTimers();
+          run.totalComments = engine.counts.total;
           engine.after(500, () => go("brief"));
         }
       });
@@ -662,7 +663,7 @@ const demoApi = {
     const run = {
       id: uid(), sessionId, status: "queued", stage: "connecting",
       pct: 0, message: "Queued", briefPointIds: [], error: null,
-      skipPause: !!skipPause, createdAt: nowIso(),
+      skipPause: !!skipPause, createdAt: nowIso(), totalComments: null,
     };
     // Fresh brief points per run, one per fixture point.
     const pointCount = FIXTURE_POINTS.length;
@@ -670,7 +671,7 @@ const demoApi = {
       const fx = FIXTURE_POINTS[i];
       const p = {
         id: uid(), runId: run.id, label: fx.label, description: fx.description,
-        included: true, order: i + 1,
+        included: true, order: i + 1, source: fx.source,
       };
       store.briefPoints.set(p.id, p);
       run.briefPointIds.push(p.id);
@@ -753,14 +754,17 @@ const demoApi = {
       const description = (p.description || "").trim();
       if (description.length > 500) throw demoError("validation", "Description is limited to 500 characters.", "messages");
       let id = p.id;
+      let source;
       if (id != null) {
         if (!knownIds.has(id)) throw demoError("validation", "Unknown Key Message id.", "messages");
         if (seenIds.has(id)) throw demoError("validation", "Duplicate Key Message id.", "messages");
         seenIds.add(id);
+        source = (store.briefPoints.get(id) || {}).source || "input";
       } else {
         id = uid();
+        source = "input";
       }
-      kept.push({ id, runId, label, description, included: !!p.included });
+      kept.push({ id, runId, label, description, included: !!p.included, source });
     }
     if (!kept.some((p) => p.included)) {
       throw demoError("validation", "Include at least one Key Message before continuing.", "messages");
@@ -1006,6 +1010,7 @@ const ICONS = {
   starLg: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>',
   folder: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h6l2 2.2h10V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"></path></svg>',
   link: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.2"></path><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7l1.3-1.2"></path></svg>',
+  pencil: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3l4 4L8.5 17.5 4 18.5l1-4.5z"></path></svg>',
   search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>',
   check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
   upArr: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>',
@@ -2140,14 +2145,16 @@ function assetRowHtml(a, live) {
 
 /* ---------- Run ---------- */
 const STEP_DEFS = [
-  { key: "collect", label: "Collected the comments", pending: "Fetching every comment and reply" },
-  { key: "themes", label: "Found what people are talking about", pending: "Reading a sample to find the themes" },
-  { key: "classify", label: "Labelling every comment", pending: "Applying the codebook to the full set" },
-  { key: "emotion", label: "Double-checking the leftovers", pending: "If too much lands in \"Other\", we look for missed themes" },
-  { key: "report", label: "Writing your note", pending: "Two charts, the verdicts, and the quotes behind them" },
+  { title: "Collect", detail: "comments and transcripts" },
+  { title: "Brief", detail: "read against the transcripts" },
+  { title: "Key Message review", detail: "" },
+  { title: "Classify", detail: "Theme book, then every comment" },
+  { title: "Emotion", detail: "Sentiment and Emotion, every comment" },
+  { title: "Report", detail: "PDF, CSVs, results screen" },
 ];
 // error -> -2 (live terminal failure), running -> -1 (live pre-collect stage).
-const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, themes: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
+// Doubles as the monotonic rank used to reject stale buffered SSE events.
+const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 1, brief_pause: 2, themes: 3, classify: 3, emotion: 4, report: 5, complete: 6, failed: -2, error: -2 };
 
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
@@ -2184,23 +2191,42 @@ async function renderRun(runId) {
     : store.campaigns.get(session.campaignIds[0]);
   const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
-        <span class="badge" id="run-badge">${run.status === "failed" ? "Failed" : run.status === "complete" ? "Complete" : "Running"}</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo \u2014 a run always finishes.</span>'}
-    </div>`);
+  // Terminal mapping for the initial snapshot: failed/error is failed; complete
+  // is complete; brief_pause opens review immediately with persisted order.
+  const initialStage = run.status === "failed" ? "failed"
+    : run.stage === "error" ? "error"
+    : run.stage;
+  let state = {
+    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
+    failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
+    completed: initialStage === "complete",
+  };
+
+  function badgeText() {
+    if (state.failed) return "Failed";
+    if (state.completed) return "Complete";
+    if (state.stage === "brief_pause") return "Waiting for you";
+    return "Running";
+  }
+  function topbarRightHtml() {
+    if (state.completed || state.failed) return "";
+    const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
+    const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
+    return btn + note;
+  }
+  function paintTopbar() {
+    sessionTopbar({
+      name: session.name,
+      badgeHtml: `<span class="badge" id="run-badge">${esc(badgeText())}</span>`,
+      rightHtml: topbarRightHtml(),
+    });
+  }
+  paintTopbar();
 
   view.innerHTML = `
   <div class="run-layout">
     <div class="run-main">
-      <div style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
+      <div id="run-header" style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
         <h1 class="run-title" id="run-title">Getting ready\u2026</h1>
         <p class="run-sub" id="run-sub">${live ? "Connecting to the server\u2026" : "This demo runs on fixture data in about half a minute."}</p>
       </div>
@@ -2228,33 +2254,21 @@ async function renderRun(runId) {
           <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
         </div>
       </div>
-      ${live
-        ? `<div class="notice pink">The full picture lands with the note.</div>`
-        : `<div class="notice pink"><strong>Early read.</strong> Street-football nostalgia tends to lead. The full picture lands with the note.</div>`}
+      <p class="run-reliability" id="run-reliability"></p>
     </div>
   </div>`;
 
+  const layoutEl = view.querySelector(".run-layout");
   const stepperEl = document.getElementById("stepper");
   const titleEl = document.getElementById("run-title");
   const subEl = document.getElementById("run-sub");
   const bannerEl = document.getElementById("run-banner");
   const briefEl = document.getElementById("brief-review");
-  const badgeEl = document.getElementById("run-badge");
   const cntLabelled = document.getElementById("cnt-labelled");
   const cntThemes = document.getElementById("cnt-themes");
   const cntOther = document.getElementById("cnt-other");
+  const reliabilityEl = document.getElementById("run-reliability");
 
-  // Terminal mapping for the initial snapshot: failed/error is failed; complete
-  // is complete; brief_pause opens review immediately with persisted order.
-  // STAGE_TO_STEP gives a monotonic rank used to reject stale buffered SSE below.
-  const initialStage = run.status === "failed" ? "failed"
-    : run.stage === "error" ? "error"
-    : run.stage;
-  let state = {
-    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
-    failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
-    completed: initialStage === "complete",
-  };
   let currentStep = STAGE_TO_STEP[initialStage] != null ? Math.max(STAGE_TO_STEP[initialStage], -1) : -1;
   // Authoritative-stage floor: a fresh initial brief_pause/complete/failed/error
   // snapshot can never be regressed by a stale buffered SSE event. For other
@@ -2267,31 +2281,12 @@ async function renderRun(runId) {
   briefPointsSnapshot = briefPointsSnapshot.slice().sort((a, b) => a.order - b.order);
 
   // paintSteps() rebuilds every row on each progress tick, so the CSS
-  // insertion animation would replay on all five. Mark only the row whose
+  // insertion animation would replay on all six. Mark only the row whose
   // index just became currentStep, and only on that first paint.
   let paintedStep = currentStep;
 
   function paintSteps() {
     const d = state.detail || {};
-    const details = [
-      state.stage === "collect" || currentStep > 0
-        ? (live && totalComments() === 0
-            ? "—"
-            : `${fmtNum(live ? totalComments() : (d.collected || (currentStep > 0 ? totalComments() : 0)))} across ${d.videos || videoCount()} videos, replies included`)
-        : STEP_DEFS[0].pending,
-      currentStep > 1
-        ? (d.themes ? d.themes + " themes, identified from the sample" : (live ? "Themes identified from the sample" : "7 themes, drawn from a 640-comment read"))
-        : STEP_DEFS[1].pending,
-      state.stage === "classify"
-        ? (live && d.labelled == null
-            ? "—"
-            : `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total || totalComments())} · batch ${d.batch || 1} of ${d.batches || 1}`)
-        : currentStep > 2 ? `${fmtNum(totalComments())} labelled` : STEP_DEFS[2].pending,
-      currentStep > 3
-        ? (d.otherShare != null ? `"Other" held at ${d.otherShare.toFixed(1)}%` : (live ? 'Theme list holds' : 'Theme list holds \u2014 "Other" stayed low'))
-        : STEP_DEFS[3].pending,
-      currentStep > 4 ? "Note written" : STEP_DEFS[4].pending,
-    ];
     stepperEl.innerHTML = STEP_DEFS.map((s, i) => {
       const done = currentStep > i || state.completed;
       const cur = !state.completed && currentStep === i && !state.failed;
@@ -2299,44 +2294,50 @@ async function renderRun(runId) {
         ? `<div class="step-dot done">${ICONS.check}</div>`
         : cur ? `<div class="step-dot current" role="img" aria-label="In progress"></div>` : `<div class="step-dot"></div>`;
       const line = i < STEP_DEFS.length - 1 ? `<div class="step-line"></div>` : "";
-      const bar = cur && state.stage === "classify" && d.total != null
-        ? `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`
-        : "";
+      let detail = s.detail;
+      let extra = "";
+      let bar = "";
+      if (i === 2) { // Key Message review
+        if (run.skipPause) detail = "Skipped";
+        else if (done) {
+          const total = briefPointsSnapshot.length;
+          const included = briefPointsSnapshot.filter((p) => p.included).length;
+          detail = total ? `You confirmed ${included} of ${total}` : "";
+        } else detail = "";
+      } else if (i === 3 && state.stage === "classify" && d.total != null) { // Classify, active
+        extra = `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total)} labelled`;
+        bar = `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`;
+      } else if (i === 5) { // Report
+        extra = "report.pdf, four small CSVs, and comments.csv";
+      }
+      const name = detail ? `${s.title} - ${detail}` : s.title;
       return `
       <div class="step-row${i === currentStep && currentStep !== paintedStep ? " advanced" : ""}">
         <div class="step-glyph">${glyph}${line}</div>
         <div class="step-body">
-          <div class="step-name ${done || cur ? "" : "pending"}">${s.label}</div>
-          <div class="step-detail ${done || cur ? "" : "pending"}">${details[i]}</div>
+          <div class="step-name ${done || cur ? "" : "pending"}">${esc(name)}</div>
+          ${extra ? `<div class="step-detail ${done || cur ? "" : "pending"}">${esc(extra)}</div>` : ""}
           ${bar}
         </div>
       </div>`;
     }).join("");
     paintedStep = currentStep;
   }
-
-  function totalComments() {
-    return (state.detail && state.detail.total) || initialTotal;
+  function paintReliability() {
+    const total = totalComments();
+    let text = "Under about 100 comments the percentages here aren't reliable.";
+    if (total != null) {
+      text += total >= 100 ? " This Session is well past that." : ` This Session has ${total}, so read them as directional.`;
+    }
+    reliabilityEl.textContent = text;
   }
-  function videoCount() {
-    if (state.detail && state.detail.videos) return state.detail.videos;
-    return campaign ? (campaign.videoIds ? campaign.videoIds.length : (campaign.videos ? campaign.videos.length : 1)) : 1;
-  }
-
-  // Live: the run snapshot's persisted total_comments once collect has
-  // finished (survives a reopen with no SSE replay); 0 is the sentinel
-  // before that, so totalComments() falls through to detail.total.
-  // Demo: the real sum of the added videos' comment counts, with no floor and no
-  // placeholder, so the progress screen never shows a number nothing counted.
-  const initialTotal = live ? (run.totalComments || 0) : (campaign
-    ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0)
-    : 0);
 
   function paintHeader() {
+    layoutEl.classList.toggle("reviewing", state.stage === "brief_pause");
+    paintTopbar();
     if (state.failed) {
       titleEl.textContent = "This run stopped";
       subEl.textContent = "Nothing was written. Your campaign setup is untouched.";
-      badgeEl.textContent = "Failed";
       bannerEl.innerHTML = `
         <div class="banner error" role="alert">
           <div style="flex:1">${esc(state.failed)}</div>
@@ -2360,13 +2361,12 @@ async function renderRun(runId) {
         }
       });
     } else if (state.completed) {
-      titleEl.textContent = "Your note is ready";
-      subEl.textContent = "Two charts, the written read, and the comments behind every number.";
-      badgeEl.textContent = "Complete";
+      titleEl.textContent = "Results are ready";
+      subEl.textContent = "Every theme, the sentiment, and the comments behind every number.";
       bannerEl.innerHTML = `
         <div class="banner warn" role="status">
           <div style="flex:1">Run complete.</div>
-          <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open the strategy note</a>
+          <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open results</a>
         </div>`;
     } else if (state.disconnected) {
       titleEl.textContent = "Reconnecting\u2026";
@@ -2377,23 +2377,25 @@ async function renderRun(runId) {
           <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
         </div>`;
     } else {
+      const total = totalComments();
+      const labelling = total != null ? `Labelling ${fmtNum(total)} comments` : "Labelling comments";
       const msg = {
-        connecting: "Connecting\u2026", running: "Connecting\u2026",
-        collect: "Reading " + fmtNum(totalComments()) + " comments",
-        brief: "Reading the brief\u2026", brief_pause: "Confirm the ideas before we label",
-        themes: "Finding what people are talking about",
-        classify: "Reading " + fmtNum(totalComments()) + " comments",
-        emotion: "Reading " + fmtNum(totalComments()) + " comments",
-        report: "Reading " + fmtNum(totalComments()) + " comments",
-      }[state.stage] || "Working\u2026";
+        connecting: "Starting the run", running: "Starting the run",
+        collect: "Collecting comments and transcripts",
+        brief: "Reading the brief against the transcripts",
+        brief_pause: "Confirm the Key Messages before we label",
+        themes: labelling,
+        classify: labelling,
+        emotion: "Reading Sentiment and Emotion",
+        report: "Writing the report",
+      }[state.stage] || "Starting the run";
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
-        : live
-          ? "You can leave the page - the analysis runs on the server."
-          : "You can leave the page - in this demo the run finishes in under a minute.";
+        : "You can leave this page - the Session list will show the same status when you're back.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }
+    paintReliability();
   }
 
   // brief_pause paints twice when it has to. The first paint is synchronous,
@@ -2429,42 +2431,64 @@ async function renderRun(runId) {
     briefEl.hidden = false;
     let saving = false;
     let focusedField = null; // { i, f } of the control focused when Save was pressed
+    const expanded = new Set(); // row indices currently showing their edit panel
+
+    function swapExpanded(a, b) {
+      const ea = expanded.has(a), eb = expanded.has(b);
+      expanded.delete(a); expanded.delete(b);
+      if (ea) expanded.add(b);
+      if (eb) expanded.add(a);
+    }
+    function reindexAfterDelete(delIdx) {
+      const next = new Set();
+      expanded.forEach((idx) => {
+        if (idx < delIdx) next.add(idx);
+        else if (idx > delIdx) next.add(idx - 1);
+      });
+      expanded.clear();
+      next.forEach((v) => expanded.add(v));
+    }
 
     function paint() {
+      const includedCount = points.filter((p) => p.included).length;
       briefEl.innerHTML = `
-      <section class="card" aria-labelledby="brief-h" style="border-color:var(--pink-border);display:flex;flex-direction:column;gap:14px" aria-busy="${saving}">
+      <section class="card brief-review-card" aria-labelledby="brief-h" aria-busy="${saving}">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <h2 class="panel-title" id="brief-h" style="font-size:16px">Key Messages we'll test for transfer</h2>
-          <div class="panel-note">Edit, reorder, drop or add - these are what we look for in the comments. Nothing is saved until you confirm.</div>
+          <h2 class="brief-review-h" id="brief-h" tabindex="-1">Check the Key Messages before we label anything</h2>
+          <div class="panel-note">These came from your brief and the transcripts. Confirm them, or edit, reorder, drop, or add one - nothing is saved until you confirm.</div>
         </div>
         <div class="brief-list">
           ${points.map((p, i) => `
           <div class="brief-item ${p.included ? "" : "excluded"}" data-idx="${i}">
-            <div class="top">
-              <div class="fields">
-                <label class="sr-only" for="bp-label-${i}">Key Message ${i + 1} label</label>
-                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" maxlength="120" value="${esc(p.label)}" ${saving ? "disabled" : ""}>
-                <label class="sr-only" for="bp-desc-${i}">Key Message ${i + 1} description</label>
-                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" maxlength="500" rows="2" ${saving ? "disabled" : ""}>${esc(p.description)}</textarea>
-              </div>
+            <div class="row-top">
+              <span class="bp-num">${i + 1}</span>
+              <span class="bp-label">${esc(p.label || "Untitled Key Message")}</span>
+              ${p.source === "sharpened" ? `<span class="bp-badge">SHARPENED</span>` : p.source === "transcript" ? `<span class="bp-badge">NEW FROM TRANSCRIPT</span>` : ""}
+              ${!p.included ? `<span class="bp-excluded-tag">Excluded</span>` : ""}
+              <label class="bp-check">
+                <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""} ${saving ? "disabled" : ""} aria-label="Include Key Message ${i + 1}">
+              </label>
+              <button class="icon-btn bp-edit-btn" type="button" data-edit="${i}" aria-expanded="${expanded.has(i)}" aria-label="${expanded.has(i) ? "Collapse" : "Edit"} Key Message ${i + 1}" ${saving ? "disabled" : ""}>${ICONS.pencil}</button>
+            </div>
+            ${expanded.has(i) ? `
+            <div class="bp-edit">
+              <label class="sr-only" for="bp-label-${i}">Key Message ${i + 1} label</label>
+              <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" maxlength="120" value="${esc(p.label)}" ${saving ? "disabled" : ""}>
+              <label class="sr-only" for="bp-desc-${i}">Key Message ${i + 1} description</label>
+              <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" maxlength="500" rows="2" ${saving ? "disabled" : ""}>${esc(p.description)}</textarea>
               <div class="brief-tools">
                 <button class="icon-btn" type="button" data-up="${i}" aria-label="Move Key Message ${i + 1} up" ${saving || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
                 <button class="icon-btn" type="button" data-down="${i}" aria-label="Move Key Message ${i + 1} down" ${saving || i === points.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
                 <button class="icon-btn" type="button" data-del="${i}" aria-label="Delete Key Message ${i + 1}" ${saving ? "disabled" : ""}>${ICONS.x}</button>
               </div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""} ${saving ? "disabled" : ""}>
-              <span class="track" aria-hidden="true"></span>
-              <span class="sw-label">${p.included ? "Included" : "Excluded"}</span>
-            </label>
+            </div>` : ""}
           </div>`).join("")}
         </div>
         <button class="add-line" type="button" id="bp-add" ${saving ? "disabled" : ""}>${ICONS.plusSm}<span>Add a Key Message</span></button>
         <div class="field-error" id="bp-err" role="alert" ${saving ? "hidden" : ""}></div>
         <div class="brief-foot">
           <button class="btn primary lg" type="button" id="bp-confirm" ${saving ? "disabled" : ""}>${saving ? "Saving\u2026" : "Confirm and continue"}</button>
-          <span class="panel-note">At least one Key Message must stay included.</span>
+          <span class="panel-note" id="bp-count">${includedCount} of ${points.length} included</span>
         </div>
       </section>`;
 
@@ -2474,23 +2498,33 @@ async function renderRun(runId) {
       briefEl.querySelectorAll("[data-f]").forEach((inp) => {
         inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
       });
+      briefEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+        const i = Number(b.dataset.edit);
+        if (expanded.has(i)) expanded.delete(i); else expanded.add(i);
+        paint();
+      }));
       briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
         const i = Number(b.dataset.up);
         [points[i - 1], points[i]] = [points[i], points[i - 1]];
+        swapExpanded(i - 1, i);
         paint();
       }));
       briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
         const i = Number(b.dataset.down);
         [points[i + 1], points[i]] = [points[i], points[i + 1]];
+        swapExpanded(i, i + 1);
         paint();
       }));
       briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
-        points.splice(Number(b.dataset.del), 1);
+        const i = Number(b.dataset.del);
+        points.splice(i, 1);
+        reindexAfterDelete(i);
         paint();
       }));
       const addLine = briefEl.querySelector("#bp-add");
       if (addLine) addLine.addEventListener("click", () => {
-        points.push({ id: null, label: "", description: "", included: true, order: points.length });
+        points.push({ id: null, label: "", description: "", included: true, order: points.length, source: "input" });
+        expanded.add(points.length - 1);
         paint();
         const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
         if (last) last.focus();
@@ -2536,7 +2570,7 @@ async function renderRun(runId) {
       });
     }
     paint();
-    const first = briefEl.querySelector(".label-in");
+    const first = briefEl.querySelector("#brief-h");
     if (first) first.focus();
   }
 
@@ -2574,17 +2608,17 @@ async function renderRun(runId) {
 
     const stepIdx = STAGE_TO_STEP[e.stage];
     if (stepIdx >= 0) currentStep = Math.max(currentStep, stepIdx);
-    if (e.stage === "complete") currentStep = 5;
+    if (e.stage === "complete") currentStep = 6;
 
     if (state.detail) {
       if (state.detail.labelled != null) cntLabelled.textContent = fmtNum(state.detail.labelled);
       else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
       else if (live) cntLabelled.textContent = "—";
       if (state.detail.themes != null) cntThemes.textContent = String(state.detail.themes);
-      else if (currentStep >= 1 && !live) cntThemes.textContent = "7";
+      else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
       if (state.detail.otherShare != null) cntOther.textContent = state.detail.otherShare.toFixed(1) + "%";
       else if (state.detail.other != null) cntOther.textContent = state.detail.other + "%";
-      else if (currentStep >= 3 && !live) cntOther.textContent = "6%";
+      else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
     }
 
     if (e.stage === "brief_pause" && !briefRendered) {

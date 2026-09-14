@@ -483,6 +483,15 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .run-rail { width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; }
 .run-title { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; margin: 0; }
 .run-sub { font-size: 13.5px; color: var(--muted); margin: 0; }
+.run-reliability { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+/* brief_pause review: a centered review replaces the progress view entirely. */
+.run-layout.reviewing #run-header,
+.run-layout.reviewing .stepper,
+.run-layout.reviewing details.demo-controls,
+.run-layout.reviewing .run-rail { display: none; }
+.run-layout.reviewing .run-main { border: none; padding: 0; }
+.run-layout.reviewing #brief-review { max-width: 680px; width: 100%; margin: 0 auto; }
 
 .stepper { display: flex; flex-direction: column; }
 .step-row { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 18px; }
@@ -532,45 +541,47 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
 .banner.error { background: var(--danger-tint); border: 1px solid #EBC7BB; color: var(--danger); }
 
 /* ---------- Brief review ---------- */
+.brief-review-card { display: flex; flex-direction: column; gap: 14px; }
+.brief-review-h { font-size: 26px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; margin: 0; }
 .brief-list { display: flex; flex-direction: column; gap: 10px; }
 .brief-item {
-  border: 1px solid var(--border); border-radius: var(--radius-panel);
-  padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #fff;
+  min-height: 47px;
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; background: #fff;
 }
 .brief-item.excluded { opacity: .62; }
-.brief-item .top { display: flex; gap: 10px; align-items: flex-start; }
-.brief-item .fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.brief-item .label-in {
+.row-top { display: flex; gap: 10px; align-items: center; }
+.bp-num { font-size: 12px; font-weight: 700; color: var(--quiet); flex: 0 0 auto; }
+.bp-label {
+  flex: 1; min-width: 0; font-size: 13.5px; font-weight: 700; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bp-badge {
+  flex: 0 0 auto; font-size: 10px; font-weight: 800; letter-spacing: .06em;
+  color: var(--pink); background: var(--pink-tint); border: 1px solid var(--pink-border-soft);
+  border-radius: 4px; padding: 2px 6px;
+}
+.bp-excluded-tag { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--quiet); }
+.bp-check { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.bp-check input { width: 16px; height: 16px; accent-color: var(--pink); cursor: pointer; margin: 0; }
+.bp-edit-btn { flex: 0 0 auto; }
+.bp-edit { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
+.bp-edit .label-in {
   font-family: var(--font); font-size: 13px; font-weight: 700; color: var(--ink);
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; width: 100%;
 }
-.brief-item .desc-in {
+.bp-edit .desc-in {
   font-family: var(--font); font-size: 12.5px; color: var(--body);
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
   width: 100%; resize: vertical; line-height: 1.45;
 }
-.brief-item .label-in:focus, .brief-item .desc-in:focus {
+.bp-edit .label-in:focus, .bp-edit .desc-in:focus {
   outline: none; border-color: var(--pink); box-shadow: 0 0 0 3px var(--pink-tint);
 }
 .brief-tools { display: flex; gap: 2px; flex: 0 0 auto; }
 .brief-foot { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+#bp-count { font-size: 12.5px; color: var(--muted); }
 
-/* Toggle switch */
-.switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-.switch input { position: absolute; opacity: 0; width: 40px; height: 24px; margin: 0; cursor: pointer; }
-.switch .track {
-  width: 40px; height: 24px; border-radius: 12px; background: var(--chev);
-  position: relative; transition: background .15s; flex: 0 0 auto;
-  pointer-events: none;
-}
-.switch .track::after {
-  content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
-  border-radius: 50%; background: #fff; transition: left .15s;
-}
-.switch input:checked + .track { background: var(--pink); }
-.switch input:checked + .track::after { left: 19px; }
-.switch input:focus-visible + .track { outline: 2px solid var(--pink); outline-offset: 2px; }
-.switch .sw-label { font-size: 12px; font-weight: 600; color: var(--muted); }
 
 /* ---------- Results / report ---------- */
 .report-layout { flex: 1; min-height: 0; display: flex; position: relative; }
