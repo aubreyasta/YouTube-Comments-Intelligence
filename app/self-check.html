@@ -147,6 +147,7 @@
   // --- Run lifecycle ---
   const run = await api.startRun(session.id);
   check("run starts queued/running", ["queued", "running"].includes(run.status));
+  check("totalComments null before collect finishes", run.totalComments === null);
   await rejects("second concurrent run", api.startRun(session.id), "conflict");
   await rejects("proceed before pause", api.proceedRun(run.id), "conflict");
 
@@ -166,7 +167,9 @@
   const runAtPause = await api.getRun(run.id);
   check("paused at 30%", runAtPause.pct === 30 && runAtPause.stage === "brief_pause");
 
+  check("totalComments set once collect finishes", typeof runAtPause.totalComments === "number" && runAtPause.totalComments > 0);
   check("brief points seeded", runAtPause.briefPointIds.length >= 4);
+  check("brief points carry a source", runAtPause.briefPoints.every((p) => ["input", "sharpened", "transcript"].includes(p.source)));
   check("getRun exposes ordered briefPoints", Array.isArray(runAtPause.briefPoints)
     && runAtPause.briefPoints.length === runAtPause.briefPointIds.length
     && runAtPause.briefPoints.every((p, i) => i === 0 || p.order > runAtPause.briefPoints[i - 1].order));
@@ -908,15 +911,19 @@
     };
   }
   let uidCounter = 1;
-  function bp(id, label, included, order, description) {
-    return { id, label, description: description || "", included, order };
+  function bp(id, label, included, order, description, source) {
+    return { id, label, description: description || "", included, order, source: source || "input" };
   }
 
   // ---- 1. Persisted paused reopen: renders immediately from the snapshot, no SSE replay ----
   {
     const origGetRun = api.getRun;
     const origSubscribe = api.subscribeRun;
-    const seeded = [bp("r1a", "Idea A", true, 0), bp("r1b", "Idea B", true, 1), bp("r1c", "Idea C", false, 2)];
+    const seeded = [
+      bp("r1a", "Idea A", true, 0, "", "sharpened"),
+      bp("r1b", "Idea B", true, 1, "", "transcript"),
+      bp("r1c", "Idea C", false, 2),
+    ];
     const pausedRun = makePausedRun(seeded);
     let subscribeCalledBeforeRender = null;
     api.getRun = async function (id) {
@@ -938,10 +945,20 @@
         subscribeCalledBeforeRender === true);
       const rows = bpQa(".brief-item");
       check("T3.4: persisted ordered briefPoints render without SSE", rows.length === 3);
-      check("T3.4: persisted order preserved",
+      check("T3.4: persisted order preserved (collapsed labels)",
+        bpQa(".bp-label")[0].textContent === "Idea A" && bpQa(".bp-label")[1].textContent === "Idea B" && bpQa(".bp-label")[2].textContent === "Idea C");
+      fireClick(bpQ('[data-edit="0"]'));
+      fireClick(bpQ('[data-edit="1"]'));
+      fireClick(bpQ('[data-edit="2"]'));
+      check("T3.4: edit expand reveals persisted order in fields",
         bpQ("#bp-label-0").value === "Idea A" && bpQ("#bp-label-1").value === "Idea B" && bpQ("#bp-label-2").value === "Idea C");
+      check("T3.4: edit button reflects expanded state via aria-expanded",
+        bpQ('[data-edit="0"]').getAttribute("aria-expanded") === "true");
       check("T3.4: persisted included state preserved",
         bpQa("[data-inc]")[0].checked === true && bpQa("[data-inc]")[2].checked === false);
+      check("T3.4: source badges render SHARPENED / NEW FROM TRANSCRIPT",
+        bpQa(".bp-badge")[0].textContent === "SHARPENED" && bpQa(".bp-badge")[1].textContent === "NEW FROM TRANSCRIPT");
+      check("T3.4: footer shows included count", bpQ("#bp-count").textContent === "2 of 3 included");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
@@ -959,15 +976,16 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-down="0"]'));
-      check("T3.4: reorder moves row down", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      check("T3.4: reorder moves row down", bpQa(".bp-label")[0].textContent === "Second" && bpQ("#bp-label-1").value === "First");
       fireClick(bpQ("#bp-add"));
-      check("T3.4: add creates a third row", bpQa(".brief-item").length === 3);
+      check("T3.4: add creates a third row, expanded", bpQa(".brief-item").length === 3 && bpQ("#bp-label-2") !== null);
       fireInput(bpQ("#bp-label-2"), "Third");
       check("T3.4: edited text reflected in the field", bpQ("#bp-label-2").value === "Third");
       fireClick(bpQ('[data-del="0"]'));
       check("T3.4: delete removes the row", bpQa(".brief-item").length === 2
-        && bpQ("#bp-label-0").value === "First" && bpQ("#bp-label-1").value === "Third");
+        && bpQa(".bp-label")[0].textContent === "First" && bpQ("#bp-label-1").value === "Third");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
@@ -1050,14 +1068,16 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
+      fireClick(bpQ('[data-edit="1"]'));
       fireClick(bpQ("#bp-confirm"));
       await sleep(20);
       const controls = [
         ...bpQa("input.label-in"), ...bpQa("textarea.desc-in"), ...bpQa("[data-inc]"),
-        ...bpQa("[data-up]"), ...bpQa("[data-down]"), ...bpQa("[data-del]"),
+        ...bpQa("[data-up]"), ...bpQa("[data-down]"), ...bpQa("[data-del]"), ...bpQa("[data-edit]"),
         bpQ("#bp-add"), bpQ("#bp-confirm"),
       ];
-      check("T3.4: pending Save disables every editor control", controls.every((c) => c.disabled === true));
+      check("T3.4: pending Save disables every editor control", controls.length > 8 && controls.every((c) => c.disabled === true));
       releaseUpdate({ messages: seeded });
       await sleep(20);
     } finally {
@@ -1084,6 +1104,7 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-down="0"]'));
       const descField = bpQ("#bp-desc-1");
       fireInput(descField, "edited description");
@@ -1092,7 +1113,7 @@
       await sleep(20);
       check("T3.4: failed save shows the server error", bpQ("#bp-err").textContent === "Server rejected the save."
         && bpQ("#bp-err").hidden === false);
-      check("T3.4: failed save retains edited order", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      check("T3.4: failed save retains edited order", bpQ("#bp-label-0").value === "Second" && bpQa(".bp-label")[1].textContent === "First");
       check("T3.4: failed save retains edited description", bpQ("#bp-desc-1").value === "edited description");
       check("T3.4: failed save re-enables controls", bpQ("#bp-confirm").disabled === false);
       check("T3.4: failed save restores focus to the field that was focused on Save",
@@ -1155,11 +1176,11 @@
     try {
       await bpGoto(`#/runs/${completeRun.id}`);
       await sleep(20);
-      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Your note is ready");
+      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Results are ready");
       capturedHandlers.onEvent({ run_id: completeRun.id, stage: "classify", message: "stale", pct: 60, detail: {} });
       await sleep(10);
       check("T3.4: stale SSE cannot regress a fresh initial complete snapshot",
-        bpQ("#run-title").textContent === "Your note is ready");
+        bpQ("#run-title").textContent === "Results are ready");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
