@@ -1419,12 +1419,16 @@
     };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const controls = kmView.querySelectorAll("[data-artifact]");
+      const controls = document.querySelectorAll("[data-artifact]");
       check("T3.5: Results renders exactly six ordered artifact controls", controls.length === 6);
-      check("T3.5: Results controls follow contract order",
-        Array.from(controls).map((c) => c.dataset.artifact).join(",")
-        === PUBLIC_KINDS_ORDERED.map((p) => p.kind).join(","));
-      const missing = kmView.querySelector('[data-artifact="emotions_csv"]');
+      const csvKinds = PUBLIC_KINDS_ORDERED.filter((p) => p.kind !== "report_pdf").map((p) => p.kind);
+      const menuControls = document.querySelectorAll(".export-list [data-artifact]");
+      check("T3.5: Export menu lists the five CSV controls in contract order",
+        Array.from(menuControls).map((c) => c.dataset.artifact).join(",") === csvKinds.join(","));
+      const pdfBtn = document.getElementById("btn-pdf");
+      check("T3.5: #btn-pdf carries data-artifact=\"report_pdf\"",
+        !!pdfBtn && pdfBtn.dataset.artifact === "report_pdf");
+      const missing = document.querySelector('[data-artifact="emotions_csv"]');
       check("T3.5: missing artifact control is disabled", missing && missing.disabled === true);
       const missingWrap = missing.closest(".dis-wrap");
       check("T3.5: missing artifact shows exact explanatory copy",
@@ -1434,10 +1438,9 @@
     }
   }
 
-  // ---- 9. Results: live blob-first download, no direct navigation to downloadUrl ----
+  // ---- 9. Results: live blob-first download via the export menu, no direct navigation to downloadUrl ----
   {
     const origGetArtifact = api.getArtifact;
-    const origDownloadBlobCalls = [];
     const win = window;
     const origOpen = win.open;
     win.open = function () { throw new Error("must not navigate directly for artifact download"); };
@@ -1449,8 +1452,10 @@
     };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const btn = kmView.querySelector('[data-artifact="themes_csv"]');
-      check("T3.5: themes_csv control present for click test", !!btn);
+      const menu = document.querySelector(".export-menu");
+      menu.open = true;
+      const btn = document.querySelector('.export-list [data-artifact="themes_csv"]');
+      check("T3.5: themes_csv control present in export menu for click test", !!btn);
       fireClick(btn);
       await sleep(20);
       check("T3.5: Results click fetches via demoApi.getArtifact, not downloadUrl", getArtifactCalledWith !== null);
@@ -1466,7 +1471,7 @@
     api.getArtifact = async function () { throw demoErrorLike("network", "boom", null); };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const btn = kmView.querySelector('[data-artifact="report_pdf"]') || document.getElementById("btn-pdf");
+      const btn = document.getElementById("btn-pdf");
       fireClick(btn);
       await sleep(20);
       const region = document.querySelector('[role="alert"]#results-dl-live-err, [role="alert"]#results-dl-err');
@@ -1474,6 +1479,56 @@
         !!region && region.textContent === "Download failed. Try again.");
     } finally {
       api.getArtifact = origGetArtifact;
+    }
+  }
+
+  // ---- 10b. Results: inline evidence panels replace the drawer ----
+  {
+    await gotoHash(`#/runs/${run.id}/results`);
+    check("T3.5: no evidence drawer markup exists", !document.querySelector(".ev-drawer") && !document.querySelector(".ev-backdrop"));
+
+    const themeSection = kmView.querySelector('section[aria-labelledby="chart-themes-h"]');
+    const themeRows = themeSection ? Array.from(themeSection.querySelectorAll(".bar-row")) : [];
+    const lastThemeRow = themeRows[themeRows.length - 1];
+    check("T3.5: the static (Other) Theme row sorts last",
+      !!lastThemeRow && !!lastThemeRow.querySelector(".bar-val.static"));
+
+    const metricBtns = Array.from(kmView.querySelectorAll("[data-metric]"));
+    check("T3.5: results page exposes at least two metric controls for evidence tests", metricBtns.length >= 2);
+    if (metricBtns.length >= 2) {
+      const [btnA, btnB] = metricBtns;
+      const rowA = btnA.closest(".bar-row") || btnA.closest(".stat-block");
+      fireClick(btnA);
+      await sleep(10);
+      const panelA = rowA.nextElementSibling;
+      check("T3.5: clicking a metric inserts .ev-panel right after its row",
+        !!panelA && panelA.classList.contains("ev-panel"));
+      check("T3.5: opened metric button carries aria-expanded=true", btnA.getAttribute("aria-expanded") === "true");
+      check("T3.5: panel shows at most 3 comment cards", panelA.querySelectorAll(".ev-card").length <= 3);
+
+      fireClick(btnB);
+      await sleep(10);
+      check("T3.5: opening a second metric closes the first",
+        btnA.getAttribute("aria-expanded") === "false" && rowA.nextElementSibling !== panelA);
+
+      const rowB = btnB.closest(".bar-row") || btnB.closest(".stat-block");
+      const panelB = rowB.nextElementSibling;
+      const collapseBtn = panelB && panelB.querySelector("[data-ev-collapse]");
+      check("T3.5: open panel exposes a Collapse control", !!collapseBtn);
+      if (collapseBtn) {
+        fireClick(collapseBtn);
+        await sleep(10);
+        check("T3.5: Collapse returns focus to the metric button", document.activeElement === btnB);
+      }
+    }
+
+    const splitBar = kmView.querySelector(".km-split-bar");
+    if (splitBar) {
+      const segPos = parseFloat(splitBar.querySelector(".seg-pos").style.width) || 0;
+      const segNeu = parseFloat(splitBar.querySelector(".seg-neu").style.width) || 0;
+      const segNeg = parseFloat(splitBar.querySelector(".seg-neg").style.width) || 0;
+      check("T3.5: neutral segment width equals (baseN-pos-neg)/baseN, so the three segments fill the bar",
+        Math.abs((segPos + segNeu + segNeg) - 100) < 0.5);
     }
   }
 
