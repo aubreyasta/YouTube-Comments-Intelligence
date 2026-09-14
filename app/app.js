@@ -976,7 +976,7 @@ function fmtNum(n) {
 }
 
 function fmtSize(bytes) {
-  if (bytes == null) return "—";
+  if (bytes == null) return "-";
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
@@ -1005,6 +1005,7 @@ const ICONS = {
   star: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>',
   starLg: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>',
   folder: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h6l2 2.2h10V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"></path></svg>',
+  barChart: '<svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V11"></path><path d="M10 20V4.5"></path><path d="M16 20v-6.5"></path><path d="M2.5 20h19"></path></svg>',
   link: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.2"></path><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7l1.3-1.2"></path></svg>',
   search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>',
   check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
@@ -1246,18 +1247,15 @@ async function renderHome() {
     </div>`);
 
   view.innerHTML = `
-  <div class="view-pad" style="gap:30px">
-    <section aria-label="Your sessions" style="display:flex;flex-direction:column;gap:14px">
-      <div class="section-label">Your sessions</div>
-      <div class="empty-card">
-        <div class="empty-badge">${ICONS.folder}</div>
-        <h1>Start a Session<br><span class="accent">Add videos to begin.</span></h1>
-        <p>A Session is one campaign - a name, the YouTube videos, and any briefs, articles or images you add. We read those to see what the campaign pushed. We never read them against the comments.</p>
-        <div class="actions">
-          <a class="btn primary lg" href="#/sessions/new">Create your first session</a>
-        </div>
+  <div class="view-pad" style="padding-top:40px;gap:30px">
+    <div class="empty-card">
+      <div class="empty-badge">${ICONS.barChart}</div>
+      <h1>What campaign<br><span class="pink">should we listen to today?</span></h1>
+      <p>A Session is one campaign - a name, the YouTube videos, and any briefs, articles or images you add. We read those to see what the campaign pushed. We never read them against the comments.</p>
+      <div class="actions">
+        <a class="btn primary lg" href="#/sessions/new">Create your first session</a>
       </div>
-    </section>
+    </div>
 
     <section class="steps" aria-label="How it works">
       <div class="step"><span class="k">STEP 1</span><span class="t">Set up the Session</span><span class="d">Name it, paste the videos, add the brief. Key Messages appear as you add things.</span></div>
@@ -1269,15 +1267,16 @@ async function renderHome() {
 
 /* ---------- Sessions ---------- */
 const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", complete: "Complete", failed: "Failed" };
-let sessionsFilter = "all"; // "all" | "running" | "failed"
+let sessionsFilter = "all"; // "all" | "running" | "drafts"
+let sessionsQuery = "";
 
 async function renderSessions() {
   setSidebarActive("sessions");
-  const live = demoApi.mode === "live";
   const sessions = await demoApi.listSessions();
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
+      <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="sessions-search" class="topbar-search" placeholder="Search sessions" aria-label="Search sessions"></span>
       <a class="btn primary" href="#/sessions/new">New session</a>
     </div>`);
 
@@ -1298,53 +1297,62 @@ async function renderSessions() {
     return;
   }
 
-  const shown = sessions.filter((s) => {
-    if (sessionsFilter === "running") return s.status === "running";
-    if (sessionsFilter === "failed") return s.status === "failed";
-    return true;
-  });
-  const totalComments = sessions.reduce((a, s) => a + s.commentCount, 0);
-  const rows = await Promise.all(shown.map(async (s) => {
+  const sessionData = await Promise.all(sessions.map(async (s) => {
     const campaigns = (await Promise.all(s.campaignIds.map((id) => demoApi.getCampaign(id))))
       .map((c, i) => ({ ...c, id: s.campaignIds[i] }));
+    const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
+    const isDraft = s.status === "ready" && videoCount === 0;
+    const runningRun = s.status === "running" ? await demoApi.getRunningRun(s.id) : null;
+    return { s, campaigns, videoCount, isDraft, runningRun };
+  }));
+
+  const shown = sessionData.filter((d) => {
+    if (sessionsFilter === "running") return d.s.status === "running";
+    if (sessionsFilter === "drafts") return d.isDraft;
+    return true;
+  });
+
+  const rows = shown.map((d) => {
+    const { s, campaigns, videoCount, isDraft, runningRun } = d;
     const target = campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
-    const runningRun = await demoApi.getRunningRun(s.id);
-    const statusCell = s.status === "running" && runningRun
+    const statusCell = isDraft
+      ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
+      : s.status === "running" && runningRun
       ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
-    const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
     return `
-      <a class="trow" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px" href="${target}">
+      <a class="trow" data-name="${esc(s.name.toLowerCase())}" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px" href="${target}">
         <div class="trow-name">${esc(s.name)}</div>
         <div class="trow-num">${videoCount}</div>
-        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "—"}</div>
+        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "-"}</div>
         <div>${statusCell}</div>
         <div class="trow-dim">${fmtAgo(s.updatedAt)}</div>
         <div class="chev">${ICONS.chevR}</div>
       </a>`;
-  }));
+  });
 
   view.innerHTML = `
   <div class="view-pad">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
-        <h2 class="greeting">Good afternoon</h2>
-        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${fmtNum(totalComments)} comments read${live ? "" : " in this demo"}</div>
+        <h2 class="greeting">Sessions</h2>
+        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · one campaign each</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
         <button class="pill${sessionsFilter === "all" ? " active" : ""}" type="button" data-sf="all" aria-pressed="${sessionsFilter === "all"}">All</button>
         <button class="pill${sessionsFilter === "running" ? " active" : ""}" type="button" data-sf="running" aria-pressed="${sessionsFilter === "running"}">Running</button>
-        <button class="pill${sessionsFilter === "failed" ? " active" : ""}" type="button" data-sf="failed" aria-pressed="${sessionsFilter === "failed"}">Failed</button>
+        <button class="pill${sessionsFilter === "drafts" ? " active" : ""}" type="button" data-sf="drafts" aria-pressed="${sessionsFilter === "drafts"}">Drafts</button>
       </div>
     </div>
     <div class="table-scroll">
     <div class="table" style="min-width:760px">
-      <div class="thead" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px">
+      <div class="thead" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px">
         <div>SESSION</div><div>VIDEOS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
       </div>
-      ${rows.join("") || '<div style="padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>'}
+      <div id="sessions-rows">${rows.join("")}</div>
+      <div id="sessions-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
     </div>
     </div>
   </div>`;
@@ -1352,6 +1360,27 @@ async function renderSessions() {
   view.querySelectorAll("[data-sf]").forEach((b) => {
     b.addEventListener("click", () => { sessionsFilter = b.dataset.sf; renderSessions(); });
   });
+
+  function applySessionsSearch() {
+    let anyVisible = false;
+    view.querySelectorAll("#sessions-rows > .trow").forEach((row) => {
+      const match = !sessionsQuery || (row.dataset.name || "").includes(sessionsQuery);
+      row.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    const empty = document.getElementById("sessions-empty");
+    if (empty) empty.style.display = anyVisible ? "none" : "block";
+  }
+
+  const searchInput = document.getElementById("sessions-search");
+  if (searchInput) {
+    searchInput.value = sessionsQuery;
+    searchInput.addEventListener("input", () => {
+      sessionsQuery = searchInput.value.trim().toLowerCase();
+      applySessionsSearch();
+    });
+  }
+  applySessionsSearch();
 }
 
 /* ---------- New session ---------- */
@@ -2994,20 +3023,27 @@ async function renderResults(runId) {
 
 /* ---------- Files ---------- */
 let filesFilter = "all";
+let filesQuery = "";
+const FILE_TIER_SUFFIX = {
+  report_pdf: "primary", key_messages_csv: "primary", themes_csv: "primary",
+  sentiment_csv: "primary", emotions_csv: "primary", comments_csv: "advanced",
+};
 
 async function renderFiles() {
   setSidebarActive("files");
   const live = demoApi.mode === "live";
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Files</span></div>
-    <div class="topbar-right"></div>`);
+    <div class="topbar-right">
+      <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="files-search" class="topbar-search" placeholder="Search files" aria-label="Search files"></span>
+    </div>`);
 
   const files = await demoApi.listFiles();
   const shown = files.filter((f) =>
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
   const rows = shown.map((f) => {
-    const campaign = (f.campaignName ? { name: f.campaignName } : store.campaigns.get(f.campaignId)) || null;
+    const sessionName = f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
     const isArtifact = f._file === "artifact";
     const displayName = isArtifact ? f.filename : f.name;
     const ext = isArtifact ? (f.contentType === "application/pdf" ? "PDF" : "CSV")
@@ -3020,13 +3056,15 @@ async function renderFiles() {
     const action = canOpen
       ? `<button class="file-open" type="button" data-open="${f.id}" data-kind="${f._file}">Open</button>`
       : `<button class="file-open" type="button" data-dl-file="${f.id}" data-kind="${f._file}">Download</button>`;
+    const tier = isArtifact ? FILE_TIER_SUFFIX[f.kind] : null;
+    const tierHtml = tier ? ` <span class="file-tier">· ${tier}</span>` : "";
     return `
-    <div class="trow" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
+    <div class="trow" data-name="${esc(displayName.toLowerCase())}" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
       <div style="display:flex;gap:11px;align-items:center;min-width:0">
         ${icon}
-        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(displayName)}">${esc(displayName)}</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(displayName)}">${esc(displayName)}${tierHtml}</div>
       </div>
-      <div class="trow-dim">${esc(campaign ? campaign.name : "—")}</div>
+      <div class="trow-dim">${esc(sessionName || "-")}</div>
       <div>${isArtifact ? '<span class="badge">We made</span>' : '<span class="badge outline">You added</span>'}</div>
       <div class="trow-dim">${fmtSize(f.size)}</div>
       <div class="trow-dim">${fmtAgo(f.addedAt)}</div>
@@ -3039,7 +3077,7 @@ async function renderFiles() {
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
         <h2 class="greeting">Files</h2>
-        <div class="greeting-sub">Everything you gave us, and everything we made — across all sessions${live ? "" : " in this demo run"}.</div>
+        <div class="greeting-sub">Everything you gave us, and everything we made - across all sessions${live ? "" : " in this demo run"}.</div>
       </div>
       <div class="pill-row" role="group" aria-label="File filters">
         <button class="pill ${filesFilter === "all" ? "active" : ""}" type="button" data-ff="all" aria-pressed="${filesFilter === "all"}">All</button>
@@ -3051,18 +3089,19 @@ async function renderFiles() {
     <div class="empty-block">
       <div class="empty-icon">${ICONS.folder}</div>
       <h3>No files yet</h3>
-      <p>Upload briefs, articles or images to a campaign, or run an analysis — reports and CSVs land here.</p>
+      <p>Upload briefs, articles or images to a campaign, or run an analysis - reports and CSVs land here.</p>
       <div class="actions"><a class="btn primary" href="#/sessions/new">Create a session</a></div>
     </div>` : `
     <div class="table-scroll">
     <div class="table" style="min-width:820px">
       <div class="thead" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
-        <div>FILE</div><div>CAMPAIGN</div><div>KIND</div><div>SIZE</div><div>ADDED</div><div></div>
+        <div>FILE</div><div>SESSION</div><div>KIND</div><div>SIZE</div><div>ADDED</div><div></div>
       </div>
-      ${rows.join("") || '<div style="padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>'}
+      <div id="files-rows">${rows.join("")}</div>
+      <div id="files-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
     </div>
     </div>
-    <div style="font-size:12px;color:var(--quiet)">${shown.length} file${shown.length === 1 ? "" : "s"}. Deleting an input you added won't change a report that has already run — reports are immutable.</div>`}
+    <div style="font-size:12px;color:var(--quiet)">${shown.length} file${shown.length === 1 ? "" : "s"}. Deleting an input you added won't change a report that has already run - reports are immutable.</div>`}
   </div>`;
 
   const filesDlErr = document.createElement("div");
@@ -3074,6 +3113,27 @@ async function renderFiles() {
   view.querySelectorAll("[data-ff]").forEach((b) => {
     b.addEventListener("click", () => { filesFilter = b.dataset.ff; renderFiles(); });
   });
+
+  function applyFilesSearch() {
+    let anyVisible = false;
+    view.querySelectorAll("#files-rows > .trow").forEach((row) => {
+      const match = !filesQuery || (row.dataset.name || "").includes(filesQuery);
+      row.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    const empty = document.getElementById("files-empty");
+    if (empty) empty.style.display = anyVisible ? "none" : "block";
+  }
+
+  const filesSearchInput = document.getElementById("files-search");
+  if (filesSearchInput) {
+    filesSearchInput.value = filesQuery;
+    filesSearchInput.addEventListener("input", () => {
+      filesQuery = filesSearchInput.value.trim().toLowerCase();
+      applyFilesSearch();
+    });
+  }
+  applyFilesSearch();
   view.querySelectorAll("[data-dl-file]").forEach((b) => {
     b.addEventListener("click", async () => {
       const item = files.find((x) => x.id === b.dataset.dlFile);

@@ -1450,6 +1450,54 @@
     }
   }
 
+  // ---- 12b. Sessions: Drafts filter shows ready sessions with zero videos ----
+  {
+    const draftSetup = await api.createSession({
+      name: "Draft check session", campaignName: "DraftC",
+      videoUrls: ["https://youtu.be/dft1234"],
+    });
+    const draftCamp = await api.getCampaign(draftSetup.campaign.id);
+    await api.removeVideo(draftCamp.videos[0].id);
+    await gotoHash("#/sessions");
+    const draftsPill = kmView.querySelector('[data-sf="drafts"]');
+    check("Drafts pill present", !!draftsPill);
+    fireClick(draftsPill);
+    await sleep(20);
+    const draftRow = Array.from(kmView.querySelectorAll(".trow")).find(
+      (r) => r.dataset.name === "draft check session");
+    check("Draft session appears under Drafts filter", !!draftRow);
+    check("Draft session shows exact status copy",
+      !!draftRow && draftRow.textContent.includes("Draft - no videos yet"));
+    const allPill = kmView.querySelector('[data-sf="all"]');
+    fireClick(allPill);
+    await sleep(20);
+  }
+
+  // ---- 12c. Sessions: search filters rows by name without losing the query ----
+  {
+    await gotoHash("#/sessions");
+    const searchInput = kmView.querySelector("#sessions-search");
+    check("sessions search input present", !!searchInput);
+    searchInput.value = "draft check";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(20);
+    const visible = Array.from(kmView.querySelectorAll("#sessions-rows > .trow"))
+      .filter((r) => r.style.display !== "none");
+    check("sessions search filters to matching rows only",
+      visible.length > 0 && visible.every((r) => r.dataset.name.includes("draft check")));
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(20);
+  }
+
+  // ---- 12d. Files: primary/advanced tier suffixes render on the report and CSVs ----
+  {
+    await gotoHash("#/files");
+    const tiers = Array.from(kmView.querySelectorAll(".file-tier")).map((el) => el.textContent.trim());
+    check("Files shows a primary tier suffix", tiers.some((t) => t === "· primary"));
+    check("Files shows an advanced tier suffix", tiers.some((t) => t === "· advanced"));
+  }
+
   // ---- 13. demoApi public method signatures unchanged by this task ----
   check("T3.5: demoApi.getArtifact keeps its locked one-argument signature", api.getArtifact.length === 1);
   check("T3.5: demoApi.listArtifacts keeps its locked one-argument signature", api.listArtifacts.length === 1);

@@ -236,6 +236,15 @@ a.trow:hover { background: var(--row-hover); }
 .trow-dim { font-size: 12.5px; color: var(--muted); }
 .table-scroll { overflow-x: auto; }
 
+.topbar-search-wrap { position: relative; display: inline-flex; align-items: center; width: 246px; height: 34px; }
+.topbar-search-wrap svg { position: absolute; left: 10px; color: var(--quiet); pointer-events: none; }
+.topbar-search {
+  width: 246px; height: 34px; font-family: var(--font); font-size: 13px; color: var(--ink);
+  border: 1px solid var(--border); border-radius: 8px; padding: 0 10px 0 30px; background: #fff;
+}
+.topbar-search::placeholder { color: var(--quiet); }
+.topbar-search:focus { outline: none; border-color: var(--pink); box-shadow: 0 0 0 3px var(--pink-tint); }
+
 /* ---------- Forms ---------- */
 .field { display: flex; flex-direction: column; gap: 9px; }
 .field label, .field .label { font-size: 12.5px; font-weight: 700; color: var(--ink); }
@@ -275,16 +284,16 @@ textarea.input { resize: vertical; line-height: 1.5; }
 
 .empty-card {
   background: #fff; border: 1px solid var(--border); border-radius: 12px;
-  padding: 44px 40px; display: flex; flex-direction: column; align-items: center; gap: 10px;
-  text-align: center; max-width: 560px; margin: 0 auto;
+  padding: 40px 44px; display: flex; flex-direction: column; align-items: center; gap: 14px;
+  text-align: center; width: 100%;
 }
 .empty-badge {
   width: 60px; height: 60px; border-radius: 50%; background: var(--pink);
   display: flex; align-items: center; justify-content: center; color: #fff;
 }
-.empty-card h1 { margin: 0; font-size: 22px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; line-height: 1.3; }
-.empty-card h1 .accent { color: var(--pink); }
-.empty-card p { margin: 0; font-size: 13.5px; color: var(--muted); max-width: 430px; line-height: 1.55; }
+.empty-card h1 { margin: 0; font-size: 25px; font-weight: 800; color: var(--ink); letter-spacing: -.015em; line-height: 1.3; }
+.empty-card h1 .pink { color: var(--pink); }
+.empty-card p { margin: 0; font-size: 14px; color: var(--muted); max-width: 460px; line-height: 1.55; }
 .empty-card .actions { display: flex; gap: 10px; margin-top: 8px; }
 
 .steps {
@@ -693,6 +702,7 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   font-size: 8px; font-weight: 800; color: var(--muted);
 }
 .file-icon.img { background: var(--thumb); }
+.file-tier { color: var(--quiet); font-weight: 500; font-size: 11px; }
 .file-open {
   background: none; border: none; font-family: var(--font);
   font-size: 12.5px; font-weight: 700; color: var(--pink); cursor: pointer;

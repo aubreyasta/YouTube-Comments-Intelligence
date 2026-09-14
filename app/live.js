@@ -347,7 +347,7 @@ const liveApi = {
       // Assets from campaigns.
       for (const camp of (full.campaigns || [])) {
         for (const asset of (camp.assets || [])) {
-          files.push({ ...asset, _file: "asset", campaignName: camp.name });
+          files.push({ ...asset, _file: "asset", campaignName: camp.name, sessionName: sess.name });
         }
       }
       // Artifacts from complete runs.
@@ -357,7 +357,8 @@ const liveApi = {
         for (const art of filterPublicArtifacts(run.artifacts)) {
           files.push({
             ...art, _file: "artifact",
-            campaignId: campaignId, campaignName,
+            campaignId: campaignId, campaignName, sessionName: sess.name,
+            size: art.size != null ? art.size : null,
           });
         }
       }
