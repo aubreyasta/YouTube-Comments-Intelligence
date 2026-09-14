@@ -101,7 +101,7 @@ const DEMO_TITLES = [
 ];
 const DEMO_CHANNELS = ["Nike Indonesia", "Nike Indonesia", "Bung Kicau", "Garuda Select"];
 
-function demoVideoMeta(videoId, kind) {
+function demoVideoMeta(videoId, format) {
   const known = DEMO_VIDEOS[videoId];
   if (known) return { ...known };
   let h = 0;
@@ -110,7 +110,7 @@ function demoVideoMeta(videoId, kind) {
   return {
     title: DEMO_TITLES[h % DEMO_TITLES.length],
     channel: DEMO_CHANNELS[h % DEMO_CHANNELS.length],
-    commentCount: kind === "short" ? Math.max(60, Math.round(comments / 4)) : comments,
+    commentCount: format === "short" ? Math.max(60, Math.round(comments / 4)) : comments,
   };
 }
 
@@ -407,7 +407,6 @@ const demoApi = {
     const name = requireName(input.name, "Session name");
     const campaignName = requireName(input.campaignName, "Campaign name");
     const urls = input.videoUrls || [];
-    if (!urls.length) throw demoError("validation", "Add at least one YouTube link.", "videos");
     const seen = new Set();
     const parsed = urls.map((u) => {
       const p = parseYouTubeUrl(u);
@@ -433,7 +432,7 @@ const demoApi = {
       const meta = demoVideoMeta(p.videoId, p.kind);
       const v = {
         id: uid(), campaignId: campaign.id, url: p.url, videoId: p.videoId,
-        kind: p.kind, title: meta.title, channel: meta.channel,
+        format: p.kind, kind: "auto", title: meta.title, channel: meta.channel,
         thumbnailUrl: null, commentCount: meta.commentCount,
       };
       store.videos.set(v.id, v);
@@ -455,10 +454,10 @@ const demoApi = {
   },
 
   /**
-   * @param {string} campaignId @param {string} url
+   * @param {string} campaignId @param {string} url @param {string} [kind]
    * @returns {Promise<object>} the new Video
    */
-  async addVideo(campaignId, url) {
+  async addVideo(campaignId, url, kind = "auto") {
     const c = store.campaigns.get(campaignId);
     if (!c) throw demoError("not_found", "Campaign not found.");
     const p = parseYouTubeUrl(url);
@@ -467,7 +466,7 @@ const demoApi = {
     if (dupe) throw demoError("validation", "That video is already in this campaign.", "url");
     const meta = demoVideoMeta(p.videoId, p.kind);
     const v = {
-      id: uid(), campaignId, url: url.trim(), videoId: p.videoId, kind: p.kind,
+      id: uid(), campaignId, url: url.trim(), videoId: p.videoId, format: p.kind, kind,
       title: meta.title, channel: meta.channel, thumbnailUrl: null,
       commentCount: meta.commentCount,
     };
@@ -485,6 +484,38 @@ const demoApi = {
     if (c) c.videoIds = c.videoIds.filter((id) => id !== videoId);
     store.videos.delete(videoId);
     if (c) touchSession(c.sessionId);
+  },
+
+  /**
+   * @param {string} videoId @param {string} kind
+   * @returns {Promise<object>} the updated Video
+   */
+  async updateVideo(videoId, kind) {
+    const v = store.videos.get(videoId);
+    if (!v) throw demoError("not_found", "Video not found.");
+    if (!["auto", "brand_ad", "review", "explainer"].includes(kind)) {
+      throw demoError("validation", "That is not a valid video kind.", "kind");
+    }
+    v.kind = kind;
+    touchSession(v.campaignId ? store.campaigns.get(v.campaignId)?.sessionId : null);
+    return { ...v };
+  },
+
+  /**
+   * @param {string} sessionId @param {string} name
+   * @returns {Promise<object>} the updated Session
+   */
+  async renameSession(sessionId, name) {
+    const s = store.sessions.get(sessionId);
+    if (!s) throw demoError("not_found", "Session not found.");
+    const trimmed = requireName(name, "Session name");
+    s.name = trimmed;
+    for (const campaignId of s.campaignIds) {
+      const c = store.campaigns.get(campaignId);
+      if (c) c.name = trimmed;
+    }
+    touchSession(sessionId);
+    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) };
   },
 
   /**
@@ -899,7 +930,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
 (function wrapForLive() {
   const asyncMethods = [
     "listSessions","getSession","createSession","getCampaign",
-    "addVideo","removeVideo","uploadAsset","addArticle","removeAsset",
+    "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
     "proceedRun",
     "getReport","getAssetData",
@@ -1354,117 +1385,6 @@ async function renderSessions() {
   });
 }
 
-/* ---------- New session ---------- */
-async function renderNewSession() {
-  setSidebarActive("sessions");
-  setTopbar(`
-    <div class="topbar-left">
-      <a class="crumb-back" href="#/sessions">
-        ${ICONS.chevL}<span>Back to sessions</span>
-      </a>
-    </div>
-    <div class="topbar-right"></div>`);
-
-  view.innerHTML = `
-  <div class="setup-wrap">
-    <form class="setup" id="setup-form" novalidate>
-      <div style="display:flex;flex-direction:column;gap:9px">
-        <h1>Set up your session</h1>
-        <div class="lede">One Session is one campaign. Give it a name and at least one YouTube link - briefs, articles and images come next, and Key Messages are drafted from them.</div>
-      </div>
-
-      <div class="field">
-        <label for="f-session-name">Session name</label>
-        <input class="input" id="f-session-name" name="sessionName" type="text" autocomplete="off" placeholder="Ramadan football push" aria-describedby="hint-session err-session">
-        <div class="hint" id="hint-session">Sessions are for organising - group the campaigns you want to read together.</div>
-        <div class="field-error" id="err-session" hidden></div>
-      </div>
-
-      <div class="field">
-        <span class="label" id="urls-label">YouTube links</span>
-        <div class="hint" id="hint-urls">youtube.com/watch?v=, youtu.be/, or youtube.com/shorts/ links. No playlists, no duplicates.</div>
-        <div class="url-list" id="url-list" role="list" aria-labelledby="urls-label"></div>
-        <div class="url-add">
-          <input class="input" id="f-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-labelledby="urls-label" aria-describedby="hint-urls err-url">
-          <button class="btn secondary" type="button" id="btn-add-url">Add link</button>
-        </div>
-        <div class="field-error" id="err-url" hidden></div>
-        <div class="field-error" id="err-videos" hidden></div>
-      </div>
-
-      <div class="setup-foot">
-        <button class="btn primary lg" type="submit">Create session</button>
-        <span class="tail"></span>
-        <span class="note">User Inputs and Key Messages come next</span>
-      </div>
-    </form>
-  </div>`;
-
-  const added = [];
-  const listEl = document.getElementById("url-list");
-  const urlInput = document.getElementById("f-url");
-  const errUrl = document.getElementById("err-url");
-  const errVideos = document.getElementById("err-videos");
-
-  function showErr(el, msg) {
-    if (msg) { el.textContent = msg; el.hidden = false; } else { el.hidden = true; }
-  }
-  function paintUrls() {
-    listEl.innerHTML = added.map((u, i) => `
-      <div class="url-row" role="listitem">
-        <span class="yt">${ICONS.yt}</span>
-        <span class="u">${esc(u)}</span>
-        <button class="icon-btn" type="button" data-rm="${i}" aria-label="Remove ${esc(u)}">${ICONS.x}</button>
-      </div>`).join("");
-    listEl.querySelectorAll("[data-rm]").forEach((b) => {
-      b.addEventListener("click", () => { added.splice(Number(b.dataset.rm), 1); paintUrls(); });
-    });
-  }
-  function addUrl() {
-    const val = urlInput.value;
-    const p = parseYouTubeUrl(val);
-    if (p.error) { showErr(errUrl, p.error); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
-    const dup = added.some((u) => parseYouTubeUrl(u).videoId === p.videoId);
-    if (dup) { showErr(errUrl, "That video is already in the list."); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
-    showErr(errUrl, null); showErr(errVideos, null);
-    urlInput.classList.remove("error"); urlInput.removeAttribute("aria-invalid");
-    added.push(val.trim());
-    urlInput.value = "";
-    paintUrls();
-    urlInput.focus();
-  }
-  document.getElementById("btn-add-url").addEventListener("click", addUrl);
-  urlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); addUrl(); }
-  });
-
-  document.getElementById("setup-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = document.getElementById("f-session-name");
-    const errS = document.getElementById("err-session");
-    let ok = true;
-    let firstInvalid = null;
-    if (!name.value.trim()) {
-      showErr(errS, "Session name is required."); name.classList.add("error");
-      name.setAttribute("aria-invalid", "true"); ok = false; firstInvalid = firstInvalid || name;
-    } else { showErr(errS, null); name.classList.remove("error"); name.removeAttribute("aria-invalid"); }
-    if (!added.length) {
-      showErr(errVideos, "Add at least one YouTube link."); ok = false;
-      firstInvalid = firstInvalid || urlInput;
-    } else showErr(errVideos, null);
-    if (!ok) { if (firstInvalid) firstInvalid.focus(); return; }
-    try {
-      // Session name doubles as the campaign name; there is no separate field.
-      const { session, campaign } = await demoApi.createSession({
-        name: name.value, campaignName: name.value, videoUrls: added,
-      });
-      location.hash = `#/sessions/${session.id}/campaigns/${campaign.id}`;
-    } catch (err) {
-      showErr(errVideos, err.message);
-    }
-  });
-}
-
 /* ---------- Key Messages confirmation dialog ----------
    Reuses the existing modal/overlay foundation minimally: focus trap, Escape,
    and focus restoration all come from openModal/closeModal. This wraps that
@@ -1573,6 +1493,7 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
   let deferredRepaint = false; // background response landed while focus was inside the editor
   let pointerDownInside = false; // a pointer press landed on a control inside the editor, so a deferred repaint must not replace that control before its click is delivered
   let saveInFlight = false; // guards Save's own fullPatch against a duplicate/rapid re-click
+  const expandedKeys = new Set(); // rowKey()s manually expanded; dirty/invalid rows expand regardless
 
   function isFocusInside() {
     return container.contains(document.activeElement);
@@ -1637,36 +1558,46 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
       const dirty = st.dirtyIds.has(key);
       const labelInvalid = dirty && !r.label.trim();
       const descInvalid = dirty && r.description.length > 500;
+      const expanded = expandedKeys.has(key) || dirty || labelInvalid || descInvalid;
+      const editHtml = expanded ? `
+        <div class="km-edit" id="km-edit-${i}">
+          <div class="km-fields">
+            <label class="sr-only" for="km-label-${i}">Key Message ${i + 1} label</label>
+            <input class="km-label-in" id="km-label-${i}" data-km-f="label" data-km-i="${i}"
+              maxlength="120" value="${esc(r.label)}"
+              ${labelInvalid ? `aria-invalid="true" aria-describedby="km-label-err-${i}"` : ""}
+              ${pendingPatch ? "disabled" : ""}>
+            ${labelInvalid ? `<div class="field-error" id="km-label-err-${i}">Label is required.</div>` : ""}
+            <label class="sr-only" for="km-desc-${i}">Key Message ${i + 1} description</label>
+            <textarea class="km-desc-in" id="km-desc-${i}" data-km-f="description" data-km-i="${i}"
+              maxlength="500" rows="2"
+              ${descInvalid ? `aria-invalid="true" aria-describedby="km-desc-err-${i}"` : ""}
+              ${pendingPatch ? "disabled" : ""}>${esc(r.description)}</textarea>
+            ${descInvalid ? `<div class="field-error" id="km-desc-err-${i}">Description is limited to 500 characters.</div>` : ""}
+          </div>
+          <div class="km-tools">
+            <button class="icon-btn" type="button" data-km-up="${i}" aria-label="Move Key Message ${i + 1} up" ${pendingPatch || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
+            <button class="icon-btn" type="button" data-km-down="${i}" aria-label="Move Key Message ${i + 1} down" ${pendingPatch || i === rows.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
+            <button class="icon-btn" type="button" data-km-del="${i}" aria-label="Delete Key Message ${i + 1}" ${pendingPatch ? "disabled" : ""}>${ICONS.x}</button>
+          </div>
+        </div>` : "";
       return `
-      <div class="km-row" data-km-idx="${i}">
-        <span class="km-num">${String(i + 1).padStart(2, "0")}</span>
-        <div class="km-fields">
-          <label class="sr-only" for="km-label-${i}">Key Message ${i + 1} label</label>
-          <input class="km-label-in" id="km-label-${i}" data-km-f="label" data-km-i="${i}"
-            maxlength="120" value="${esc(r.label)}"
-            ${labelInvalid ? `aria-invalid="true" aria-describedby="km-label-err-${i}"` : ""}
-            ${pendingPatch ? "disabled" : ""}>
-          ${labelInvalid ? `<div class="field-error" id="km-label-err-${i}">Label is required.</div>` : ""}
-          <label class="sr-only" for="km-desc-${i}">Key Message ${i + 1} description</label>
-          <textarea class="km-desc-in" id="km-desc-${i}" data-km-f="description" data-km-i="${i}"
-            maxlength="500" rows="2"
-            ${descInvalid ? `aria-invalid="true" aria-describedby="km-desc-err-${i}"` : ""}
-            ${pendingPatch ? "disabled" : ""}>${esc(r.description)}</textarea>
-          ${descInvalid ? `<div class="field-error" id="km-desc-err-${i}">Description is limited to 500 characters.</div>` : ""}
-        </div>
-        <div class="km-tools">
+      <div class="km-row${expanded ? " expanded" : ""}" data-km-idx="${i}">
+        <div class="km-row-head">
+          <span class="km-num">${i + 1}</span>
+          <button class="km-row-toggle" type="button" aria-expanded="${expanded}" aria-controls="km-edit-${i}" data-km-toggle="${i}">
+            <span class="km-row-label${r.included ? "" : " excluded"}">${esc(r.label) || "Untitled Key Message"}</span>
+          </button>
           <button class="km-chip" type="button" data-km-inc="${i}" aria-pressed="${r.included}" ${pendingPatch ? "disabled" : ""}>${r.included ? "Included" : "Excluded"}</button>
-          <button class="icon-btn" type="button" data-km-up="${i}" aria-label="Move Key Message ${i + 1} up" ${pendingPatch || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
-          <button class="icon-btn" type="button" data-km-down="${i}" aria-label="Move Key Message ${i + 1} down" ${pendingPatch || i === rows.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
-          <button class="icon-btn" type="button" data-km-del="${i}" aria-label="Delete Key Message ${i + 1}" ${pendingPatch ? "disabled" : ""}>${ICONS.x}</button>
         </div>
+        ${editHtml}
       </div>`;
     }).join("") : `<div class="km-empty">No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.</div>`;
 
     container.innerHTML = `
     <section class="card km-section" aria-labelledby="km-h" aria-busy="${busy}">
       <div class="km-head">
-        <h2 class="panel-title" id="km-h">Key Messages - ${count}</h2>
+        <h2 class="panel-title" id="km-h">Key Messages · ${count}</h2>
         <div class="panel-note">Drafted from your User Inputs before any comment is read. The run checks them against the video transcripts and pauses for your review before labelling.</div>
       </div>
       <div class="km-status" role="status" aria-live="polite">${statusHtml}</div>
@@ -1750,9 +1681,29 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
         pendingPatch = false; paint();
       });
     });
+    container.querySelectorAll("[data-km-toggle]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = Number(b.dataset.kmToggle);
+        const key = rowKey(rows[i]);
+        const dirty = st.dirtyIds.has(key);
+        const labelInvalid = dirty && !rows[i].label.trim();
+        const descInvalid = dirty && rows[i].description.length > 500;
+        const forcedOpen = dirty || labelInvalid || descInvalid;
+        if (expandedKeys.has(key) && !forcedOpen) expandedKeys.delete(key);
+        else expandedKeys.add(key);
+        paint();
+        const nowExpanded = expandedKeys.has(key) || forcedOpen;
+        const toFocus = nowExpanded
+          ? container.querySelector(`#km-label-${i}`)
+          : container.querySelector(`[data-km-toggle="${i}"]`);
+        if (toFocus) toFocus.focus();
+      });
+    });
     const addBtn = container.querySelector("#km-add");
     addBtn.addEventListener("click", () => {
-      rows.push({ id: null, label: "", description: "", included: true, order: rows.length });
+      const newRow = { id: null, label: "", description: "", included: true, order: rows.length };
+      rows.push(newRow);
+      expandedKeys.add(rowKey(newRow));
       paint();
       const last = container.querySelector(`#km-label-${rows.length - 1}`);
       if (last) last.focus();
@@ -1847,37 +1798,33 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
   };
 }
 
-/* ---------- Campaign detail ---------- */
-async function renderCampaign(sessionId, campaignId) {
+/* ---------- Session editor: #/sessions/new (create) and Session detail share this ---------- */
+async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
-  const [session, campaign, runningRun, kmDraft] = await Promise.all([
-    demoApi.getSession(sessionId),
-    demoApi.getCampaign(campaignId),
-    demoApi.getRunningRun(sessionId),
-    demoApi.getKeyMessages(sessionId),
-  ]);
+  const createMode = sessionId == null;
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions">Sessions</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(session.name)}</span>
-        <span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${runningRun ? "" : `<div class="skip-pause">
-        <input type="checkbox" id="chk-skip-pause">
-        <label for="chk-skip-pause">
-          Skip the review step and run straight through
-          <span class="hint">We will not pause to ask you to confirm the Key Messages.</span>
-        </label>
-      </div>`}
-      <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>
-    </div>`);
-  const runBtn = document.getElementById("btn-run");
+  let session = null, campaign = null, runningRun = null, kmDraft = null;
+  if (!createMode) {
+    [session, campaign, runningRun, kmDraft] = await Promise.all([
+      demoApi.getSession(sessionId),
+      demoApi.getCampaign(campaignId),
+      demoApi.getRunningRun(sessionId),
+      demoApi.getKeyMessages(sessionId),
+    ]);
+  }
+
+  if (createMode) {
+    sessionTopbar({ name: "New session" });
+  } else {
+    const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
+    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>`;
+    sessionTopbar({ name: session.name, badgeHtml, rightHtml });
+  }
+
+  let runBtn = null;
+  if (!createMode) {
+  runBtn = document.getElementById("btn-run");
   if (runningRun) {
     runBtn.disabled = false;
     runBtn.addEventListener("click", () => { location.hash = `#/runs/${runningRun.id}`; });
@@ -1903,7 +1850,11 @@ async function renderCampaign(sessionId, campaignId) {
         };
         // Live mode: confirm overwrite when session is not fresh (a previous result exists).
         if (live && session.status !== "ready") {
-          openConfirm("A new run replaces this session's previous results. Continue?", proceedOverwrite);
+          openConfirm(
+            "Starting a new run deletes this Session's current result, along with its report and files, before the new one begins. There's no history - this is the only copy.",
+            proceedOverwrite,
+            { title: "Run again and replace the result?", confirmLabel: "Delete and run" },
+          );
         } else {
           proceedOverwrite();
         }
@@ -1917,37 +1868,25 @@ async function renderCampaign(sessionId, campaignId) {
         startTheRun();
       }
     });
+    }
   }
 
-  // Live: videos show URL + kind tag from parseYouTubeUrl; no comment count line.
-  // Demo: videos show title, channel, comment count.
-  const videos = campaign.videos || [];
+  // Demo and live both show the URL; kind is a product classification, not a URL type.
+  const videos = createMode ? [] : (campaign.videos || []);
   const videoRowsHtml = videos.map((v) => {
-    const kindTag = (() => {
-      const parsed = parseYouTubeUrl(v.url || "");
-      const k = parsed.kind || v.kind || "video";
-      return k === "short" ? '<span class="kind-tag short">Short</span>' : '<span class="kind-tag">Video</span>';
-    })();
-    if (live) {
-      return `
-      <div class="video-row">
-        <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
-        <div class="video-info">
-          <div class="video-title">${esc(v.url)}</div>
-        </div>
-        ${kindTag}
-        <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.url)}">${ICONS.x}</button>
-      </div>`;
-    }
+    const url = v.url || "";
+    const kind = ["auto", "brand_ad", "review", "explainer"].includes(v.kind) ? v.kind : "auto";
     return `
     <div class="video-row">
-      <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
-      <div class="video-info">
-        <div class="video-title">${esc(v.title)}</div>
-        <div class="video-meta">${esc(v.channel)} · ${fmtNum(v.commentCount)} comments · demo metadata</div>
-      </div>
-      ${kindTag}
-      <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.title)}">${ICONS.x}</button>
+      <span class="video-yt" aria-hidden="true">${ICONS.yt}</span>
+      <span class="video-url" title="${esc(url)}">${esc(url)}</span>
+      <select class="kind-select" data-video-kind="${v.id}" aria-label="Video kind for ${esc(url)}" ${runningRun ? "disabled" : ""}>
+        <option value="auto"${kind === "auto" ? " selected" : ""}>Auto</option>
+        <option value="brand_ad"${kind === "brand_ad" ? " selected" : ""}>Brand ad</option>
+        <option value="review"${kind === "review" ? " selected" : ""}>Review</option>
+        <option value="explainer"${kind === "explainer" ? " selected" : ""}>Explainer</option>
+      </select>
+      <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(url)}">${ICONS.x}</button>
     </div>`;
   }).join("");
 
@@ -1956,54 +1895,165 @@ async function renderCampaign(sessionId, campaignId) {
     ? ""
     : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
 
-  const priorResultWarning = session.status !== "ready" ? `
-    <div class="notice pink" role="note">This Session already has a result. Starting a new run deletes the current result and its files. You will be asked to confirm before anything is deleted.</div>` : "";
+  const priorResultWarning = (!createMode && session.status !== "ready") ? `
+    <div class="notice pink" role="note">This Session already has a result. Clicking "Run analysis" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
 
-  view.innerHTML = `
-  <div class="campaign-layout single-col">
-    <div class="campaign-main">
-      <div id="run-start-err" style="display:contents"></div>
-      ${priorResultWarning}
+  const videosSectionInner = `
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="panel-title" id="videos-h">Videos <span style="color:var(--quiet);font-weight:600">· ${videos.length}</span></div>
           ${commentCountLine}
         </div>
-        <div class="video-list">
-          ${videoRowsHtml}
-          ${videos.length === 0 ? '<div style="padding:18px 16px;font-size:13px;color:var(--muted)">No videos yet - add at least one before running an analysis.</div>' : ""}
+        <div class="video-panel">
+          <div class="video-list">
+            ${videoRowsHtml}
+            ${videos.length === 0 ? '<div class="video-empty">No videos yet - add at least one before running an analysis.</div>' : ""}
+          </div>
+          <div class="url-add">
+            <span class="add-ic" aria-hidden="true">${ICONS.plusSm}</span>
+            <input class="input" id="c-url" type="url" autocomplete="off" placeholder="Paste another YouTube link" aria-label="Add a YouTube link"${createMode ? " disabled" : ""}>
+            <button class="btn secondary" type="button" id="c-add-url"${createMode ? " disabled" : ""}>Add link</button>
+          </div>
         </div>
-        <div class="url-add">
-          <input class="input" id="c-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="Add a YouTube link">
-          <button class="btn secondary" type="button" id="c-add-url">Add link</button>
-        </div>
-        <div class="field-error" id="c-url-err" hidden></div>
-      </section>
+        <div class="field-error" id="c-url-err" role="alert" hidden></div>
+      </section>`;
+  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first") : videosSectionInner;
 
+  const assetsSectionInner = `
       <section aria-labelledby="assets-h" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-title" id="assets-h">User Inputs</div>
         <div class="panel-note">Briefs, articles, campaign images - what the campaign was trying to do. Never the comments.</div>
-        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
+        <div class="dropzone" id="dropzone" role="button" tabindex="${createMode ? "-1" : "0"}" aria-disabled="${createMode}" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
           <span class="up">${ICONS.up}</span>
           <span class="t">Drop a brief, a deck or an image</span>
           <span class="d">PDF, PPTX, DOCX, JPG, PNG, WEBP up to 10 MB - or paste an article URL below</span>
           <span class="d">Disallowed types bounce off; nothing is uploaded until it passes.</span>
         </div>
-        <input type="file" id="file-input" hidden multiple>
+        <input type="file" id="file-input" hidden multiple${createMode ? " disabled" : ""}>
         <div class="field-error" id="asset-err" hidden></div>
         <div class="url-add">
-          <input class="input" id="c-article" type="url" autocomplete="off" placeholder="Paste an article URL" aria-label="Add an article URL">
-          <button class="btn secondary" type="button" id="c-add-article">Add article</button>
+          <input class="input" id="c-article" type="url" autocomplete="off" placeholder="Paste an article URL" aria-label="Add an article URL"${createMode ? " disabled" : ""}>
+          <button class="btn secondary" type="button" id="c-add-article"${createMode ? " disabled" : ""}>Add article</button>
         </div>
         <div class="field-error" id="article-err" hidden></div>
         <div style="display:flex;flex-direction:column;gap:8px" id="asset-list">
-          ${(campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
+          ${createMode ? "" : (campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
-      </section>
+      </section>`;
+  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first") : assetsSectionInner;
 
-      <div id="km-container"></div>
+  const kmPlaceholderInner = `
+    <section class="card km-section" aria-labelledby="km-h">
+      <div class="km-head">
+        <h2 class="panel-title" id="km-h">Key Messages · 0</h2>
+        <div class="panel-note">Drafted from your User Inputs before any comment is read. The run checks them against the video transcripts and pauses for your review before labelling.</div>
+      </div>
+      <div class="km-rows"><div class="km-empty">No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.</div></div>
+      <div class="km-foot">
+        <button class="add-line" type="button" id="km-add" disabled>${ICONS.plusSm}<span>Add a Key Message</span></button>
+        <span class="tail"></span>
+        <button class="btn primary" type="button" id="km-save" disabled>Save changes</button>
+      </div>
+    </section>`;
+
+  const skipPauseHtml = (!createMode && !runningRun) ? `
+      <div class="skip-pause">
+        <input type="checkbox" id="chk-skip-pause">
+        <label for="chk-skip-pause">
+          Skip the review step and run straight through
+          <span class="hint">We will not pause to ask you to confirm the Key Messages.</span>
+        </label>
+      </div>` : "";
+
+  const footerHtml = setup ? `
+      <div class="setup-footer">
+        ${videos.length === 0
+          ? disWrap('<button class="btn primary lg" type="button" id="btn-create-session" disabled>Create session</button>', "Add at least one video")
+          : '<button class="btn primary lg" type="button" id="btn-create-session">Create session</button>'}
+        <a class="btn secondary lg" id="btn-save-draft" href="#/sessions">Save as draft</a>
+        <div class="quiet-line">Running the analysis comes next</div>
+      </div>` : "";
+
+  view.innerHTML = `
+  <div class="campaign-layout">
+    <div class="campaign-main">
+      <div class="field session-name-field">
+        <input id="f-session-name" class="input session-name-input" aria-label="Session name" placeholder="Name this Session" value="${createMode ? "" : esc(session.name)}">
+        <div id="err-name" role="alert"></div>
+      </div>
+      <div id="run-start-err" style="display:contents"></div>
+      ${priorResultWarning}
+      ${videosSectionHtml}
+      ${assetsSectionHtml}
+      ${footerHtml}
+    </div>
+    <div class="campaign-rail">
+      <div id="km-container">${createMode ? disWrap(kmPlaceholderInner, "Name the Session first") : ""}</div>
+      ${skipPauseHtml}
     </div>
   </div>`;
+
+  // Session name: create-mode submits a brand-new session; detail-mode renames.
+  const nameInput = document.getElementById("f-session-name");
+  const nameErr = document.getElementById("err-name");
+  let nameSubmitting = false;
+  const submitName = async (fromEnter) => {
+    if (nameSubmitting) return;
+    const value = nameInput.value.trim();
+    if (createMode) {
+      if (!value) {
+        if (fromEnter) nameErr.textContent = "Name the Session first.";
+        return;
+      }
+      nameSubmitting = true;
+      nameErr.textContent = "";
+      try {
+        const { session: newSession, campaign: newCampaign } = await demoApi.createSession({
+          name: value, campaignName: value, videoUrls: [],
+        });
+        history.replaceState(null, "", "#/sessions/" + newSession.id + "/campaigns/" + newCampaign.id);
+        currentRouteHash = location.hash;
+        activeDirtySessionId = newSession.id;
+        await renderCampaign(newSession.id, newCampaign.id, { setup: true });
+        const newUrlInput = document.getElementById("c-url");
+        if (newUrlInput) newUrlInput.focus();
+      } catch (err) {
+        nameErr.textContent = err.message;
+        nameInput.focus();
+      } finally {
+        nameSubmitting = false;
+      }
+      return;
+    }
+    if (!value) {
+      nameInput.value = session.name;
+      nameErr.textContent = "A Session needs a name.";
+      return;
+    }
+    if (value === session.name) { nameErr.textContent = ""; return; }
+    nameSubmitting = true;
+    try {
+      const updated = await demoApi.renameSession(sessionId, value);
+      session.name = updated.name;
+      nameErr.textContent = "";
+      const nameEl = document.querySelector(".session-title .name");
+      if (nameEl) nameEl.textContent = updated.name;
+    } catch (err) {
+      nameInput.value = session.name;
+      nameErr.textContent = err.message;
+    } finally {
+      nameSubmitting = false;
+    }
+  };
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitName(true); }
+  });
+  nameInput.addEventListener("blur", () => { submitName(false); });
+
+  if (createMode) {
+    routeCleanup = null;
+    return;
+  }
 
   // Key Messages editor: initialize rows/state from getKeyMessages, not from
   // any prior run's briefPoints.
@@ -2020,7 +2070,7 @@ async function renderCampaign(sessionId, campaignId) {
   const addUrl = async () => {
     try {
       await demoApi.addVideo(campaignId, urlInput.value);
-      renderCampaign(sessionId, campaignId);
+      renderCampaign(sessionId, campaignId, { setup });
     } catch (err) {
       urlErr.textContent = err.message; urlErr.hidden = false;
       urlInput.classList.add("error");
@@ -2031,7 +2081,21 @@ async function renderCampaign(sessionId, campaignId) {
   view.querySelectorAll("[data-rm-video]").forEach((b) => {
     b.addEventListener("click", async () => {
       await demoApi.removeVideo(b.dataset.rmVideo);
-      renderCampaign(sessionId, campaignId);
+      renderCampaign(sessionId, campaignId, { setup });
+    });
+  });
+  view.querySelectorAll("[data-video-kind]").forEach((sel) => {
+    let prevValue = sel.value;
+    sel.addEventListener("change", async () => {
+      const newValue = sel.value;
+      try {
+        await demoApi.updateVideo(sel.dataset.videoKind, newValue);
+        prevValue = newValue;
+        urlErr.hidden = true;
+      } catch (err) {
+        sel.value = prevValue;
+        urlErr.textContent = err.message; urlErr.hidden = false;
+      }
     });
   });
 
@@ -2051,12 +2115,12 @@ async function renderCampaign(sessionId, campaignId) {
       // recreated, so carry the text through the render. Failed upload keeps
       // its error and never drafts.
       const msg = assetErr.textContent;
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       const el = document.getElementById("asset-err");
       if (el && msg) { el.textContent = msg; el.hidden = false; }
       return;
     }
-    await renderCampaign(sessionId, campaignId);
+    await renderCampaign(sessionId, campaignId, { setup });
     requestDraftForCurrentEditor(sessionId);
   };
   dz.addEventListener("click", () => fi.click());
@@ -2074,7 +2138,7 @@ async function renderCampaign(sessionId, campaignId) {
   const addArticle = async () => {
     try {
       await demoApi.addArticle(campaignId, artInput.value);
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       requestDraftForCurrentEditor(sessionId);
     } catch (err) {
       artErr.textContent = err.message; artErr.hidden = false;
@@ -2087,10 +2151,21 @@ async function renderCampaign(sessionId, campaignId) {
   view.querySelectorAll("[data-rm-asset]").forEach((b) => {
     b.addEventListener("click", async () => {
       await demoApi.removeAsset(b.dataset.rmAsset);
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       requestDraftForCurrentEditor(sessionId);
     });
   });
+
+  if (setup) {
+    const createBtn = document.getElementById("btn-create-session");
+    if (createBtn && !createBtn.disabled) {
+      createBtn.addEventListener("click", async () => {
+        await renderCampaign(sessionId, campaignId);
+        const rb = document.getElementById("btn-run");
+        if (rb) rb.focus();
+      });
+    }
+  }
 
   currentKmEditors.set(sessionId, kmEditor);
   routeCleanup = () => { currentKmEditors.delete(sessionId); };
@@ -3164,7 +3239,7 @@ async function route() {
   try {
     if (parts.length === 0 || parts[0] === "home") await renderHome();
     else if (parts[0] === "sessions" && parts.length === 1) await renderSessions();
-    else if (parts[0] === "sessions" && parts[1] === "new") await renderNewSession();
+    else if (parts[0] === "sessions" && parts[1] === "new") await renderCampaign(null, null);
     else if (parts[0] === "sessions" && parts[2] === "campaigns") { activeDirtySessionId = parts[1]; await renderCampaign(parts[1], parts[3]); }
     else if (parts[0] === "runs" && parts.length === 2) await renderRun(parts[1]);
     else if (parts[0] === "runs" && parts[2] === "results") await renderResults(parts[1]);

@@ -108,9 +108,17 @@ const liveApi = {
     return { session, campaign };
   },
 
-  async addVideo(campaignId, url) {
+  async addVideo(campaignId, url, kind = "auto") {
     return apiJson("/api/campaigns/" + campaignId + "/videos",
-      json({ url, kind: "auto" }));
+      json({ url, kind }));
+  },
+
+  async updateVideo(videoId, kind) {
+    return apiJson("/api/videos/" + videoId, patch({ kind }));
+  },
+
+  async renameSession(sessionId, name) {
+    return apiJson("/api/sessions/" + sessionId, patch({ name }));
   },
 
   async removeVideo(videoId) {

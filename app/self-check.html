@@ -84,7 +84,8 @@
 
   // --- Validation before mutation ---
   await rejects("blank session name", api.createSession({ name: "  ", campaignName: "C", videoUrls: ["https://youtu.be/abc1234"] }), "validation");
-  await rejects("no videos", api.createSession({ name: "S", campaignName: "C", videoUrls: [] }), "validation");
+  const emptyVideos = await api.createSession({ name: "S-no-videos", campaignName: "C", videoUrls: [] });
+  check("empty videoUrls accepted", emptyVideos.campaign.videoIds.length === 0);
   await rejects("playlist url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://www.youtube.com/watch?v=abc1234&list=PLxyz"] }), "validation");
   await rejects("vimeo url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://vimeo.com/12345"] }), "validation");
   await rejects("duplicate in list", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://youtu.be/abc1234", "https://www.youtube.com/watch?v=abc1234"] }), "validation");
@@ -97,13 +98,23 @@
   check("two videos created", campaign.videoIds.length === 2);
 
   const camp = await api.getCampaign(campaign.id);
-  check("short kind detected", camp.videos[1].kind === "short");
+  check("short format detected", camp.videos[1].format === "short");
+  check("default video kind is auto", camp.videos[0].kind === "auto" && camp.videos[1].kind === "auto");
 
   await rejects("duplicate video add", api.addVideo(campaign.id, "https://youtu.be/abc1234"), "validation");
-  const v3 = await api.addVideo(campaign.id, "https://www.youtube.com/watch?v=newid99");
+  const v3 = await api.addVideo(campaign.id, "https://www.youtube.com/watch?v=newid99", "review");
   check("video added", !!v3.id);
+  check("addVideo kind honored", v3.kind === "review");
+  const v3updated = await api.updateVideo(v3.id, "brand_ad");
+  check("updateVideo updates kind", v3updated.kind === "brand_ad");
+  await rejects("updateVideo bad kind", api.updateVideo(v3.id, "nonsense"), "validation");
   await api.removeVideo(v3.id);
   check("video removed", (await api.getCampaign(campaign.id)).videos.length === 2);
+
+  const renamed = await api.renameSession(session.id, "Renamed session");
+  check("renameSession updates name", renamed.name === "Renamed session");
+  check("renameSession renames campaign too", (await api.getCampaign(campaign.id)).name === "Renamed session");
+  await rejects("renameSession blank", api.renameSession(session.id, "  "), "validation");
 
   // --- Uploads ---
   const big = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "big.pdf", { type: "application/pdf" });
@@ -419,6 +430,46 @@
     el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   }
   function overlayConfirm() { return document.querySelector("#overlay-root .confirm-modal"); }
+  // Rows collapse to a compact toggle after a fresh render; expand row i
+  // via its disclosure toggle before touching its label/description inputs.
+  function openRow(i) {
+    if (!q(`#km-label-${i}`)) {
+      const toggle = q(`[data-km-toggle="${i}"]`);
+      if (toggle) fireClick(toggle);
+    }
+  }
+
+  // ================= Task W3: shared renderCampaign create/setup flow =================
+  {
+    await gotoHash("#/sessions/new");
+    check("W3: create mode renders the session name input", !!q("#f-session-name") && q("#f-session-name").value === "");
+    check("W3: create mode disables Videos/User Inputs/Key Messages", qa(".dis-wrap").length >= 3);
+    const nameInput = q("#f-session-name");
+    fireInput(nameInput, "W3 setup session");
+    nameInput.dispatchEvent(new Event("blur", { bubbles: true }));
+    await sleep(30);
+    check("W3: naming the session creates it and shows the setup footer", !!q(".setup-footer"));
+    check("W3: create button disabled with zero videos", q("#btn-create-session") && q("#btn-create-session").disabled === true);
+    const w3Match = location.hash.match(/#\/sessions\/([^/]+)\/campaigns\/([^/]+)/);
+    const w3CampaignId = w3Match && w3Match[2];
+    const w3UrlInput = q("#c-url");
+    fireInput(w3UrlInput, "https://youtu.be/w3vid00001");
+    fireClick(q("#c-add-url"));
+    await sleep(30);
+    check("W3: adding a video enables the create button", q("#btn-create-session") && q("#btn-create-session").disabled === false);
+    const kindSelect = q("[data-video-kind]");
+    check("W3: video row exposes a kind select", !!kindSelect);
+    if (kindSelect) {
+      kindSelect.value = "review";
+      kindSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(30);
+      check("W3: kind select change persists via updateVideo",
+        w3CampaignId && (await api.getCampaign(w3CampaignId)).videos[0].kind === "review");
+    }
+    fireClick(q("#btn-create-session"));
+    await sleep(30);
+    check("W3: create button advances past setup (footer gone)", !q(".setup-footer"));
+  }
 
   const { session: t3Session, campaign: t3Campaign } = await api.createSession({
     name: "T3.3 session", campaignName: "T3.3C",
@@ -651,6 +702,7 @@
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   }
   {
+    openRow(0);
     const label0 = q("#km-label-0");
     fireInput(label0, "");
     await sleep(10);
@@ -696,6 +748,7 @@
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   }
   {
+    openRow(0);
     fireInput(q("#km-label-0"), "Locally edited, not saved yet");
     fireInput(q("#km-desc-0"), "Locally edited description");
     const incBtnDirty = q('[data-km-inc="0"]');
@@ -760,6 +813,7 @@
   // ---- 13. Dirty hash navigation: exact confirmation, both choices honoured ----
   await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   {
+    openRow(0);
     fireInput(q("#km-label-0"), "Unsaved change to trigger the guard");
     await sleep(10);
     location.hash = "#/sessions";
@@ -1454,6 +1508,16 @@
   check("T3.5: demoApi.getArtifact keeps its locked one-argument signature", api.getArtifact.length === 1);
   check("T3.5: demoApi.listArtifacts keeps its locked one-argument signature", api.listArtifacts.length === 1);
   check("T3.5: demoApi.listFiles keeps its locked zero-argument signature", api.listFiles.length === 0);
+
+  // ---- W3: demoApi public method signatures for this task ----
+  check("W3: demoApi.addVideo takes (campaignId, url, kind=)", api.addVideo.length === 2);
+  check("W3: demoApi.updateVideo takes (videoId, kind)", api.updateVideo.length === 2);
+  check("W3: demoApi.renameSession takes (sessionId, name)", api.renameSession.length === 2);
+  check("W3: __liveApi has updateVideo and renameSession",
+    typeof window.__liveApi.updateVideo === "function" && typeof window.__liveApi.renameSession === "function");
+  check("W3: updateVideo/renameSession arity matches demo vs live",
+    api.updateVideo.length === window.__liveApi.updateVideo.length
+    && api.renameSession.length === window.__liveApi.renameSession.length);
 
   const summary = document.getElementById("summary");
   summary.textContent = pass + " passed, " + fail + " failed";
