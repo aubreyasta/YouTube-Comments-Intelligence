@@ -28,7 +28,6 @@
   --divider: #F0EFF3;
   --neutral: #FAFAFB;
   --row-hover: #FDFAFC;
-  --drawer: #FCFCFD;
   --surface: #F5F4F7;
   --page: #EFEEF1;
   --chev: #C6C5D0;
@@ -575,7 +574,7 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
 /* ---------- Results / report ---------- */
 .report-layout { flex: 1; min-height: 0; display: flex; position: relative; }
 .report-scroll { flex: 1; min-width: 0; overflow: auto; padding: 34px 38px 48px; }
-.report { max-width: 720px; display: flex; flex-direction: column; gap: 30px; }
+.report { max-width: 740px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 30px; }
 .report .kicker { font-size: 11px; font-weight: 800; letter-spacing: .12em; color: var(--pink); }
 .report h1 {
   font-size: 33px; font-weight: 800; color: var(--ink);
@@ -646,45 +645,64 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
 }
 .caveat strong { color: var(--ink); }
 
-/* ---------- Evidence drawer ---------- */
-.ev-backdrop {
-  position: fixed; inset: 0; background: rgba(26,26,46,.28); z-index: 40;
+.export-menu { position: relative; }
+.export-menu summary { list-style: none; cursor: pointer; }
+.export-menu summary::-webkit-details-marker { display: none; }
+.export-list {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  background: #fff; border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(26,26,46,.12); padding: 6px; min-width: 200px;
+  display: flex; flex-direction: column; gap: 2px;
 }
-.ev-drawer {
-  width: 400px; flex: 0 0 400px; border-left: 1px solid var(--border);
-  display: flex; flex-direction: column; min-height: 0; background: var(--drawer);
+.export-item {
+  background: none; border: none; font-family: var(--font); text-align: left;
+  font-size: 13px; font-weight: 600; color: var(--ink); padding: 8px 10px;
+  border-radius: 6px; cursor: pointer;
 }
-.ev-drawer.overlay {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
-  box-shadow: -8px 0 24px rgba(26,26,46,.08);
+.export-item:hover { background: var(--pink-tint); color: var(--pink); }
+.export-item:disabled { color: var(--disabled); cursor: not-allowed; }
+
+.bar-row.excluded { opacity: .65; }
+
+.km-split-bar { display: flex; width: 220px; height: 5px; border-radius: 2px; overflow: hidden; }
+.km-split-bar .seg-pos { background: var(--pink); }
+.km-split-bar .seg-neu { background: var(--border); }
+.km-split-bar .seg-neg { background: var(--ink); }
+
+.km-legend { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--quiet); margin-top: 4px; }
+.km-legend .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+.km-legend .sw.pos { background: var(--pink); }
+.km-legend .sw.neu { background: var(--border); }
+.km-legend .sw.neg { background: var(--ink); }
+
+.section-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.section-foot .method-line { margin-top: 0; }
+
+.ev-panel {
+  border: 1px solid var(--pink-border-soft); background: var(--pink-light);
+  border-radius: var(--radius-panel); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px; margin-top: 6px;
 }
-.ev-head {
-  padding: 20px 22px 16px; border-bottom: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 10px;
-}
-.ev-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.ev-id { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.ev-kicker { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; color: var(--pink); }
-.ev-title { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; }
-.ev-sub { font-size: 12px; color: var(--muted); }
-.ev-close {
-  border: none; background: none; color: var(--quiet); cursor: pointer;
-  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; flex: 0 0 auto; padding: 0;
-}
-.ev-close:hover { color: var(--pink); background: var(--pink-tint); }
-.ev-body {
-  flex: 1; min-height: 0; overflow: auto;
-  padding: 16px 22px 22px; display: flex; flex-direction: column; gap: 10px;
-}
+.ev-panel-h { font-size: 13px; font-weight: 700; color: var(--ink); }
 .ev-card {
   border: 1px solid var(--card-line); background: #fff; border-radius: var(--radius-panel);
-  padding: 13px 14px; display: flex; flex-direction: column; gap: 8px;
+  padding: 11px 13px; display: flex; flex-direction: column; gap: 6px;
 }
 .ev-text { font-size: 13px; color: var(--ink); line-height: 1.5; }
 .ev-meta { font-size: 10.5px; font-weight: 600; color: var(--quiet); }
 .ev-empty { font-size: 12.5px; color: var(--muted); line-height: 1.5; padding: 8px 2px; }
-.ev-count { font-size: 11.5px; color: var(--quiet); line-height: 1.5; padding-top: 6px; }
+.ev-panel-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ev-see-all {
+  background: none; border: none; font-family: var(--font); font-size: 12px; font-weight: 700;
+  color: var(--pink); cursor: pointer; padding: 0;
+}
+.ev-see-all:hover { color: var(--pink-hover); }
+.ev-see-all:disabled { color: var(--disabled); cursor: not-allowed; }
+.ev-collapse {
+  background: none; border: none; font-family: var(--font); font-size: 11.5px;
+  color: var(--quiet); cursor: pointer; padding: 0;
+}
+.ev-collapse:hover { color: var(--pink); }
 
 /* ---------- Files ---------- */
 .file-icon {
@@ -734,31 +752,22 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   .steps { grid-template-columns: 1fr; }
   .topbar { padding: 0 20px; }
   .stat-block { flex-direction: column; align-items: flex-start; gap: 12px; }
-  .ev-drawer.overlay { width: min(400px, 88vw); flex-basis: auto; }
 }
 
 /* ---------- Motion ---------- */
-/* Route change, stage advance, and drawer entry all animate on DOM insertion,
-   so no JS drives them. Every rule below is switched off by the reduced-motion
+/* Route change and stage advance both animate on DOM insertion, so no JS
+   drives them. Every rule below is switched off by the reduced-motion
    block that follows. */
 @keyframes view-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes step-advance { from { transform: scale(.72); } to { transform: none; } }
-@keyframes drawer-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
-@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* These five selectors are every top-level child #view ever receives, so
-   animating them (not #view itself) keeps the fixed-position drawer and
-   modal overlays out of a transformed containing block. */
-/* .report-scroll, not .report-layout: the wide-viewport evidence drawer is a
-   position:fixed sibling inside .report-layout, and a transform there would
-   make it that drawer's containing block. */
+   animating them (not #view itself) keeps modal overlays out of a
+   transformed containing block. */
 .view-pad, .run-layout, .setup-wrap, .campaign-layout,
 .report-scroll { animation: view-rise .22s cubic-bezier(.22, .61, .36, 1) both; }
 
 .step-row.advanced .step-dot { animation: step-advance .3s cubic-bezier(.34, 1.4, .64, 1) both; }
-
-.ev-drawer { animation: drawer-in .22s cubic-bezier(.22, .61, .36, 1) both; }
-.ev-backdrop { animation: backdrop-in .18s ease both; }
 
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
@@ -772,5 +781,4 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   .view-pad, .run-layout, .setup-wrap, .campaign-layout,
   .report-scroll { animation: none; }
   .step-row.advanced .step-dot { animation: none; }
-  .ev-drawer, .ev-backdrop { animation: none; }
 }

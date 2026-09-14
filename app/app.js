@@ -1112,7 +1112,6 @@ let routeCleanup = null;
 function cleanupRoute() {
   if (routeCleanup) { routeCleanup(); routeCleanup = null; }
   closeModal();
-  closeEvidenceDrawer();
 }
 
 /* ============================== Key Messages editor state ==============================
@@ -2657,17 +2656,6 @@ async function renderRun(runId) {
 }
 
 /* ---------- Results ---------- */
-let evDrawerState = null;
-
-/* Drawer kicker per metric family. Order does not matter: the trailing dash
-   makes the prefixes mutually exclusive ("m-th-0" does not start with "m-t-"). */
-const EV_KICKERS = [
-  ["m-t-",  "IDEA FROM YOUR BRIEF"],
-  ["m-th-", "THEME"],
-  ["m-em-", "EMOTION"],
-  ["m-se-", "SENTIMENT"],
-  ["m-is-", "SENTIMENT ON THIS IDEA"],
-];
 
 /* Model labels are snake_case ("other_neutral"). Display only — filters and
    metric IDs keep the raw value. */
@@ -2675,107 +2663,18 @@ function fmtLabel(label) {
   return String(label).replace(/_/g, " ");
 }
 
-function closeEvidenceDrawer() {
-  if (!evDrawerState) return;
-  const { root, prevFocus, keyHandler } = evDrawerState;
-  document.removeEventListener("keydown", keyHandler);
-  root.remove();
-  if (prevFocus && prevFocus.focus) prevFocus.focus();
-  evDrawerState = null;
+/* Evidence-card metadata is title-cased for display; the raw value never
+   changes (metric IDs, filters, CSV rows all keep the snake_case form). */
+function displayLabel(s) {
+  if (!s) return "";
+  const t = fmtLabel(s);
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-function openEvidenceDrawer(report, metric, originEl) {
-  closeEvidenceDrawer();
-  const live = demoApi.mode === "live";
-  const prevFocus = originEl || document.activeElement;
-  const overlay = window.matchMedia("(max-width: 1179px)").matches;
-  const host = overlay ? overlayRoot : view.querySelector(".report-layout");
-
-  // Both modes derive pills from the emotion labels actually present in the
-  // evidence, so a pill can never offer a filter that matches nothing.
-  const emotionPills = [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
-    (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(fmtLabel(em))}</button>`
-  ).join("");
-  const kicker = (EV_KICKERS.find(([p]) => metric.id.startsWith(p)) || [null, "METRIC"])[1];
-
-  const root = document.createElement("div");
-  root.style.display = "contents";
-  root.innerHTML = `
-    ${overlay ? '<div class="ev-backdrop" data-ev-backdrop></div>' : ""}
-    <aside class="ev-drawer ${overlay ? "overlay" : ""}" role="dialog" aria-modal="${overlay}" aria-label="Evidence for ${esc(metric.label)}">
-      <div class="ev-head">
-        <div class="ev-title-row">
-          <div class="ev-id">
-            <span class="ev-kicker">${kicker}</span>
-            <span class="ev-title">${esc(metric.label)}</span>
-            <span class="ev-sub">${metric.sub
-              ? esc(metric.sub)
-              : `${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments)} comments · ${metric.value}%`}</span>
-          </div>
-          <button class="ev-close" type="button" data-ev-close aria-label="Close evidence">${ICONS.xLg}</button>
-        </div>
-        <div class="pill-row" role="group" aria-label="Evidence filters">
-          <button class="pill sm active" type="button" data-filter="All" aria-pressed="true">All</button>
-          ${emotionPills}
-          <button class="pill sm" type="button" data-filter="Most liked" aria-pressed="false">Most liked</button>
-        </div>
-      </div>
-      <div class="ev-body" data-ev-body></div>
-    </aside>`;
-  host.appendChild(root);
-
-  const body = root.querySelector("[data-ev-body]");
-  const items = report.evidence.filter((e) => e.metricId === metric.id);
-  let filter = "All";
-
-  function paintList() {
-    let list = items.slice();
-    if (filter === "Most liked") list.sort((a, b) => b.likes - a.likes);
-    else if (filter !== "All") list = list.filter((e) => e.emotion === filter);
-    body.innerHTML = list.length
-      ? list.map((e) => {
-      const meta = [e.emotion && fmtLabel(e.emotion), fmtNum(e.likes) + " likes", e.sentiment]
-        .filter(Boolean).map((part) => esc(String(part))).join(" · ");
-          return `
-        <div class="ev-card">
-          <div class="ev-text">${esc(e.text)}</div>
-          <div class="ev-meta">${meta}</div>
-        </div>`;
-        }).join("")
-        + `<div class="ev-count">Showing ${list.length} of ${fmtNum(metric.evidenceCount)} labelled comments.${live ? " Full list in comments.csv." : " Fixture evidence in this demo."}</div>`
-      : `<div class="ev-empty">No comments match this filter for "${esc(metric.label)}". Try another filter.</div>`;
-  }
-
-  root.querySelectorAll("[data-filter]").forEach((b) => {
-    b.addEventListener("click", () => {
-      filter = b.dataset.filter;
-      root.querySelectorAll("[data-filter]").forEach((x) => {
-        const on = x === b;
-        x.classList.toggle("active", on);
-        x.setAttribute("aria-pressed", on ? "true" : "false");
-      });
-      paintList();
-    });
-  });
-  root.querySelector("[data-ev-close]").addEventListener("click", closeEvidenceDrawer);
-  const backdrop = root.querySelector("[data-ev-backdrop]");
-  if (backdrop) backdrop.addEventListener("click", closeEvidenceDrawer);
-
-  const keyHandler = (e) => {
-    if (e.key === "Escape") { e.stopPropagation(); closeEvidenceDrawer(); }
-    if (e.key === "Tab" && overlay) {
-      const f = root.querySelectorAll("button, [href]");
-      if (!f.length) return;
-      const first = f[0], last = f[f.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-  };
-  document.addEventListener("keydown", keyHandler);
-
-  evDrawerState = { root, prevFocus, keyHandler };
-  paintList();
-  root.querySelector("[data-ev-close]").focus();
+/* aria-controls / panel element ids must be valid HTML ids; metric ids are
+   already "m-t-slug" shaped, but this keeps the mapping total. */
+function evSafeId(id) {
+  return String(id).replace(/[^A-Za-z0-9_-]/g, "-");
 }
 
 async function renderResults(runId) {
@@ -2799,10 +2698,6 @@ async function renderResults(runId) {
   }
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
-  const campaign = live
-    ? ((session.campaigns && session.campaigns[0]) || null)
-    : store.campaigns.get(session.campaignIds[0]);
-  const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
   // Live: artifacts come from run.artifacts (present when status===complete).
   // Demo: artifacts come from store. Both already filtered/sorted to the six
   // public kinds in contract order by listArtifacts.
@@ -2811,20 +2706,21 @@ async function renderResults(runId) {
   const pdf = byKind.get("report_pdf");
   report._totalComments = session.commentCount || 0;
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
-        <span class="badge neutral">Complete</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${pdf
-        ? '<button class="btn secondary" type="button" id="btn-pdf">Download PDF</button>'
-        : disWrap('<button class="btn secondary" type="button" id="btn-pdf" disabled>Download PDF</button>', "This file was not generated.")}
-    </div>`);
+  const exportItems = PUBLIC_ARTIFACTS.filter((m) => m.kind !== "report_pdf").map((meta) => {
+    const art = byKind.get(meta.kind);
+    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)}</button>`;
+    return art ? btn : disWrap(btn, "This file was not generated.");
+  }).join("");
+  const rightHtml = `
+    <details class="export-menu">
+      <summary class="btn secondary">Export CSVs</summary>
+      <div class="export-list" role="group" aria-label="CSV downloads">${exportItems}</div>
+    </details>
+    ${pdf
+      ? '<button class="btn secondary" type="button" id="btn-pdf" data-artifact="report_pdf">Download PDF</button>'
+      : disWrap('<button class="btn secondary" type="button" id="btn-pdf" data-artifact="report_pdf" disabled>Download PDF</button>', "This file was not generated.")}`;
+
+  sessionTopbar({ name: session.name, badgeHtml: '<span class="badge neutral">Complete</span>', rightHtml });
 
   const topbarErr = document.createElement("div");
   topbarErr.id = "results-dl-err";
@@ -2832,9 +2728,28 @@ async function renderResults(runId) {
   topbarErr.className = "sr-only-err";
   document.querySelector(".topbar-right").appendChild(topbarErr);
 
-  if (pdf) {
-    document.getElementById("btn-pdf").addEventListener("click", () => downloadArtifact(pdf, topbarErr));
-  }
+  // Single handler for every [data-artifact] control in the topbar (the five
+  // CSV entries in the menu plus #btn-pdf), so no button is ever bound twice.
+  topbar.querySelectorAll("[data-artifact]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const art = byKind.get(b.dataset.artifact);
+      if (art) downloadArtifact(art, topbarErr);
+    });
+  });
+
+  const exportMenu = topbar.querySelector(".export-menu");
+  const exportSummary = exportMenu.querySelector("summary");
+  const onOutsideClick = (e) => {
+    if (exportMenu.open && !exportMenu.contains(e.target)) exportMenu.open = false;
+  };
+  exportMenu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && exportMenu.open) {
+      e.stopPropagation();
+      exportMenu.open = false;
+      exportSummary.focus();
+    }
+  });
+  document.addEventListener("click", onOutsideClick);
 
   const [line1, line2] = report.title.split("\n");
   const metaLine = live
@@ -2852,10 +2767,9 @@ async function renderResults(runId) {
   const splits = (report.keyMessageSentiment || []).map((m) => ({
     id: m.metricId, label: m.label,
     value: m.positivePercent, evidenceCount: m.baseN,
+    positiveCount: m.positiveCount, negativeCount: m.negativeCount,
     positivePercent: m.positivePercent, negativePercent: m.negativePercent,
     baseN: m.baseN,
-    sub: `${fmtNum(m.positiveCount)} positive · ${fmtNum(m.negativeCount)} negative`
-       + ` of ${fmtNum(m.baseN)} comments that mentioned it`,
   }));
   // m-t-<slug> and m-is-<slug> share a slug by construction, so the split
   // for a Key Message row is found by swapping the prefix.
@@ -2864,9 +2778,16 @@ async function renderResults(runId) {
     report.transfers.concat(report.themes, sentiments, emotions, splits)
       .map((m) => [m.id, m]));
 
+  const sectionCsvBtn = (kind) => {
+    const meta = PUBLIC_ARTIFACTS.find((m) => m.kind === kind);
+    const art = byKind.get(kind);
+    const btn = `<button class="btn ghost small" type="button" data-section-csv="${kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
+    return art ? btn : disWrap(btn, "This file was not generated.");
+  };
+
   // Sentiment and Emotions render identically: a labelled percentage bar
   // per label, in the count order report.json already sorted them into.
-  const labelChart = (key, heading, sub, metrics) => metrics.length ? `
+  const labelChart = (key, heading, sub, metrics, csvKind) => metrics.length ? `
         <section class="chart" aria-labelledby="${key}-h">
           <h2 id="${key}-h">${heading}</h2>
           <p class="sub">${sub}</p>
@@ -2875,36 +2796,45 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val dark" type="button" data-metric="${esc(m.id)}">${m.value}%</button>
+                <button class="bar-val dark" type="button" data-metric="${esc(m.id)}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
+          <div class="section-foot">${sectionCsvBtn(csvKind)}</div>
         </section>` : "";
 
-  const artifactRow = (meta) => {
-    const art = byKind.get(meta.kind);
-    const btn = `<button class="btn ghost small" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
-    return art ? btn : disWrap(btn, "This file was not generated.");
-  };
+  // Excluded Key Messages have no report.transfers row at all; run.briefPoints
+  // is undefined in some demo fixtures, so this simply renders no excluded
+  // rows there instead of throwing.
+  const transferLabels = new Set(report.transfers.map((m) => m.label.trim().toLowerCase()));
+  const excludedRows = (run.briefPoints || [])
+    .filter((p) => p.included === false && !transferLabels.has((p.label || "").trim().toLowerCase()))
+    .map((p) => `<div class="bar-row excluded"><span class="bar-label dim">${esc(p.label)} · excluded from this run</span></div>`)
+    .join("");
+
+  // "Other" always sorts last in Theme mix; everything else keeps report order.
+  const orderedThemes = report.themes.slice().sort((a, b) =>
+    (a.label.trim().toLowerCase() === "other" ? 1 : 0) - (b.label.trim().toLowerCase() === "other" ? 1 : 0));
+
   view.innerHTML = `
   <div class="report-layout">
     <div class="report-scroll">
       <article class="report">
         <div style="display:flex;flex-direction:column;gap:12px">
-          <span class="kicker">STRATEGY NOTE · ${new Date(run.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</span>
+          <span class="kicker">DEBRIEF · ${new Date(run.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</span>
           <h1>${esc(line1)}<br>${esc(line2 || "")}</h1>
           <div class="meta">${metaLine}</div>
         </div>
 
         <div class="stat-block">
-          <div><button class="big-stat" type="button" data-metric="overall">${report.overallTransfer}%</button></div>
-          <p class="explain">of comments echoed at least one idea from your brief. Click any number to read the comments behind it.</p>
+          <div><button class="big-stat" type="button" data-metric="overall" aria-expanded="false" aria-controls="ev-overall">${report.overallTransfer}%</button></div>
+          <p class="explain">overall Travel - the share of comments that echoed at least one Key Message. Every number here opens the comments behind it, right under the number.</p>
         </div>
 
         <section class="chart" aria-labelledby="chart-transfer-h">
-          <h2 id="chart-transfer-h">Which ideas arrived</h2>
-          <p class="sub">Share of all ${fmtNum(report._totalComments)} comments that echoed each idea in the brief</p>
+          <h2 id="chart-transfer-h">Key Message travel</h2>
+          <p class="sub">Share of all ${fmtNum(report._totalComments)} comments that echoed each Key Message, with its positive/neutral/negative split. Click a number to open the comments under it.</p>
           <div class="bars">
             ${report.transfers.map((m) => {
               const split = splitFor.get(m.id);
@@ -2912,29 +2842,39 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val" type="button" data-metric="${m.id}">${m.value}%</button>
+                <button class="bar-val" type="button" data-metric="${m.id}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill" style="width:${m.value}%"></div></div>
               ${split && split.baseN ? `
-              <button class="bar-split" type="button" data-metric="${esc(split.id)}">
+              <div class="km-split-bar" aria-hidden="true">
+                <div class="seg-pos" style="width:${split.positiveCount / split.baseN * 100}%"></div>
+                <div class="seg-neu" style="width:${Math.max(0, split.baseN - split.positiveCount - split.negativeCount) / split.baseN * 100}%"></div>
+                <div class="seg-neg" style="width:${split.negativeCount / split.baseN * 100}%"></div>
+              </div>
+              <button class="bar-split" type="button" data-metric="${esc(split.id)}" aria-expanded="false" aria-controls="ev-${evSafeId(split.id)}">
                 <span class="split-pos">${split.positivePercent}% positive</span>
                 <span class="split-neg">${split.negativePercent}% negative</span>
                 <span class="split-base">of the ${fmtNum(split.baseN)} that mentioned it</span>
               </button>` : ""}
             </div>`;
             }).join("")}
+            ${excludedRows}
           </div>
-          <div class="method-line"><span>Counted from per-comment labels — never estimated.</span></div>
+          <div class="km-legend"><span class="sw pos"></span>Positive<span class="sw neu"></span>Neutral<span class="sw neg"></span>Negative</div>
+          <div class="section-foot">
+            <div class="method-line"><span>Counted from per-comment labels - never estimated.</span></div>
+            ${sectionCsvBtn("key_messages_csv")}
+          </div>
         </section>
 
         <section class="chart" aria-labelledby="chart-themes-h">
-          <h2 id="chart-themes-h">What the audience talked about</h2>
-          <p class="sub">Every comment carries exactly one theme label</p>
+          <h2 id="chart-themes-h">Theme mix</h2>
+          <p class="sub">Every comment carries exactly one Theme - these sum to 100</p>
           <div class="bars">
-            ${report.themes.map((m) => m.label === "Other" ? `
+            ${orderedThemes.map((m) => m.label.trim().toLowerCase() === "other" ? `
             <div class="bar-row">
               <div class="bar-head">
-                <span class="bar-label dim">Other</span>
+                <span class="bar-label dim">${esc(m.label)}</span>
                 <span class="bar-val static">${m.value}%</span>
               </div>
               <div class="bar-track"><div class="bar-fill dim" style="width:${m.value}%"></div></div>
@@ -2942,18 +2882,19 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val dark" type="button" data-metric="${m.id}">${m.value}%</button>
+                <button class="bar-val dark" type="button" data-metric="${m.id}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
+          <div class="section-foot">${sectionCsvBtn("themes_csv")}</div>
         </section>
 
-        ${labelChart("chart-sentiment", "How the audience felt",
-          "Every comment carries exactly one Sentiment label", sentiments)}
+        ${labelChart("chart-sentiment", "Overall Sentiment",
+          "Every comment carries exactly one Sentiment label", sentiments, "sentiment_csv")}
 
-        ${labelChart("chart-emotions", "The emotion behind the comments",
-          "Every comment carries exactly one Emotion label", emotions)}
+        ${labelChart("chart-emotions", "Overall Emotions",
+          "Every comment carries exactly one Emotion label", emotions, "emotions_csv")}
 
         ${report.interpretation ? `
         <section class="read" aria-labelledby="read-h">
@@ -2964,32 +2905,128 @@ async function renderResults(runId) {
             : ""}
           ${report.caveat ? `<div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>` : ""}
         </section>` : ""}
-
-        <section class="downloads" aria-labelledby="downloads-h">
-          <h2 id="downloads-h">Files from this run</h2>
-          <div class="dl-row">${PUBLIC_ARTIFACTS.map(artifactRow).join("")}</div>
-        </section>
       </article>
     </div>
   </div>`;
 
-  view.querySelectorAll("[data-metric]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const id = b.dataset.metric;
-      const metric = id === "overall"
-        ? { id: report.transfers[0] ? report.transfers[0].id : "none", label: "Overall transfer", value: report.overallTransfer, evidenceCount: Math.round(report.overallTransfer / 100 * report._totalComments) }
-        : metricIndex.get(id);
-      if (metric && metric.id !== "none") openEvidenceDrawer(report, metric, b);
+  /* Inline evidence: one panel open at a time, inserted right after the
+     row (or stat-block) that owns the clicked metric button. */
+  let openPanel = null; // { id, panelEl, btnEl }
+
+  function evidenceFor(id) {
+    return (report.evidence || []).filter((e) => e.metricId === id).slice(0, 3);
+  }
+
+  // Overall has no single metricId of its own: it is the union of every
+  // Key Message, de-duplicated by comment text, in fixed evidence order.
+  function overallEvidence() {
+    const seen = new Set();
+    const out = [];
+    for (const e of report.evidence || []) {
+      if (!e.metricId || !e.metricId.startsWith("m-t-") || seen.has(e.text)) continue;
+      seen.add(e.text);
+      out.push(e);
+      if (out.length === 3) break;
+    }
+    return out;
+  }
+
+  function nounFor(id) {
+    return id.startsWith("m-th-") ? "comments carry this Theme" : "comments carry this label";
+  }
+
+  function panelHtml(safeId, ariaLabel, count, noun, items) {
+    const cardsHtml = items.length
+      ? items.map((e) => {
+          const meta = [displayLabel(e.emotion), displayLabel(e.sentiment), e.likes != null ? fmtNum(e.likes) + " likes" : ""]
+            .filter(Boolean).join(" · ");
+          return `<div class="ev-card"><div class="ev-text">${esc(e.text)}</div><div class="ev-meta">${meta}</div></div>`;
+        }).join("")
+      : `<div class="ev-empty">No example comments were saved for this number.</div>`;
+    const commentsArt = byKind.get("comments_csv");
+    const seeAllBtn = `<button class="ev-see-all" type="button" data-see-all${commentsArt ? "" : " disabled"}>See all ${fmtNum(count)} in comments.csv →</button>`;
+    return `
+    <div class="ev-panel" id="ev-${safeId}" role="region" aria-label="Comments behind ${esc(ariaLabel)}">
+      <div class="ev-panel-h" tabindex="-1">${fmtNum(count)} ${noun}</div>
+      ${cardsHtml}
+      <div class="ev-panel-foot">
+        ${commentsArt ? seeAllBtn : disWrap(seeAllBtn, "This file was not generated.")}
+        <button class="ev-collapse" type="button" data-ev-collapse>Collapse</button>
+      </div>
+    </div>`;
+  }
+
+  function removePanel() {
+    if (!openPanel) return;
+    openPanel.panelEl.remove();
+    openPanel.btnEl.setAttribute("aria-expanded", "false");
+    openPanel = null;
+  }
+
+  function collapsePanel() {
+    if (!openPanel) return;
+    const btnEl = openPanel.btnEl;
+    removePanel();
+    btnEl.focus();
+  }
+
+  function openPanelFor(id, btn) {
+    const safeId = evSafeId(id);
+    let ariaLabel, count, noun, items;
+    if (id === "overall") {
+      ariaLabel = "Overall Travel";
+      // ponytail: rounded derivation from the percent, until report.json
+      // carries an overall comment count of its own.
+      count = Math.round(report.overallTransfer / 100 * report._totalComments);
+      noun = "comments echoed at least one Key Message";
+      items = overallEvidence();
+    } else {
+      const metric = metricIndex.get(id);
+      ariaLabel = metric ? metric.label : id;
+      count = metric ? metric.evidenceCount : 0;
+      noun = nounFor(id);
+      items = evidenceFor(id);
+    }
+    const rowEl = btn.closest(".bar-row") || btn.closest(".stat-block");
+    rowEl.insertAdjacentHTML("afterend", panelHtml(safeId, ariaLabel, count, noun, items));
+    const panelEl = document.getElementById(`ev-${safeId}`);
+    btn.setAttribute("aria-expanded", "true");
+    openPanel = { id, panelEl, btnEl: btn };
+    panelEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); collapsePanel(); }
     });
-  });
-  view.querySelectorAll("[data-artifact]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const art = byKind.get(b.dataset.artifact);
+    panelEl.querySelector(".ev-panel-h").focus();
+  }
+
+  // One delegated handler covers every metric toggle, panel collapse, see-all
+  // download and section CSV download, including buttons that do not exist
+  // until a panel is inserted.
+  view.querySelector(".report").addEventListener("click", (e) => {
+    const metricBtn = e.target.closest("[data-metric]");
+    if (metricBtn) {
+      const id = metricBtn.dataset.metric;
+      if (openPanel && openPanel.id === id) { collapsePanel(); return; }
+      removePanel();
+      openPanelFor(id, metricBtn);
+      return;
+    }
+    if (e.target.closest("[data-ev-collapse]")) { collapsePanel(); return; }
+    const seeAllBtn = e.target.closest("[data-see-all]");
+    if (seeAllBtn && !seeAllBtn.disabled) {
+      const art = byKind.get("comments_csv");
       if (art) downloadArtifact(art, topbarErr);
-    });
+      return;
+    }
+    const csvBtn = e.target.closest("[data-section-csv]");
+    if (csvBtn && !csvBtn.disabled) {
+      const art = byKind.get(csvBtn.dataset.sectionCsv);
+      if (art) downloadArtifact(art, topbarErr);
+    }
   });
 
-  routeCleanup = () => closeEvidenceDrawer();
+  routeCleanup = () => {
+    document.removeEventListener("click", onOutsideClick);
+  };
 }
 
 /* ---------- Files ---------- */

@@ -811,17 +811,34 @@ def run_completes(page, base):
 def six_downloads_in_order(page, base):
     run_id = _require_run_id()
     page.goto(base + "/#/runs/" + run_id + "/results")
-    page.wait_for_selector(".dl-row")
+    page.click(".export-menu summary")
+    page.wait_for_selector(".export-list")
 
-    buttons = page.locator(".dl-row button[data-artifact]")
-    _expect(buttons.count() == 6,
-            f"expected 6 download controls inside .dl-row, found {buttons.count()}")
+    csv_buttons = page.locator(".export-list button[data-artifact]")
+    _expect(csv_buttons.count() == 5,
+            f"expected 5 CSV controls inside .export-list, found {csv_buttons.count()}")
 
-    expected_kinds = ["report_pdf", "comments_csv", "key_messages_csv",
-                       "themes_csv", "sentiment_csv", "emotions_csv"]
-    expected_labels = ["report.pdf \u2193", "comments.csv \u2193",
-                        "key-messages.csv \u2193", "themes.csv \u2193",
-                        "sentiment.csv \u2193", "emotions.csv \u2193"]
+    expected_csv_kinds = ["comments_csv", "key_messages_csv", "themes_csv",
+                           "sentiment_csv", "emotions_csv"]
+    expected_csv_labels = ["comments.csv", "key-messages.csv", "themes.csv",
+                            "sentiment.csv", "emotions.csv"]
+
+    actual_kinds = [csv_buttons.nth(i).get_attribute("data-artifact") for i in range(5)]
+    _expect(actual_kinds == expected_csv_kinds,
+            f"data-artifact order was {actual_kinds!r}, expected {expected_csv_kinds!r}")
+
+    actual_labels = [csv_buttons.nth(i).text_content().strip() for i in range(5)]
+    _expect(actual_labels == expected_csv_labels,
+            f"export menu labels were {actual_labels!r}, "
+            f"expected {expected_csv_labels!r}")
+
+    pdf_btn = page.locator("#btn-pdf")
+    _expect(pdf_btn.count() == 1, "#btn-pdf was not rendered")
+    _expect(pdf_btn.get_attribute("data-artifact") == "report_pdf",
+            '#btn-pdf did not carry data-artifact="report_pdf"')
+
+    expected_kinds = expected_csv_kinds + ["report_pdf"]
+    ordered_buttons = [csv_buttons.nth(i) for i in range(5)] + [pdf_btn]
     expected_filenames = {
         "report_pdf": "report.pdf",
         "comments_csv": "comments.csv",
@@ -831,18 +848,7 @@ def six_downloads_in_order(page, base):
         "emotions_csv": "emotions.csv",
     }
 
-    actual_kinds = [buttons.nth(i).get_attribute("data-artifact") for i in range(6)]
-    _expect(actual_kinds == expected_kinds,
-            f"data-artifact order was {actual_kinds!r}, expected {expected_kinds!r}")
-
-    actual_labels = [buttons.nth(i).text_content().strip() for i in range(6)]
-    _expect(actual_labels == expected_labels,
-            f"download control labels were {actual_labels!r}, "
-            f"expected {expected_labels!r}")
-
-    for i in range(6):
-        kind = expected_kinds[i]
-        btn = buttons.nth(i)
+    for kind, btn in zip(expected_kinds, ordered_buttons):
         _expect(btn.get_attribute("disabled") is None,
                 f"download control for {kind!r} was disabled, expected enabled "
                 "since the fakes write all six files")
@@ -852,15 +858,19 @@ def six_downloads_in_order(page, base):
                 f"download control for {kind!r} had a span.dis-wrap ancestor, "
                 "expected enabled since the fakes write all six files")
 
-    for i in range(6):
-        kind = expected_kinds[i]
+    for kind, btn in zip(expected_kinds, ordered_buttons):
         expected_filename = expected_filenames[kind]
         with page.expect_download(timeout=15000) as dl_info:
-            buttons.nth(i).click()
+            btn.click()
         actual_filename = dl_info.value.suggested_filename
         _expect(actual_filename == expected_filename,
                 f"artifact {kind!r} suggested_filename was {actual_filename!r}, "
                 f"expected {expected_filename!r}")
+
+    # report.json is never exposed as a download, even from inside the menu.
+    _expect(page.locator('[data-artifact="report_json"]').count() == 0,
+            "found an element matching [data-artifact=\"report_json\"] on the "
+            "results screen")
 
 
 def report_json_never_exposed(page, base):
@@ -895,37 +905,35 @@ def report_json_never_exposed(page, base):
 
 
 def evidence_drawer_shows_metric_count(page, base):
-    """The drawer header and footer both print the metric's comment count.
-    Live getReport() used to drop `count` from the report, so every drawer
-    read "0 of N comments" and "Showing K of 0 labelled comments"."""
+    """The inline evidence panel's heading prints the metric's comment count.
+    Live getReport() used to drop `count` from the report, so this used to
+    show a stale or zero count instead of the real evidenceCount."""
     run_id = _require_run_id()
     report = page.request.get(base + "/api/runs/" + run_id + "/report").json()
 
-    clickable = [m for m in report["themes"] if m["label"] != "Other"]
-    _expect(clickable, f"report.json carried no clickable theme: {report['themes']!r}")
-    metric = clickable[0]
+    key_messages = report["keyMessages"]
+    _expect(key_messages, f"report.json carried no Key Messages: {key_messages!r}")
+    metric = key_messages[0]
     _expect(metric["count"] > 0,
-            f"theme {metric['label']!r} counted {metric['count']} comments; the "
-            "case needs a non-zero count to tell a real count from a dropped one")
+            f"Key Message {metric['label']!r} counted {metric['count']} comments; "
+            "the case needs a non-zero count to tell a real count from a dropped one")
 
     page.goto(base + "/#/runs/" + run_id + "/results")
     page.wait_for_selector(".bars")
-    page.click(f'[data-metric="{metric["metricId"]}"]')
-    page.wait_for_selector(".ev-drawer")
+    btn = page.locator(f'[data-metric="{metric["metricId"]}"]')
+    btn.click()
+    page.wait_for_selector(".ev-panel")
 
-    head = page.text_content(".ev-drawer .ev-sub").strip()
-    expected_head = f"{metric['count']} of "
-    _expect(head.startswith(expected_head),
-            f"evidence drawer header was {head!r}, expected it to start with "
-            f"{expected_head!r}")
+    heading = page.text_content(".ev-panel .ev-panel-h").strip()
+    expected_heading = f"{metric['count']} comments carry this label"
+    _expect(heading == expected_heading,
+            f"evidence panel heading was {heading!r}, expected {expected_heading!r}")
 
-    foot = page.text_content(".ev-drawer .ev-count").strip()
-    expected_foot = f"of {metric['count']} labelled comments"
-    _expect(expected_foot in foot,
-            f"evidence drawer footer was {foot!r}, expected it to contain "
-            f"{expected_foot!r}")
-
-    page.keyboard.press("Escape")
+    page.click(".ev-panel [data-ev-collapse]")
+    page.wait_for_selector(".ev-panel", state="detached")
+    is_active = page.evaluate(
+        "(el) => document.activeElement === el", btn.element_handle())
+    _expect(is_active, "focus did not return to the metric button after Collapse")
 
 
 def aria_and_keyboard(page, base):
@@ -974,6 +982,37 @@ def aria_and_keyboard(page, base):
             "first two Key Message labels did not swap after Enter on "
             f"[data-km-up=\"1\"]; before: {[label0_before, label1_before]!r}, "
             f"after: {[page.input_value('#km-label-0'), page.input_value('#km-label-1')]!r}")
+
+    # Results: inline evidence panels and the Export menu are both
+    # keyboard-operable, replacing the old drawer's focus-trap contract.
+    run_id = _require_run_id()
+    page.goto(base + "/#/runs/" + run_id + "/results")
+    page.wait_for_selector(".bars")
+
+    metric_btn = page.locator("[data-metric]").first
+    metric_btn.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".ev-panel")
+    _expect(metric_btn.get_attribute("aria-expanded") == "true",
+            "metric button aria-expanded was not 'true' after Enter opened its panel")
+    page.keyboard.press("Escape")
+    page.wait_for_selector(".ev-panel", state="detached")
+    is_active = page.evaluate(
+        "(el) => document.activeElement === el", metric_btn.element_handle())
+    _expect(is_active, "focus did not return to the metric button after Escape collapsed its panel")
+
+    summary = page.locator(".export-menu summary")
+    summary.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".export-list")
+    is_open = page.evaluate("() => document.querySelector('.export-menu').open")
+    _expect(is_open is True, "Export menu did not open on Enter")
+    page.keyboard.press("Escape")
+    is_open = page.evaluate("() => document.querySelector('.export-menu').open")
+    _expect(is_open is False, "Export menu did not close on Escape")
+    is_active = page.evaluate(
+        "(el) => document.activeElement === el", summary.element_handle())
+    _expect(is_active, "focus did not return to the Export summary after Escape closed the menu")
 
 
 def skip_pause_control_is_accessible(page, base):
