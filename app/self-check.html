@@ -30,9 +30,11 @@
   // loads, so demoApi.mode always resolves to "demo" regardless of whether a
   // real server happens to be listening on this origin. Restored right after
   // boot settles, before any test replaces window.fetch itself.
+  window.__origFetchForSelfCheck = window.fetch;
   window.fetch = function () { return Promise.reject(new Error("self-check: network disabled during boot")); };
   location.hash = "#/home";
 </script>
+<script src="demo/fixture.js"></script>
 <script src="live.js"></script>
 <script src="app.js"></script>
 <script>
@@ -210,19 +212,23 @@
   check("session complete with comments", sessAfter.status === "complete" && sessAfter.commentCount > 0);
 
   const report = await api.getReport(run.id);
-  check("report exists", report.runId === run.id && report.transfers.length === 2);
-  check("transfer labels follow edits", report.transfers[0].label === "Edited idea B");
+  // Demo numbers come from demo/fixture.js, so every fixture Key Message renders.
+  const fxKm = window.__demoFixture.reportJson.keyMessages;
+  check("report exists", report.runId === run.id && report.transfers.length === fxKm.length);
+  check("transfer labels from fixture", report.transfers.every((t, i) => t.label === fxKm[i].label));
   check("evidence attached", report.evidence.length > 0);
-  check("evidence shape", report.evidence.every((e) => ["Joy", "Skeptical", "Neutral"].includes(e.emotion)));
+  check("evidence shape", report.evidence.every((e) => !!e.metricId && !!e.emotion && !!e.sentiment));
 
   const files = await api.listFiles();
   const artifactNames = files.filter((f) => f._file === "artifact").map((f) => f.filename).sort();
   check("six public artifacts", JSON.stringify(artifactNames) === JSON.stringify(
     ["report.pdf", "comments.csv", "key-messages.csv", "themes.csv", "sentiment.csv", "emotions.csv"].sort()));
   const pdfArt = files.find((f) => f.filename === "report.pdf");
-  check("pdf magic bytes", pdfArt.content.startsWith("%PDF-1.4"));
+  const pdfText = await (await fetch(pdfArt.downloadUrl)).text();
+  check("pdf magic bytes", pdfText.startsWith("%PDF-1.4"));
   const csvArt = files.find((f) => f.filename === "key-messages.csv");
-  check("csv header", csvArt.content.startsWith("idea,share_pct"));
+  const csvText = (await (await fetch(csvArt.downloadUrl)).text()).replace(/^﻿/, "");
+  check("csv header", csvText.startsWith("group,key_message,count,percent"));
 
   unsub();
   const seenLen = seen.length;
@@ -621,7 +627,7 @@
     // Start from a known, empty editor for this session so row indices are predictable.
     await api.updateKeyMessages(t3Session.id, []);
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
-    check("T3.3: rows numbered from 01", true); // verified below once a row exists
+    check("T3.3: rows numbered from 1", true); // verified below once a row exists
 
     const addBtn = q("#km-add");
     fireClick(addBtn);
@@ -629,7 +635,7 @@
     const firstLabel = q("#km-label-0");
     check("T3.3: Add appends a blank row", !!firstLabel && firstLabel.value === "");
     check("T3.3: Add focuses the new row's label", document.activeElement === firstLabel);
-    check("T3.3: first row numbered 01", q(".km-num") && q(".km-num").textContent === "01");
+    check("T3.3: first row numbered 1", q(".km-num") && q(".km-num").textContent === "1");
     check("T3.3: Save disabled with no dirty text", q("#km-save").disabled === true);
 
     // Text edit alone: Save becomes enabled, but no PATCH until Save is pressed.
@@ -671,6 +677,7 @@
       check("T3.3: include chip aria-pressed flips", incBtnAfter.getAttribute("aria-pressed") !== beforePressed);
 
       immediatePatchCalls = 0;
+      openRow(0);
       const downBtn = q('[data-km-down="0"]');
       fireKey(downBtn, "Enter");
       fireClick(downBtn); // native buttons: Enter/Space activate via click in real browsers; assert operability via click
@@ -679,6 +686,8 @@
       check("T3.3: Up/Down are native <button> elements", downBtn.tagName === "BUTTON" && q('[data-km-up="1"]').tagName === "BUTTON");
 
       immediatePatchCalls = 0;
+      openRow(0);
+      openRow(1);
       const delBtn = q('[data-km-del="0"]');
       const rowsBefore = qa(".km-row").length;
       fireClick(delBtn);
@@ -983,6 +992,8 @@
       check("T3.4: add creates a third row, expanded", bpQa(".brief-item").length === 3 && bpQ("#bp-label-2") !== null);
       fireInput(bpQ("#bp-label-2"), "Third");
       check("T3.4: edited text reflected in the field", bpQ("#bp-label-2").value === "Third");
+      // Expansion follows the moved row, so row 0 ("Second") is collapsed here.
+      if (!bpQ('[data-del="0"]')) fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-del="0"]'));
       check("T3.4: delete removes the row", bpQa(".brief-item").length === 2
         && bpQa(".bp-label")[0].textContent === "First" && bpQ("#bp-label-1").value === "Third");
@@ -1113,7 +1124,7 @@
       await sleep(20);
       check("T3.4: failed save shows the server error", bpQ("#bp-err").textContent === "Server rejected the save."
         && bpQ("#bp-err").hidden === false);
-      check("T3.4: failed save retains edited order", bpQ("#bp-label-0").value === "Second" && bpQa(".bp-label")[1].textContent === "First");
+      check("T3.4: failed save retains edited order", bpQa(".bp-label")[0].textContent === "Second" && bpQa(".bp-label")[1].textContent === "First");
       check("T3.4: failed save retains edited description", bpQ("#bp-desc-1").value === "edited description");
       check("T3.4: failed save re-enables controls", bpQ("#bp-confirm").disabled === false);
       check("T3.4: failed save restores focus to the field that was focused on Save",
@@ -1240,18 +1251,20 @@
   {
     const arts = await api.listArtifacts(run.id);
     const byKind = new Map(arts.map((a) => [a.kind, a]));
+    // Demo CSVs are the committed files under app/demo/ (pipeline/report.py output).
     const expectHeader = {
-      comments_csv: "author,emotion,theme_or_idea,text,likes",
-      key_messages_csv: "idea,share_pct,evidence_count",
-      themes_csv: "theme,share_pct",
-      sentiment_csv: "sentiment,share_pct",
-      emotions_csv: "emotion,count",
+      comments_csv: "video_id,group,comment,likes,language,theme,sentiment,emotion,",
+      key_messages_csv: "group,key_message,count,percent,base_n,",
+      themes_csv: "group,theme,count,percent,base_n",
+      sentiment_csv: "group,sentiment,count,percent,base_n",
+      emotions_csv: "group,emotion,count,percent,base_n",
     };
     let headersOk = true, newlineOk = true;
     for (const [kind, header] of Object.entries(expectHeader)) {
       const a = byKind.get(kind);
-      if (!a || !a.content.startsWith(header)) headersOk = false;
-      if (!a || !a.content.endsWith("\n")) newlineOk = false;
+      const text = a ? (await (await api.getArtifact(a.id)).content.text()).replace(/^﻿/, "") : "";
+      if (!text.startsWith(header)) headersOk = false;
+      if (!text.endsWith("\n")) newlineOk = false;
     }
     check("T3.5: demo CSV artifacts have exact valid headers", headersOk);
     check("T3.5: demo CSV artifacts end with a trailing newline", newlineOk);
@@ -1606,7 +1619,8 @@
   // ---- 12c. Sessions: search filters rows by name without losing the query ----
   {
     await gotoHash("#/sessions");
-    const searchInput = kmView.querySelector("#sessions-search");
+    // The search lives in the topbar, outside #view.
+    const searchInput = document.getElementById("sessions-search");
     check("sessions search input present", !!searchInput);
     searchInput.value = "draft check";
     searchInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1648,6 +1662,7 @@
   summary.className = fail ? "fail" : "pass";
 })().catch((e) => {
   const summary = document.getElementById("summary");
+  console.error(e.stack || e);
   summary.textContent = "SELF-CHECK ERROR: " + e.message;
   summary.className = "fail";
 });

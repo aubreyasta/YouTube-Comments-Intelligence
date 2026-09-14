@@ -875,6 +875,10 @@ def six_downloads_in_order(page, base):
 
     for kind, btn in zip(expected_kinds, ordered_buttons):
         expected_filename = expected_filenames[kind]
+        # Each CSV pick closes the menu, so reopen it for the next one.
+        if kind != "report_pdf" and not page.evaluate(
+                "document.querySelector('.export-menu').open"):
+            page.click(".export-menu summary")
         with page.expect_download(timeout=15000) as dl_info:
             btn.click()
         actual_filename = dl_info.value.suggested_filename
@@ -926,12 +930,12 @@ def evidence_drawer_shows_metric_count(page, base):
     run_id = _require_run_id()
     report = page.request.get(base + "/api/runs/" + run_id + "/report").json()
 
-    key_messages = report["keyMessages"]
-    _expect(key_messages, f"report.json carried no Key Messages: {key_messages!r}")
-    metric = key_messages[0]
-    _expect(metric["count"] > 0,
-            f"Key Message {metric['label']!r} counted {metric['count']} comments; "
-            "the case needs a non-zero count to tell a real count from a dropped one")
+    # The fake classifier leaves the edited Key Message at 0, so take the
+    # first counted metric; a 0 count cannot tell a real count from a dropped one.
+    counted = [m for m in report["keyMessages"] + report["themes"]
+               if m["count"] > 0 and m["label"] != "Other"]
+    _expect(counted, f"report.json carried no counted metric: {report!r}")
+    metric = counted[0]
 
     page.goto(base + "/#/runs/" + run_id + "/results")
     page.wait_for_selector(".bars")
@@ -940,7 +944,8 @@ def evidence_drawer_shows_metric_count(page, base):
     page.wait_for_selector(".ev-panel")
 
     heading = page.text_content(".ev-panel .ev-panel-h").strip()
-    expected_heading = f"{metric['count']} comments carry this label"
+    noun = "Theme" if metric["metricId"].startswith("m-th-") else "label"
+    expected_heading = f"{metric['count']} comments carry this {noun}"
     _expect(heading == expected_heading,
             f"evidence panel heading was {heading!r}, expected {expected_heading!r}")
 

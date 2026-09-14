@@ -946,6 +946,8 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
       if (demoApi.mode === "live") return window.__liveApi[m](...args);
       return orig(...args);
     };
+    // Keep the demo signature's arity visible through the rest-arg wrapper.
+    Object.defineProperty(demoApi[m], "length", { value: orig.length });
   }
   // Explicit-arity wrappers, not the generic rest-arg loop above, so
   // Function.length stays 1,1,0 for both demo and live.
@@ -2426,6 +2428,12 @@ async function renderRun(runId) {
     }).join("");
     paintedStep = currentStep;
   }
+  // Analysis-base comment count: the collect/classify SSE detail once it
+  // arrives, else the RunSnapshot value (null until collect finishes).
+  function totalComments() {
+    const d = state.detail || {};
+    return d.total != null ? d.total : (run.totalComments != null ? run.totalComments : null);
+  }
   function paintReliability() {
     const total = totalComments();
     let text = "Under about 100 comments the percentages here aren't reliable.";
@@ -2872,6 +2880,10 @@ async function renderResults(runId) {
     b.addEventListener("click", () => {
       const art = byKind.get(b.dataset.artifact);
       if (art) downloadArtifact(art, topbarErr);
+      // A CSV pick closes the menu; focus goes back to its summary so it is
+      // not lost on a now-hidden item.
+      const menu = b.closest("details");
+      if (menu) { menu.open = false; menu.querySelector("summary").focus(); }
     });
   });
 
