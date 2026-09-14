@@ -326,6 +326,19 @@ def _last_start_body(session_id):
     return None
 
 
+def _expand_all_km_rows(page):
+    """Open every collapsed Key Message row so its label/description inputs
+    exist in the DOM. Rows collapse to a compact head (number, label, include
+    chip) until toggled open, dirty, or invalid."""
+    count = page.locator("#km-container .km-row").count()
+    for i in range(count):
+        row = page.locator(f'#km-container .km-row[data-km-idx="{i}"]')
+        if row.count() and "expanded" not in (row.get_attribute("class") or ""):
+            page.locator(f'#km-container [data-km-toggle="{i}"]').click()
+    if count:
+        page.wait_for_timeout(50)
+
+
 def _goto_campaign_at(page, base):
     page.goto(base + "/#/sessions/" + _STATE["session_id"] +
               "/campaigns/" + _STATE["campaign_id"])
@@ -445,10 +458,7 @@ def session_creation(page, base):
     else:
         page.goto(base + "/#/sessions/new")
     page.fill("input#f-session-name", "E2E Session")
-    page.fill("input#f-url", "https://www.youtube.com/watch?v=e2eAAAAAAA1")
-    page.click("#btn-add-url")
-    _wait_count(page, "#url-list .url-row", 1)
-    page.click('#setup-form button[type=submit]')
+    page.locator("input#f-session-name").blur()
 
     deadline = time.time() + 5.0
     match = None
@@ -463,6 +473,13 @@ def session_creation(page, base):
             f"last was {last!r}")
     _STATE["session_id"], _STATE["campaign_id"] = match.group(1), match.group(2)
 
+    page.wait_for_selector("#c-url")
+    page.fill("input#c-url", "https://www.youtube.com/watch?v=e2eAAAAAAA1")
+    page.click("#c-add-url")
+    _wait_count(page, ".video-row", 1)
+    page.click("#btn-create-session")
+    page.wait_for_selector("#btn-run")
+
 
 def upload_asset_then_draft(page, base):
     page.set_input_files("#file-input", {
@@ -472,8 +489,9 @@ def upload_asset_then_draft(page, base):
     })
     _wait_count(page, ".asset-row", 1)
     _wait_count(page, "#km-container .km-row", 2)
-    _expect(page.input_value("#km-label-0") == _FIXED_PROPOSALS[0][0],
-            f"km-label-0 was {page.input_value('#km-label-0')!r}, "
+    label_text = page.locator("#km-container .km-row").first.locator(".km-row-label").text_content()
+    _expect(label_text == _FIXED_PROPOSALS[0][0],
+            f"first Key Message row label was {label_text!r}, "
             f"expected {_FIXED_PROPOSALS[0][0]!r}")
 
 
@@ -487,6 +505,7 @@ def article_asset(page, base):
 
 
 def setup_edit_add_delete_order(page, base):
+    _expand_all_km_rows(page)
     page.fill("#km-label-0", "Edited label")
     _expect(page.is_enabled("#km-save"), "#km-save did not become enabled after edit")
 
@@ -526,6 +545,7 @@ def setup_edit_add_delete_order(page, base):
 
     page.reload()
     page.wait_for_selector("#km-container")
+    _expand_all_km_rows(page)
     _expect(page.input_value("#km-label-0") == "Edited label",
             f"edited label did not survive reload, got "
             f"{page.input_value('#km-label-0')!r}")
@@ -588,6 +608,7 @@ def draft_failure_is_stale_then_retry(page, base):
 
     # Guard the reason the count was wrong before: a blank never-saved row used
     # to survive the merge and inflate the count. Every row must carry a label.
+    _expand_all_km_rows(page)
     row_count = page.locator("#km-container .km-row").count()
     for idx in range(row_count):
         value = page.locator(f"#km-label-{idx}").input_value().strip()
