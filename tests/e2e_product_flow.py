@@ -981,6 +981,15 @@ def aria_and_keyboard(page, base):
     _expect(page.get_attribute("#view", "tabindex") == "-1",
             "#view tabindex was not '-1'")
 
+    # Key Message rows are compact: the label/description inputs and the
+    # reorder controls exist only while a row is expanded. Open the first two
+    # before reading or reordering them.
+    page.click('[data-km-toggle="0"]')
+    page.wait_for_selector("#km-label-0")
+    page.click('[data-km-toggle="1"]')
+    page.wait_for_selector("#km-label-1")
+    page.wait_for_selector('[data-km-up="1"]')
+
     label0_before = page.input_value("#km-label-0")
     label1_before = page.input_value("#km-label-1")
     page.focus('[data-km-up="1"]')
