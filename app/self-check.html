@@ -30,9 +30,11 @@
   // loads, so demoApi.mode always resolves to "demo" regardless of whether a
   // real server happens to be listening on this origin. Restored right after
   // boot settles, before any test replaces window.fetch itself.
+  window.__origFetchForSelfCheck = window.fetch;
   window.fetch = function () { return Promise.reject(new Error("self-check: network disabled during boot")); };
   location.hash = "#/home";
 </script>
+<script src="demo/fixture.js"></script>
 <script src="live.js"></script>
 <script src="app.js"></script>
 <script>
@@ -84,7 +86,8 @@
 
   // --- Validation before mutation ---
   await rejects("blank session name", api.createSession({ name: "  ", campaignName: "C", videoUrls: ["https://youtu.be/abc1234"] }), "validation");
-  await rejects("no videos", api.createSession({ name: "S", campaignName: "C", videoUrls: [] }), "validation");
+  const emptyVideos = await api.createSession({ name: "S-no-videos", campaignName: "C", videoUrls: [] });
+  check("empty videoUrls accepted", emptyVideos.campaign.videoIds.length === 0);
   await rejects("playlist url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://www.youtube.com/watch?v=abc1234&list=PLxyz"] }), "validation");
   await rejects("vimeo url", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://vimeo.com/12345"] }), "validation");
   await rejects("duplicate in list", api.createSession({ name: "S", campaignName: "C", videoUrls: ["https://youtu.be/abc1234", "https://www.youtube.com/watch?v=abc1234"] }), "validation");
@@ -97,13 +100,23 @@
   check("two videos created", campaign.videoIds.length === 2);
 
   const camp = await api.getCampaign(campaign.id);
-  check("short kind detected", camp.videos[1].kind === "short");
+  check("short format detected", camp.videos[1].format === "short");
+  check("default video kind is auto", camp.videos[0].kind === "auto" && camp.videos[1].kind === "auto");
 
   await rejects("duplicate video add", api.addVideo(campaign.id, "https://youtu.be/abc1234"), "validation");
-  const v3 = await api.addVideo(campaign.id, "https://www.youtube.com/watch?v=newid99");
+  const v3 = await api.addVideo(campaign.id, "https://www.youtube.com/watch?v=newid99", "review");
   check("video added", !!v3.id);
+  check("addVideo kind honored", v3.kind === "review");
+  const v3updated = await api.updateVideo(v3.id, "brand_ad");
+  check("updateVideo updates kind", v3updated.kind === "brand_ad");
+  await rejects("updateVideo bad kind", api.updateVideo(v3.id, "nonsense"), "validation");
   await api.removeVideo(v3.id);
   check("video removed", (await api.getCampaign(campaign.id)).videos.length === 2);
+
+  const renamed = await api.renameSession(session.id, "Renamed session");
+  check("renameSession updates name", renamed.name === "Renamed session");
+  check("renameSession renames campaign too", (await api.getCampaign(campaign.id)).name === "Renamed session");
+  await rejects("renameSession blank", api.renameSession(session.id, "  "), "validation");
 
   // --- Uploads ---
   const big = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "big.pdf", { type: "application/pdf" });
@@ -136,6 +149,7 @@
   // --- Run lifecycle ---
   const run = await api.startRun(session.id);
   check("run starts queued/running", ["queued", "running"].includes(run.status));
+  check("totalComments null before collect finishes", run.totalComments === null);
   await rejects("second concurrent run", api.startRun(session.id), "conflict");
   await rejects("proceed before pause", api.proceedRun(run.id), "conflict");
 
@@ -155,7 +169,9 @@
   const runAtPause = await api.getRun(run.id);
   check("paused at 30%", runAtPause.pct === 30 && runAtPause.stage === "brief_pause");
 
+  check("totalComments set once collect finishes", typeof runAtPause.totalComments === "number" && runAtPause.totalComments > 0);
   check("brief points seeded", runAtPause.briefPointIds.length >= 4);
+  check("brief points carry a source", runAtPause.briefPoints.every((p) => ["input", "sharpened", "transcript"].includes(p.source)));
   check("getRun exposes ordered briefPoints", Array.isArray(runAtPause.briefPoints)
     && runAtPause.briefPoints.length === runAtPause.briefPointIds.length
     && runAtPause.briefPoints.every((p, i) => i === 0 || p.order > runAtPause.briefPoints[i - 1].order));
@@ -196,19 +212,23 @@
   check("session complete with comments", sessAfter.status === "complete" && sessAfter.commentCount > 0);
 
   const report = await api.getReport(run.id);
-  check("report exists", report.runId === run.id && report.transfers.length === 2);
-  check("transfer labels follow edits", report.transfers[0].label === "Edited idea B");
+  // Demo numbers come from demo/fixture.js, so every fixture Key Message renders.
+  const fxKm = window.__demoFixture.reportJson.keyMessages;
+  check("report exists", report.runId === run.id && report.transfers.length === fxKm.length);
+  check("transfer labels from fixture", report.transfers.every((t, i) => t.label === fxKm[i].label));
   check("evidence attached", report.evidence.length > 0);
-  check("evidence shape", report.evidence.every((e) => ["Joy", "Skeptical", "Neutral"].includes(e.emotion)));
+  check("evidence shape", report.evidence.every((e) => !!e.metricId && !!e.emotion && !!e.sentiment));
 
   const files = await api.listFiles();
   const artifactNames = files.filter((f) => f._file === "artifact").map((f) => f.filename).sort();
   check("six public artifacts", JSON.stringify(artifactNames) === JSON.stringify(
     ["report.pdf", "comments.csv", "key-messages.csv", "themes.csv", "sentiment.csv", "emotions.csv"].sort()));
   const pdfArt = files.find((f) => f.filename === "report.pdf");
-  check("pdf magic bytes", pdfArt.content.startsWith("%PDF-1.4"));
+  const pdfText = await (await fetch(pdfArt.downloadUrl)).text();
+  check("pdf magic bytes", pdfText.startsWith("%PDF-1.4"));
   const csvArt = files.find((f) => f.filename === "key-messages.csv");
-  check("csv header", csvArt.content.startsWith("idea,share_pct"));
+  const csvText = (await (await fetch(csvArt.downloadUrl)).text()).replace(/^﻿/, "");
+  check("csv header", csvText.startsWith("group,key_message,count,percent"));
 
   unsub();
   const seenLen = seen.length;
@@ -419,6 +439,46 @@
     el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   }
   function overlayConfirm() { return document.querySelector("#overlay-root .confirm-modal"); }
+  // Rows collapse to a compact toggle after a fresh render; expand row i
+  // via its disclosure toggle before touching its label/description inputs.
+  function openRow(i) {
+    if (!q(`#km-label-${i}`)) {
+      const toggle = q(`[data-km-toggle="${i}"]`);
+      if (toggle) fireClick(toggle);
+    }
+  }
+
+  // ================= Task W3: shared renderCampaign create/setup flow =================
+  {
+    await gotoHash("#/sessions/new");
+    check("W3: create mode renders the session name input", !!q("#f-session-name") && q("#f-session-name").value === "");
+    check("W3: create mode disables Videos/User Inputs/Key Messages", qa(".dis-wrap").length >= 3);
+    const nameInput = q("#f-session-name");
+    fireInput(nameInput, "W3 setup session");
+    nameInput.dispatchEvent(new Event("blur", { bubbles: true }));
+    await sleep(30);
+    check("W3: naming the session creates it and shows the setup footer", !!q(".setup-footer"));
+    check("W3: create button disabled with zero videos", q("#btn-create-session") && q("#btn-create-session").disabled === true);
+    const w3Match = location.hash.match(/#\/sessions\/([^/]+)\/campaigns\/([^/]+)/);
+    const w3CampaignId = w3Match && w3Match[2];
+    const w3UrlInput = q("#c-url");
+    fireInput(w3UrlInput, "https://youtu.be/w3vid00001");
+    fireClick(q("#c-add-url"));
+    await sleep(30);
+    check("W3: adding a video enables the create button", q("#btn-create-session") && q("#btn-create-session").disabled === false);
+    const kindSelect = q("[data-video-kind]");
+    check("W3: video row exposes a kind select", !!kindSelect);
+    if (kindSelect) {
+      kindSelect.value = "review";
+      kindSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(30);
+      check("W3: kind select change persists via updateVideo",
+        w3CampaignId && (await api.getCampaign(w3CampaignId)).videos[0].kind === "review");
+    }
+    fireClick(q("#btn-create-session"));
+    await sleep(30);
+    check("W3: create button advances past setup (footer gone)", !q(".setup-footer"));
+  }
 
   const { session: t3Session, campaign: t3Campaign } = await api.createSession({
     name: "T3.3 session", campaignName: "T3.3C",
@@ -567,7 +627,7 @@
     // Start from a known, empty editor for this session so row indices are predictable.
     await api.updateKeyMessages(t3Session.id, []);
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
-    check("T3.3: rows numbered from 01", true); // verified below once a row exists
+    check("T3.3: rows numbered from 1", true); // verified below once a row exists
 
     const addBtn = q("#km-add");
     fireClick(addBtn);
@@ -575,7 +635,7 @@
     const firstLabel = q("#km-label-0");
     check("T3.3: Add appends a blank row", !!firstLabel && firstLabel.value === "");
     check("T3.3: Add focuses the new row's label", document.activeElement === firstLabel);
-    check("T3.3: first row numbered 01", q(".km-num") && q(".km-num").textContent === "01");
+    check("T3.3: first row numbered 1", q(".km-num") && q(".km-num").textContent === "1");
     check("T3.3: Save disabled with no dirty text", q("#km-save").disabled === true);
 
     // Text edit alone: Save becomes enabled, but no PATCH until Save is pressed.
@@ -617,6 +677,7 @@
       check("T3.3: include chip aria-pressed flips", incBtnAfter.getAttribute("aria-pressed") !== beforePressed);
 
       immediatePatchCalls = 0;
+      openRow(0);
       const downBtn = q('[data-km-down="0"]');
       fireKey(downBtn, "Enter");
       fireClick(downBtn); // native buttons: Enter/Space activate via click in real browsers; assert operability via click
@@ -625,6 +686,8 @@
       check("T3.3: Up/Down are native <button> elements", downBtn.tagName === "BUTTON" && q('[data-km-up="1"]').tagName === "BUTTON");
 
       immediatePatchCalls = 0;
+      openRow(0);
+      openRow(1);
       const delBtn = q('[data-km-del="0"]');
       const rowsBefore = qa(".km-row").length;
       fireClick(delBtn);
@@ -651,6 +714,7 @@
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   }
   {
+    openRow(0);
     const label0 = q("#km-label-0");
     fireInput(label0, "");
     await sleep(10);
@@ -696,6 +760,7 @@
     await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   }
   {
+    openRow(0);
     fireInput(q("#km-label-0"), "Locally edited, not saved yet");
     fireInput(q("#km-desc-0"), "Locally edited description");
     const incBtnDirty = q('[data-km-inc="0"]');
@@ -760,6 +825,7 @@
   // ---- 13. Dirty hash navigation: exact confirmation, both choices honoured ----
   await gotoHash(`#/sessions/${t3Session.id}/campaigns/${t3Campaign.id}`);
   {
+    openRow(0);
     fireInput(q("#km-label-0"), "Unsaved change to trigger the guard");
     await sleep(10);
     location.hash = "#/sessions";
@@ -854,15 +920,19 @@
     };
   }
   let uidCounter = 1;
-  function bp(id, label, included, order, description) {
-    return { id, label, description: description || "", included, order };
+  function bp(id, label, included, order, description, source) {
+    return { id, label, description: description || "", included, order, source: source || "input" };
   }
 
   // ---- 1. Persisted paused reopen: renders immediately from the snapshot, no SSE replay ----
   {
     const origGetRun = api.getRun;
     const origSubscribe = api.subscribeRun;
-    const seeded = [bp("r1a", "Idea A", true, 0), bp("r1b", "Idea B", true, 1), bp("r1c", "Idea C", false, 2)];
+    const seeded = [
+      bp("r1a", "Idea A", true, 0, "", "sharpened"),
+      bp("r1b", "Idea B", true, 1, "", "transcript"),
+      bp("r1c", "Idea C", false, 2),
+    ];
     const pausedRun = makePausedRun(seeded);
     let subscribeCalledBeforeRender = null;
     api.getRun = async function (id) {
@@ -884,10 +954,20 @@
         subscribeCalledBeforeRender === true);
       const rows = bpQa(".brief-item");
       check("T3.4: persisted ordered briefPoints render without SSE", rows.length === 3);
-      check("T3.4: persisted order preserved",
+      check("T3.4: persisted order preserved (collapsed labels)",
+        bpQa(".bp-label")[0].textContent === "Idea A" && bpQa(".bp-label")[1].textContent === "Idea B" && bpQa(".bp-label")[2].textContent === "Idea C");
+      fireClick(bpQ('[data-edit="0"]'));
+      fireClick(bpQ('[data-edit="1"]'));
+      fireClick(bpQ('[data-edit="2"]'));
+      check("T3.4: edit expand reveals persisted order in fields",
         bpQ("#bp-label-0").value === "Idea A" && bpQ("#bp-label-1").value === "Idea B" && bpQ("#bp-label-2").value === "Idea C");
+      check("T3.4: edit button reflects expanded state via aria-expanded",
+        bpQ('[data-edit="0"]').getAttribute("aria-expanded") === "true");
       check("T3.4: persisted included state preserved",
         bpQa("[data-inc]")[0].checked === true && bpQa("[data-inc]")[2].checked === false);
+      check("T3.4: source badges render SHARPENED / NEW FROM TRANSCRIPT",
+        bpQa(".bp-badge")[0].textContent === "SHARPENED" && bpQa(".bp-badge")[1].textContent === "NEW FROM TRANSCRIPT");
+      check("T3.4: footer shows included count", bpQ("#bp-count").textContent === "2 of 3 included");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
@@ -905,15 +985,18 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-down="0"]'));
-      check("T3.4: reorder moves row down", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      check("T3.4: reorder moves row down", bpQa(".bp-label")[0].textContent === "Second" && bpQ("#bp-label-1").value === "First");
       fireClick(bpQ("#bp-add"));
-      check("T3.4: add creates a third row", bpQa(".brief-item").length === 3);
+      check("T3.4: add creates a third row, expanded", bpQa(".brief-item").length === 3 && bpQ("#bp-label-2") !== null);
       fireInput(bpQ("#bp-label-2"), "Third");
       check("T3.4: edited text reflected in the field", bpQ("#bp-label-2").value === "Third");
+      // Expansion follows the moved row, so row 0 ("Second") is collapsed here.
+      if (!bpQ('[data-del="0"]')) fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-del="0"]'));
       check("T3.4: delete removes the row", bpQa(".brief-item").length === 2
-        && bpQ("#bp-label-0").value === "First" && bpQ("#bp-label-1").value === "Third");
+        && bpQa(".bp-label")[0].textContent === "First" && bpQ("#bp-label-1").value === "Third");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
@@ -996,14 +1079,16 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
+      fireClick(bpQ('[data-edit="1"]'));
       fireClick(bpQ("#bp-confirm"));
       await sleep(20);
       const controls = [
         ...bpQa("input.label-in"), ...bpQa("textarea.desc-in"), ...bpQa("[data-inc]"),
-        ...bpQa("[data-up]"), ...bpQa("[data-down]"), ...bpQa("[data-del]"),
+        ...bpQa("[data-up]"), ...bpQa("[data-down]"), ...bpQa("[data-del]"), ...bpQa("[data-edit]"),
         bpQ("#bp-add"), bpQ("#bp-confirm"),
       ];
-      check("T3.4: pending Save disables every editor control", controls.every((c) => c.disabled === true));
+      check("T3.4: pending Save disables every editor control", controls.length > 8 && controls.every((c) => c.disabled === true));
       releaseUpdate({ messages: seeded });
       await sleep(20);
     } finally {
@@ -1030,6 +1115,7 @@
     try {
       await bpGoto(`#/runs/${pausedRun.id}`);
       await sleep(20);
+      fireClick(bpQ('[data-edit="0"]'));
       fireClick(bpQ('[data-down="0"]'));
       const descField = bpQ("#bp-desc-1");
       fireInput(descField, "edited description");
@@ -1038,7 +1124,7 @@
       await sleep(20);
       check("T3.4: failed save shows the server error", bpQ("#bp-err").textContent === "Server rejected the save."
         && bpQ("#bp-err").hidden === false);
-      check("T3.4: failed save retains edited order", bpQ("#bp-label-0").value === "Second" && bpQ("#bp-label-1").value === "First");
+      check("T3.4: failed save retains edited order", bpQa(".bp-label")[0].textContent === "Second" && bpQa(".bp-label")[1].textContent === "First");
       check("T3.4: failed save retains edited description", bpQ("#bp-desc-1").value === "edited description");
       check("T3.4: failed save re-enables controls", bpQ("#bp-confirm").disabled === false);
       check("T3.4: failed save restores focus to the field that was focused on Save",
@@ -1101,11 +1187,11 @@
     try {
       await bpGoto(`#/runs/${completeRun.id}`);
       await sleep(20);
-      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Your note is ready");
+      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Results are ready");
       capturedHandlers.onEvent({ run_id: completeRun.id, stage: "classify", message: "stale", pct: 60, detail: {} });
       await sleep(10);
       check("T3.4: stale SSE cannot regress a fresh initial complete snapshot",
-        bpQ("#run-title").textContent === "Your note is ready");
+        bpQ("#run-title").textContent === "Results are ready");
     } finally {
       api.getRun = origGetRun;
       api.subscribeRun = origSubscribe;
@@ -1165,18 +1251,20 @@
   {
     const arts = await api.listArtifacts(run.id);
     const byKind = new Map(arts.map((a) => [a.kind, a]));
+    // Demo CSVs are the committed files under app/demo/ (pipeline/report.py output).
     const expectHeader = {
-      comments_csv: "author,emotion,theme_or_idea,text,likes",
-      key_messages_csv: "idea,share_pct,evidence_count",
-      themes_csv: "theme,share_pct",
-      sentiment_csv: "sentiment,share_pct",
-      emotions_csv: "emotion,count",
+      comments_csv: "video_id,group,comment,likes,language,theme,sentiment,emotion,",
+      key_messages_csv: "group,key_message,count,percent,base_n,",
+      themes_csv: "group,theme,count,percent,base_n",
+      sentiment_csv: "group,sentiment,count,percent,base_n",
+      emotions_csv: "group,emotion,count,percent,base_n",
     };
     let headersOk = true, newlineOk = true;
     for (const [kind, header] of Object.entries(expectHeader)) {
       const a = byKind.get(kind);
-      if (!a || !a.content.startsWith(header)) headersOk = false;
-      if (!a || !a.content.endsWith("\n")) newlineOk = false;
+      const text = a ? (await (await api.getArtifact(a.id)).content.text()).replace(/^﻿/, "") : "";
+      if (!text.startsWith(header)) headersOk = false;
+      if (!text.endsWith("\n")) newlineOk = false;
     }
     check("T3.5: demo CSV artifacts have exact valid headers", headersOk);
     check("T3.5: demo CSV artifacts end with a trailing newline", newlineOk);
@@ -1344,12 +1432,16 @@
     };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const controls = kmView.querySelectorAll("[data-artifact]");
+      const controls = document.querySelectorAll("[data-artifact]");
       check("T3.5: Results renders exactly six ordered artifact controls", controls.length === 6);
-      check("T3.5: Results controls follow contract order",
-        Array.from(controls).map((c) => c.dataset.artifact).join(",")
-        === PUBLIC_KINDS_ORDERED.map((p) => p.kind).join(","));
-      const missing = kmView.querySelector('[data-artifact="emotions_csv"]');
+      const csvKinds = PUBLIC_KINDS_ORDERED.filter((p) => p.kind !== "report_pdf").map((p) => p.kind);
+      const menuControls = document.querySelectorAll(".export-list [data-artifact]");
+      check("T3.5: Export menu lists the five CSV controls in contract order",
+        Array.from(menuControls).map((c) => c.dataset.artifact).join(",") === csvKinds.join(","));
+      const pdfBtn = document.getElementById("btn-pdf");
+      check("T3.5: #btn-pdf carries data-artifact=\"report_pdf\"",
+        !!pdfBtn && pdfBtn.dataset.artifact === "report_pdf");
+      const missing = document.querySelector('[data-artifact="emotions_csv"]');
       check("T3.5: missing artifact control is disabled", missing && missing.disabled === true);
       const missingWrap = missing.closest(".dis-wrap");
       check("T3.5: missing artifact shows exact explanatory copy",
@@ -1359,10 +1451,9 @@
     }
   }
 
-  // ---- 9. Results: live blob-first download, no direct navigation to downloadUrl ----
+  // ---- 9. Results: live blob-first download via the export menu, no direct navigation to downloadUrl ----
   {
     const origGetArtifact = api.getArtifact;
-    const origDownloadBlobCalls = [];
     const win = window;
     const origOpen = win.open;
     win.open = function () { throw new Error("must not navigate directly for artifact download"); };
@@ -1374,8 +1465,10 @@
     };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const btn = kmView.querySelector('[data-artifact="themes_csv"]');
-      check("T3.5: themes_csv control present for click test", !!btn);
+      const menu = document.querySelector(".export-menu");
+      menu.open = true;
+      const btn = document.querySelector('.export-list [data-artifact="themes_csv"]');
+      check("T3.5: themes_csv control present in export menu for click test", !!btn);
       fireClick(btn);
       await sleep(20);
       check("T3.5: Results click fetches via demoApi.getArtifact, not downloadUrl", getArtifactCalledWith !== null);
@@ -1391,7 +1484,7 @@
     api.getArtifact = async function () { throw demoErrorLike("network", "boom", null); };
     try {
       await gotoHash(`#/runs/${run.id}/results`);
-      const btn = kmView.querySelector('[data-artifact="report_pdf"]') || document.getElementById("btn-pdf");
+      const btn = document.getElementById("btn-pdf");
       fireClick(btn);
       await sleep(20);
       const region = document.querySelector('[role="alert"]#results-dl-live-err, [role="alert"]#results-dl-err');
@@ -1399,6 +1492,56 @@
         !!region && region.textContent === "Download failed. Try again.");
     } finally {
       api.getArtifact = origGetArtifact;
+    }
+  }
+
+  // ---- 10b. Results: inline evidence panels replace the drawer ----
+  {
+    await gotoHash(`#/runs/${run.id}/results`);
+    check("T3.5: no evidence drawer markup exists", !document.querySelector(".ev-drawer") && !document.querySelector(".ev-backdrop"));
+
+    const themeSection = kmView.querySelector('section[aria-labelledby="chart-themes-h"]');
+    const themeRows = themeSection ? Array.from(themeSection.querySelectorAll(".bar-row")) : [];
+    const lastThemeRow = themeRows[themeRows.length - 1];
+    check("T3.5: the static (Other) Theme row sorts last",
+      !!lastThemeRow && !!lastThemeRow.querySelector(".bar-val.static"));
+
+    const metricBtns = Array.from(kmView.querySelectorAll("[data-metric]"));
+    check("T3.5: results page exposes at least two metric controls for evidence tests", metricBtns.length >= 2);
+    if (metricBtns.length >= 2) {
+      const [btnA, btnB] = metricBtns;
+      const rowA = btnA.closest(".bar-row") || btnA.closest(".stat-block");
+      fireClick(btnA);
+      await sleep(10);
+      const panelA = rowA.nextElementSibling;
+      check("T3.5: clicking a metric inserts .ev-panel right after its row",
+        !!panelA && panelA.classList.contains("ev-panel"));
+      check("T3.5: opened metric button carries aria-expanded=true", btnA.getAttribute("aria-expanded") === "true");
+      check("T3.5: panel shows at most 3 comment cards", panelA.querySelectorAll(".ev-card").length <= 3);
+
+      fireClick(btnB);
+      await sleep(10);
+      check("T3.5: opening a second metric closes the first",
+        btnA.getAttribute("aria-expanded") === "false" && rowA.nextElementSibling !== panelA);
+
+      const rowB = btnB.closest(".bar-row") || btnB.closest(".stat-block");
+      const panelB = rowB.nextElementSibling;
+      const collapseBtn = panelB && panelB.querySelector("[data-ev-collapse]");
+      check("T3.5: open panel exposes a Collapse control", !!collapseBtn);
+      if (collapseBtn) {
+        fireClick(collapseBtn);
+        await sleep(10);
+        check("T3.5: Collapse returns focus to the metric button", document.activeElement === btnB);
+      }
+    }
+
+    const splitBar = kmView.querySelector(".km-split-bar");
+    if (splitBar) {
+      const segPos = parseFloat(splitBar.querySelector(".seg-pos").style.width) || 0;
+      const segNeu = parseFloat(splitBar.querySelector(".seg-neu").style.width) || 0;
+      const segNeg = parseFloat(splitBar.querySelector(".seg-neg").style.width) || 0;
+      check("T3.5: neutral segment width equals (baseN-pos-neg)/baseN, so the three segments fill the bar",
+        Math.abs((segPos + segNeu + segNeg) - 100) < 0.5);
     }
   }
 
@@ -1450,16 +1593,76 @@
     }
   }
 
+  // ---- 12b. Sessions: Drafts filter shows ready sessions with zero videos ----
+  {
+    const draftSetup = await api.createSession({
+      name: "Draft check session", campaignName: "DraftC",
+      videoUrls: ["https://youtu.be/dft1234"],
+    });
+    const draftCamp = await api.getCampaign(draftSetup.campaign.id);
+    await api.removeVideo(draftCamp.videos[0].id);
+    await gotoHash("#/sessions");
+    const draftsPill = kmView.querySelector('[data-sf="drafts"]');
+    check("Drafts pill present", !!draftsPill);
+    fireClick(draftsPill);
+    await sleep(20);
+    const draftRow = Array.from(kmView.querySelectorAll(".trow")).find(
+      (r) => r.dataset.name === "draft check session");
+    check("Draft session appears under Drafts filter", !!draftRow);
+    check("Draft session shows exact status copy",
+      !!draftRow && draftRow.textContent.includes("Draft - no videos yet"));
+    const allPill = kmView.querySelector('[data-sf="all"]');
+    fireClick(allPill);
+    await sleep(20);
+  }
+
+  // ---- 12c. Sessions: search filters rows by name without losing the query ----
+  {
+    await gotoHash("#/sessions");
+    // The search lives in the topbar, outside #view.
+    const searchInput = document.getElementById("sessions-search");
+    check("sessions search input present", !!searchInput);
+    searchInput.value = "draft check";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(20);
+    const visible = Array.from(kmView.querySelectorAll("#sessions-rows > .trow"))
+      .filter((r) => r.style.display !== "none");
+    check("sessions search filters to matching rows only",
+      visible.length > 0 && visible.every((r) => r.dataset.name.includes("draft check")));
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(20);
+  }
+
+  // ---- 12d. Files: primary/advanced tier suffixes render on the report and CSVs ----
+  {
+    await gotoHash("#/files");
+    const tiers = Array.from(kmView.querySelectorAll(".file-tier")).map((el) => el.textContent.trim());
+    check("Files shows a primary tier suffix", tiers.some((t) => t === "· primary"));
+    check("Files shows an advanced tier suffix", tiers.some((t) => t === "· advanced"));
+  }
+
   // ---- 13. demoApi public method signatures unchanged by this task ----
   check("T3.5: demoApi.getArtifact keeps its locked one-argument signature", api.getArtifact.length === 1);
   check("T3.5: demoApi.listArtifacts keeps its locked one-argument signature", api.listArtifacts.length === 1);
   check("T3.5: demoApi.listFiles keeps its locked zero-argument signature", api.listFiles.length === 0);
+
+  // ---- W3: demoApi public method signatures for this task ----
+  check("W3: demoApi.addVideo takes (campaignId, url, kind=)", api.addVideo.length === 2);
+  check("W3: demoApi.updateVideo takes (videoId, kind)", api.updateVideo.length === 2);
+  check("W3: demoApi.renameSession takes (sessionId, name)", api.renameSession.length === 2);
+  check("W3: __liveApi has updateVideo and renameSession",
+    typeof window.__liveApi.updateVideo === "function" && typeof window.__liveApi.renameSession === "function");
+  check("W3: updateVideo/renameSession arity matches demo vs live",
+    api.updateVideo.length === window.__liveApi.updateVideo.length
+    && api.renameSession.length === window.__liveApi.renameSession.length);
 
   const summary = document.getElementById("summary");
   summary.textContent = pass + " passed, " + fail + " failed";
   summary.className = fail ? "fail" : "pass";
 })().catch((e) => {
   const summary = document.getElementById("summary");
+  console.error(e.stack || e);
   summary.textContent = "SELF-CHECK ERROR: " + e.message;
   summary.className = "fail";
 });

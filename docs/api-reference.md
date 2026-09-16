@@ -85,6 +85,24 @@ type KeyMessageDraft = {
 
 `id:null` creates a server UUID. The submitted array defines order; the server does not trust the submitted `order` value. Labels are trimmed, required, and limited to 120 characters. Descriptions are trimmed and limited to 500 characters.
 
+### Brief point
+
+A run's Key Message. Session-level Key Messages carry no `source`.
+
+```ts
+type BriefPoint = KeyMessage & {
+  source: "input" | "sharpened" | "transcript";
+};
+```
+
+| `source` | Meaning |
+|---|---|
+| `input` | Came from the Session's Key Messages (User Inputs) or was added at review. Kept as given. |
+| `sharpened` | An unedited Session Key Message whose label matched a transcript-derived point and whose description changed to the transcript-grounded one. |
+| `transcript` | Derived from transcripts alone; no Session Key Message matched it. |
+
+Rows stored before `source` existed read `input`.
+
 ### Run snapshot
 
 ```ts
@@ -111,7 +129,7 @@ type RunSnapshot = {
   error: string | null;
   skipPause: boolean;
   totalComments: number | null;
-  briefPoints: KeyMessage[];
+  briefPoints: BriefPoint[];
   artifacts: Artifact[];
 };
 ```
@@ -127,8 +145,11 @@ type Artifact = {
   filename: string;
   contentType: string;
   downloadUrl: string;
+  size: number | null;
 };
 ```
+
+`size` is the stored file's size in bytes, or `null` when the file is missing on disk.
 
 ---
 
@@ -191,6 +212,20 @@ List Sessions newest first. Each item adds `campaignCount`.
 Return one Session. The response adds nested `campaigns` and `runs`. Every run uses `RunSnapshot`.
 
 Error: `404` when the Session does not exist.
+
+### `PATCH /sessions/{id}`
+
+Rename a Session.
+
+```json
+{ "name": "New name" }
+```
+
+The name is trimmed and validated like `POST /sessions`. One transaction updates the Session name, its campaign name (the two never diverge), and `updatedAt`. A running run keeps the name it started with.
+
+Response `200`: the `GET /sessions/{id}` shape.
+
+Errors: `404` Session not found; `422` empty or missing name, `field` is `name`.
 
 ---
 
@@ -288,6 +323,20 @@ Response `201`:
 ```
 
 Errors: `404` campaign not found; `422` invalid URL, duplicate URL, or invalid kind.
+
+### `PATCH /videos/{id}`
+
+Change a video's kind.
+
+```json
+{ "kind": "review" }
+```
+
+`kind` is `auto`, `brand_ad`, `review`, or `explainer`. The route also updates the owning Session's `updatedAt`. It has no running-run guard: a run reads kinds once at start, so a change during a run applies to the next run.
+
+Response `200`: video object, as returned by `POST /campaigns/{id}/videos`.
+
+Errors: `404` video not found; `422` invalid kind, `field` is `kind`.
 
 ### `DELETE /videos/{id}`
 
@@ -411,12 +460,12 @@ Request:
 }
 ```
 
-`id:null` creates a server UUID. Omitted existing rows are deleted. Submitted array order wins. An empty or all-excluded list can be saved; proceeding still requires one included row.
+`id:null` creates a server UUID. Omitted existing rows are deleted. Submitted array order wins. An empty or all-excluded list can be saved; proceeding still requires one included row. The request carries no `source`: a kept row keeps its stored `source` by id, and an `id:null` row gets `input`.
 
 Response `200`:
 
 ```json
-{ "messages": [ { "id": "...", "label": "...", "description": "...", "included": true, "order": 0 } ] }
+{ "messages": [ { "id": "...", "label": "...", "description": "...", "included": true, "order": 0, "source": "input" } ] }
 ```
 
 Errors: `404` run or campaign not found; `409` review is not open or already continued; `422` invalid, duplicate, unknown, or foreign ID.

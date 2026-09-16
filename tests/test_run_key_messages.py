@@ -53,7 +53,7 @@ client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3Q
 
 _RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
               "emotion", "report", "complete", "error"}
-_BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order"}
+_BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order", "source"}
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause", "totalComments",
@@ -482,6 +482,62 @@ def test_id_null_creates_uuid_and_full_ordered_replace():
           "submission position regardless of client-supplied order values")
 
 
+def test_brief_point_source_persisted_and_carried_by_patch():
+    """adapter persists reconcile()'s `source` (a point without one reads
+    'input'), RunSnapshot exposes it, and a review PATCH carries each
+    existing row's source over by id while id:null rows get 'input'."""
+    session_id, campaign_id = _new_session_with_video()
+
+    def sourced_reconcile(existing, meta_df, cfg, context_map=None,
+                          images_map=None, id_factory=uuid.uuid4,
+                          include_grounded=False):
+        reconciled = [
+            {"id": "bp-sharp", "label": "Sharp", "description": "d",
+             "included": True, "order": 0, "edited": False, "source": "sharpened"},
+            {"id": "bp-video", "label": "Video", "description": "d",
+             "included": True, "order": 1, "edited": False, "source": "transcript"},
+            {"id": "bp-plain", "label": "Plain", "description": "d",
+             "included": True, "order": 2, "edited": False},
+        ]
+        return ("GROUNDED", reconciled) if include_grounded else reconciled
+
+    patches = _patched_pipeline(sourced_reconcile)
+    for p in patches:
+        p.start()
+    run_id = None
+    try:
+        run_id = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
+        assert _wait_until(
+            lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
+        ), "run never reached brief_pause"
+
+        points = client.get(f"/api/runs/{run_id}").json()["briefPoints"]
+        for p in points:
+            assert set(p.keys()) == _BRIEF_POINT_KEYS, p.keys()
+        assert {p["id"]: p["source"] for p in points} == {
+            "bp-sharp": "sharpened", "bp-video": "transcript", "bp-plain": "input",
+        }, points
+
+        resp = client.patch(f"/api/runs/{run_id}/brief_points", json={"messages": [
+            {"id": "bp-video", "label": "Video edited", "description": "d2",
+             "included": True, "order": 0},
+            {"id": None, "label": "Added", "description": "", "included": True, "order": 1},
+            {"id": "bp-sharp", "label": "Sharp", "description": "d",
+             "included": False, "order": 2},
+        ]})
+        assert resp.status_code == 200, resp.text
+        saved = resp.json()["messages"]
+        assert [m["source"] for m in saved] == ["transcript", "input", "sharpened"], saved
+
+        client.post(f"/api/runs/{run_id}/proceed")
+        assert _wait_until(
+            lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
+    finally:
+        _stop(patches, run_id)
+    print("  ok  brief point source persisted from reconcile (missing -> 'input'), "
+          "exposed on RunSnapshot, carried by id through PATCH, new rows 'input'")
+
+
 def test_duplicate_non_null_id_rejected_422():
     session_id, campaign_id = _new_session_with_video()
 
@@ -658,6 +714,7 @@ if __name__ == "__main__":
         test_session_key_messages_never_mutated_by_a_run,
         test_patch_and_proceed_gated_on_persisted_brief_pause_stage,
         test_id_null_creates_uuid_and_full_ordered_replace,
+        test_brief_point_source_persisted_and_carried_by_patch,
         test_duplicate_non_null_id_rejected_422,
         test_unknown_id_rejected_422,
         test_cross_run_id_rejected_422,

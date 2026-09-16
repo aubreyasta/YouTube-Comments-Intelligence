@@ -108,9 +108,17 @@ const liveApi = {
     return { session, campaign };
   },
 
-  async addVideo(campaignId, url) {
+  async addVideo(campaignId, url, kind = "auto") {
     return apiJson("/api/campaigns/" + campaignId + "/videos",
-      json({ url, kind: "auto" }));
+      json({ url, kind }));
+  },
+
+  async updateVideo(videoId, kind) {
+    return apiJson("/api/videos/" + videoId, patch({ kind }));
+  },
+
+  async renameSession(sessionId, name) {
+    return apiJson("/api/sessions/" + sessionId, patch({ name }));
   },
 
   async removeVideo(videoId) {
@@ -347,7 +355,7 @@ const liveApi = {
       // Assets from campaigns.
       for (const camp of (full.campaigns || [])) {
         for (const asset of (camp.assets || [])) {
-          files.push({ ...asset, _file: "asset", campaignName: camp.name });
+          files.push({ ...asset, _file: "asset", campaignName: camp.name, sessionName: sess.name });
         }
       }
       // Artifacts from complete runs.
@@ -357,7 +365,8 @@ const liveApi = {
         for (const art of filterPublicArtifacts(run.artifacts)) {
           files.push({
             ...art, _file: "artifact",
-            campaignId: campaignId, campaignName,
+            campaignId: campaignId, campaignName, sessionName: sess.name,
+            size: art.size != null ? art.size : null,
           });
         }
       }

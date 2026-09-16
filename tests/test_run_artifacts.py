@@ -189,7 +189,7 @@ def test_seven_rows_registered_no_old_kinds():
 
 def test_six_public_artifacts_fixed_order_exact_fields():
     sid, rid = _new_session_with_run()
-    _seed_all_artifacts(rid)
+    art_dir = _seed_all_artifacts(rid)
 
     snapshot = client.get(f"/api/runs/{rid}").json()
     artifacts = snapshot["artifacts"]
@@ -214,8 +214,12 @@ def test_six_public_artifacts_fixed_order_exact_fields():
         assert art["downloadUrl"] == expected_url, (
             f"artifact {i} ({kind}): downloadUrl {art['downloadUrl']!r} != expected {expected_url!r}"
         )
-        assert set(art.keys()) == {"id", "kind", "filename", "contentType", "downloadUrl"}, (
+        assert set(art.keys()) == {"id", "kind", "filename", "contentType", "downloadUrl", "size"}, (
             f"artifact {i} ({kind}): unexpected field set {sorted(art.keys())}"
+        )
+        expected_size = os.path.getsize(os.path.join(art_dir, filename))
+        assert art["size"] == expected_size, (
+            f"artifact {i} ({kind}): size {art['size']!r} != expected {expected_size}"
         )
 
     public_kinds = {a["kind"] for a in artifacts}
@@ -223,7 +227,7 @@ def test_six_public_artifacts_fixed_order_exact_fields():
     assert not (public_kinds & _OLD_KINDS), (
         f"old kinds leaked into RunSnapshot.artifacts: {public_kinds & _OLD_KINDS}"
     )
-    print("  ok  six public artifacts in fixed order, exact kind/filename/contentType/downloadUrl, report_json hidden")
+    print("  ok  six public artifacts in fixed order, exact kind/filename/contentType/downloadUrl/size, report_json hidden")
 
 
 def test_public_download_serves_correct_blob():

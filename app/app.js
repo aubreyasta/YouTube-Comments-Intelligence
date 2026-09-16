@@ -101,7 +101,7 @@ const DEMO_TITLES = [
 ];
 const DEMO_CHANNELS = ["Nike Indonesia", "Nike Indonesia", "Bung Kicau", "Garuda Select"];
 
-function demoVideoMeta(videoId, kind) {
+function demoVideoMeta(videoId, format) {
   const known = DEMO_VIDEOS[videoId];
   if (known) return { ...known };
   let h = 0;
@@ -110,15 +110,15 @@ function demoVideoMeta(videoId, kind) {
   return {
     title: DEMO_TITLES[h % DEMO_TITLES.length],
     channel: DEMO_CHANNELS[h % DEMO_CHANNELS.length],
-    commentCount: kind === "short" ? Math.max(60, Math.round(comments / 4)) : comments,
+    commentCount: format === "short" ? Math.max(60, Math.round(comments / 4)) : comments,
   };
 }
 
 const FIXTURE_POINTS = [
-  { label: "Authentic green chili flavor", description: "The relaunch tastes like the original green chili recipe." },
-  { label: "Bolder, upgraded taste", description: "Spicier and more savoury than the flavour people remember." },
-  { label: "Real green chili", description: "Made with actual green chili, not a synthetic flavouring." },
-  { label: "Jumbo Size Variant", description: "The relaunch arrives in a larger jumbo portion." },
+  { label: "Authentic green chili flavor", description: "The relaunch tastes like the original green chili recipe.", source: "input" },
+  { label: "Bolder, upgraded taste", description: "Spicier and more savoury than the flavour people remember.", source: "sharpened" },
+  { label: "Real green chili", description: "Made with actual green chili, not a synthetic flavouring.", source: "input" },
+  { label: "Jumbo Size Variant", description: "The relaunch arrives in a larger jumbo portion.", source: "transcript" },
 ];
 
 /* ============================== Run engine ============================== */
@@ -127,10 +127,10 @@ const STAGE_MESSAGES = {
   connecting: "Connecting to YouTube",
   collect: "Collecting the comments",
   brief: "Reading the brief and transcripts",
-  brief_pause: "Waiting for you to confirm the ideas",
+  brief_pause: "Waiting for you to confirm the Key Messages",
   classify: "Labelling every comment",
   emotion: "Double-checking the leftovers",
-  report: "Writing your note",
+  report: "Writing the report",
   complete: "Complete",
   failed: "Failed",
 };
@@ -330,6 +330,7 @@ function startEngineSchedule(engine) {
           { collected, total: engine.counts.total, videos: engine.counts.videos });
         if (collected >= engine.counts.total) {
           engine.clearTimers();
+          run.totalComments = engine.counts.total;
           engine.after(500, () => go("brief"));
         }
       });
@@ -407,7 +408,6 @@ const demoApi = {
     const name = requireName(input.name, "Session name");
     const campaignName = requireName(input.campaignName, "Campaign name");
     const urls = input.videoUrls || [];
-    if (!urls.length) throw demoError("validation", "Add at least one YouTube link.", "videos");
     const seen = new Set();
     const parsed = urls.map((u) => {
       const p = parseYouTubeUrl(u);
@@ -433,7 +433,7 @@ const demoApi = {
       const meta = demoVideoMeta(p.videoId, p.kind);
       const v = {
         id: uid(), campaignId: campaign.id, url: p.url, videoId: p.videoId,
-        kind: p.kind, title: meta.title, channel: meta.channel,
+        format: p.kind, kind: "auto", title: meta.title, channel: meta.channel,
         thumbnailUrl: null, commentCount: meta.commentCount,
       };
       store.videos.set(v.id, v);
@@ -455,10 +455,10 @@ const demoApi = {
   },
 
   /**
-   * @param {string} campaignId @param {string} url
+   * @param {string} campaignId @param {string} url @param {string} [kind]
    * @returns {Promise<object>} the new Video
    */
-  async addVideo(campaignId, url) {
+  async addVideo(campaignId, url, kind = "auto") {
     const c = store.campaigns.get(campaignId);
     if (!c) throw demoError("not_found", "Campaign not found.");
     const p = parseYouTubeUrl(url);
@@ -467,7 +467,7 @@ const demoApi = {
     if (dupe) throw demoError("validation", "That video is already in this campaign.", "url");
     const meta = demoVideoMeta(p.videoId, p.kind);
     const v = {
-      id: uid(), campaignId, url: url.trim(), videoId: p.videoId, kind: p.kind,
+      id: uid(), campaignId, url: url.trim(), videoId: p.videoId, format: p.kind, kind,
       title: meta.title, channel: meta.channel, thumbnailUrl: null,
       commentCount: meta.commentCount,
     };
@@ -485,6 +485,38 @@ const demoApi = {
     if (c) c.videoIds = c.videoIds.filter((id) => id !== videoId);
     store.videos.delete(videoId);
     if (c) touchSession(c.sessionId);
+  },
+
+  /**
+   * @param {string} videoId @param {string} kind
+   * @returns {Promise<object>} the updated Video
+   */
+  async updateVideo(videoId, kind) {
+    const v = store.videos.get(videoId);
+    if (!v) throw demoError("not_found", "Video not found.");
+    if (!["auto", "brand_ad", "review", "explainer"].includes(kind)) {
+      throw demoError("validation", "That is not a valid video kind.", "kind");
+    }
+    v.kind = kind;
+    touchSession(v.campaignId ? store.campaigns.get(v.campaignId)?.sessionId : null);
+    return { ...v };
+  },
+
+  /**
+   * @param {string} sessionId @param {string} name
+   * @returns {Promise<object>} the updated Session
+   */
+  async renameSession(sessionId, name) {
+    const s = store.sessions.get(sessionId);
+    if (!s) throw demoError("not_found", "Session not found.");
+    const trimmed = requireName(name, "Session name");
+    s.name = trimmed;
+    for (const campaignId of s.campaignIds) {
+      const c = store.campaigns.get(campaignId);
+      if (c) c.name = trimmed;
+    }
+    touchSession(sessionId);
+    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) };
   },
 
   /**
@@ -662,16 +694,15 @@ const demoApi = {
     const run = {
       id: uid(), sessionId, status: "queued", stage: "connecting",
       pct: 0, message: "Queued", briefPointIds: [], error: null,
-      skipPause: !!skipPause, createdAt: nowIso(),
+      skipPause: !!skipPause, createdAt: nowIso(), totalComments: null,
     };
-    // Fresh brief points per run, seeded from the campaign's assets/brief.
-    const campaign = store.campaigns.get(s.campaignIds[0]);
-    const pointCount = campaign && campaign.assetIds.length ? 5 : 4;
+    // Fresh brief points per run, one per fixture point.
+    const pointCount = FIXTURE_POINTS.length;
     for (let i = 0; i < pointCount; i++) {
       const fx = FIXTURE_POINTS[i];
       const p = {
         id: uid(), runId: run.id, label: fx.label, description: fx.description,
-        included: true, order: i + 1,
+        included: true, order: i + 1, source: fx.source,
       };
       store.briefPoints.set(p.id, p);
       run.briefPointIds.push(p.id);
@@ -754,14 +785,17 @@ const demoApi = {
       const description = (p.description || "").trim();
       if (description.length > 500) throw demoError("validation", "Description is limited to 500 characters.", "messages");
       let id = p.id;
+      let source;
       if (id != null) {
         if (!knownIds.has(id)) throw demoError("validation", "Unknown Key Message id.", "messages");
         if (seenIds.has(id)) throw demoError("validation", "Duplicate Key Message id.", "messages");
         seenIds.add(id);
+        source = (store.briefPoints.get(id) || {}).source || "input";
       } else {
         id = uid();
+        source = "input";
       }
-      kept.push({ id, runId, label, description, included: !!p.included });
+      kept.push({ id, runId, label, description, included: !!p.included, source });
     }
     if (!kept.some((p) => p.included)) {
       throw demoError("validation", "Include at least one Key Message before continuing.", "messages");
@@ -900,7 +934,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
 (function wrapForLive() {
   const asyncMethods = [
     "listSessions","getSession","createSession","getCampaign",
-    "addVideo","removeVideo","uploadAsset","addArticle","removeAsset",
+    "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
     "proceedRun",
     "getReport","getAssetData",
@@ -912,6 +946,8 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
       if (demoApi.mode === "live") return window.__liveApi[m](...args);
       return orig(...args);
     };
+    // Keep the demo signature's arity visible through the rest-arg wrapper.
+    Object.defineProperty(demoApi[m], "length", { value: orig.length });
   }
   // Explicit-arity wrappers, not the generic rest-arg loop above, so
   // Function.length stays 1,1,0 for both demo and live.
@@ -977,7 +1013,7 @@ function fmtNum(n) {
 }
 
 function fmtSize(bytes) {
-  if (bytes == null) return "—";
+  if (bytes == null) return "-";
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
@@ -1006,7 +1042,9 @@ const ICONS = {
   star: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>',
   starLg: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4l2 5.7 5.7 2-5.7 2-2 5.7-2-5.7-5.7-2 5.7-2z"></path></svg>',
   folder: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h6l2 2.2h10V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"></path></svg>',
+  barChart: '<svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V11"></path><path d="M10 20V4.5"></path><path d="M16 20v-6.5"></path><path d="M2.5 20h19"></path></svg>',
   link: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.2"></path><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7l1.3-1.2"></path></svg>',
+  pencil: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3l4 4L8.5 17.5 4 18.5l1-4.5z"></path></svg>',
   search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>',
   check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
   upArr: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>',
@@ -1088,6 +1126,18 @@ function closeModal() {
 
 function setTopbar(html) { topbar.innerHTML = html; }
 
+/* Session screens: the Session name at 14px/700 plus a status badge on the
+   left, caller-built controls on the right. badgeHtml and rightHtml are
+   trusted markup; name is escaped here. */
+function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
+  setTopbar(`
+    <div class="topbar-left">
+      <a class="crumb-back" href="#/sessions" aria-label="Back to Sessions">${ICONS.chevL}</a>
+      <div class="session-title"><span class="name">${esc(name)}</span>${badgeHtml}</div>
+    </div>
+    <div class="topbar-right">${rightHtml}</div>`);
+}
+
 function setSidebarActive(which) {
   for (const id of ["sb-sessions", "sb-files"]) {
     document.getElementById(id).classList.toggle("active", id === "sb-" + which);
@@ -1101,7 +1151,6 @@ let routeCleanup = null;
 function cleanupRoute() {
   if (routeCleanup) { routeCleanup(); routeCleanup = null; }
   closeModal();
-  closeEvidenceDrawer();
 }
 
 /* ============================== Key Messages editor state ==============================
@@ -1235,18 +1284,15 @@ async function renderHome() {
     </div>`);
 
   view.innerHTML = `
-  <div class="view-pad" style="gap:30px">
-    <section aria-label="Your sessions" style="display:flex;flex-direction:column;gap:14px">
-      <div class="section-label">Your sessions</div>
-      <div class="empty-card">
-        <div class="empty-badge">${ICONS.folder}</div>
-        <h1>Start a Session<br><span class="accent">Add videos to begin.</span></h1>
-        <p>A Session is one campaign - a name, the YouTube videos, and any briefs, articles or images you add. We read those to see what the campaign pushed. We never read them against the comments.</p>
-        <div class="actions">
-          <a class="btn primary lg" href="#/sessions/new">Create your first session</a>
-        </div>
+  <div class="view-pad" style="padding-top:40px;gap:30px">
+    <div class="empty-card">
+      <div class="empty-badge">${ICONS.barChart}</div>
+      <h1>What campaign<br><span class="pink">should we listen to today?</span></h1>
+      <p>A Session is one campaign - a name, the YouTube videos, and any briefs, articles or images you add. We read those to see what the campaign pushed. We never read them against the comments.</p>
+      <div class="actions">
+        <a class="btn primary lg" href="#/sessions/new">Create your first session</a>
       </div>
-    </section>
+    </div>
 
     <section class="steps" aria-label="How it works">
       <div class="step"><span class="k">STEP 1</span><span class="t">Set up the Session</span><span class="d">Name it, paste the videos, add the brief. Key Messages appear as you add things.</span></div>
@@ -1258,15 +1304,16 @@ async function renderHome() {
 
 /* ---------- Sessions ---------- */
 const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", complete: "Complete", failed: "Failed" };
-let sessionsFilter = "all"; // "all" | "running" | "failed"
+let sessionsFilter = "all"; // "all" | "running" | "drafts"
+let sessionsQuery = "";
 
 async function renderSessions() {
   setSidebarActive("sessions");
-  const live = demoApi.mode === "live";
   const sessions = await demoApi.listSessions();
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
+      <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="sessions-search" class="topbar-search" placeholder="Search sessions" aria-label="Search sessions"></span>
       <a class="btn primary" href="#/sessions/new">New session</a>
     </div>`);
 
@@ -1287,53 +1334,62 @@ async function renderSessions() {
     return;
   }
 
-  const shown = sessions.filter((s) => {
-    if (sessionsFilter === "running") return s.status === "running";
-    if (sessionsFilter === "failed") return s.status === "failed";
-    return true;
-  });
-  const totalComments = sessions.reduce((a, s) => a + s.commentCount, 0);
-  const rows = await Promise.all(shown.map(async (s) => {
+  const sessionData = await Promise.all(sessions.map(async (s) => {
     const campaigns = (await Promise.all(s.campaignIds.map((id) => demoApi.getCampaign(id))))
       .map((c, i) => ({ ...c, id: s.campaignIds[i] }));
+    const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
+    const isDraft = s.status === "ready" && videoCount === 0;
+    const runningRun = s.status === "running" ? await demoApi.getRunningRun(s.id) : null;
+    return { s, campaigns, videoCount, isDraft, runningRun };
+  }));
+
+  const shown = sessionData.filter((d) => {
+    if (sessionsFilter === "running") return d.s.status === "running";
+    if (sessionsFilter === "drafts") return d.isDraft;
+    return true;
+  });
+
+  const rows = shown.map((d) => {
+    const { s, campaigns, videoCount, isDraft, runningRun } = d;
     const target = campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
-    const runningRun = await demoApi.getRunningRun(s.id);
-    const statusCell = s.status === "running" && runningRun
+    const statusCell = isDraft
+      ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
+      : s.status === "running" && runningRun
       ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
-    const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
     return `
-      <a class="trow" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px" href="${target}">
+      <a class="trow" data-name="${esc(s.name.toLowerCase())}" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px" href="${target}">
         <div class="trow-name">${esc(s.name)}</div>
         <div class="trow-num">${videoCount}</div>
-        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "—"}</div>
+        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "-"}</div>
         <div>${statusCell}</div>
         <div class="trow-dim">${fmtAgo(s.updatedAt)}</div>
         <div class="chev">${ICONS.chevR}</div>
       </a>`;
-  }));
+  });
 
   view.innerHTML = `
   <div class="view-pad">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
-        <h2 class="greeting">Good afternoon</h2>
-        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${fmtNum(totalComments)} comments read${live ? "" : " in this demo"}</div>
+        <h2 class="greeting">Sessions</h2>
+        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · one campaign each</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
         <button class="pill${sessionsFilter === "all" ? " active" : ""}" type="button" data-sf="all" aria-pressed="${sessionsFilter === "all"}">All</button>
         <button class="pill${sessionsFilter === "running" ? " active" : ""}" type="button" data-sf="running" aria-pressed="${sessionsFilter === "running"}">Running</button>
-        <button class="pill${sessionsFilter === "failed" ? " active" : ""}" type="button" data-sf="failed" aria-pressed="${sessionsFilter === "failed"}">Failed</button>
+        <button class="pill${sessionsFilter === "drafts" ? " active" : ""}" type="button" data-sf="drafts" aria-pressed="${sessionsFilter === "drafts"}">Drafts</button>
       </div>
     </div>
     <div class="table-scroll">
     <div class="table" style="min-width:760px">
-      <div class="thead" style="grid-template-columns:1.5fr .8fr .8fr .8fr .7fr 20px">
+      <div class="thead" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px">
         <div>SESSION</div><div>VIDEOS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
       </div>
-      ${rows.join("") || '<div style="padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>'}
+      <div id="sessions-rows">${rows.join("")}</div>
+      <div id="sessions-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
     </div>
     </div>
   </div>`;
@@ -1341,135 +1397,46 @@ async function renderSessions() {
   view.querySelectorAll("[data-sf]").forEach((b) => {
     b.addEventListener("click", () => { sessionsFilter = b.dataset.sf; renderSessions(); });
   });
-}
 
-/* ---------- New session ---------- */
-async function renderNewSession() {
-  setSidebarActive("sessions");
-  setTopbar(`
-    <div class="topbar-left">
-      <a class="crumb-back" href="#/sessions">
-        ${ICONS.chevL}<span>Back to sessions</span>
-      </a>
-    </div>
-    <div class="topbar-right"></div>`);
-
-  view.innerHTML = `
-  <div class="setup-wrap">
-    <form class="setup" id="setup-form" novalidate>
-      <div style="display:flex;flex-direction:column;gap:9px">
-        <h1>Set up your session</h1>
-        <div class="lede">One Session is one campaign. Give it a name and at least one YouTube link - briefs, articles and images come next, and Key Messages are drafted from them.</div>
-      </div>
-
-      <div class="field">
-        <label for="f-session-name">Session name</label>
-        <input class="input" id="f-session-name" name="sessionName" type="text" autocomplete="off" placeholder="Ramadan football push" aria-describedby="hint-session err-session">
-        <div class="hint" id="hint-session">Sessions are for organising - group the campaigns you want to read together.</div>
-        <div class="field-error" id="err-session" hidden></div>
-      </div>
-
-      <div class="field">
-        <span class="label" id="urls-label">YouTube links</span>
-        <div class="hint" id="hint-urls">youtube.com/watch?v=, youtu.be/, or youtube.com/shorts/ links. No playlists, no duplicates.</div>
-        <div class="url-list" id="url-list" role="list" aria-labelledby="urls-label"></div>
-        <div class="url-add">
-          <input class="input" id="f-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-labelledby="urls-label" aria-describedby="hint-urls err-url">
-          <button class="btn secondary" type="button" id="btn-add-url">Add link</button>
-        </div>
-        <div class="field-error" id="err-url" hidden></div>
-        <div class="field-error" id="err-videos" hidden></div>
-      </div>
-
-      <div class="setup-foot">
-        <button class="btn primary lg" type="submit">Create session</button>
-        <span class="tail"></span>
-        <span class="note">User Inputs and Key Messages come next</span>
-      </div>
-    </form>
-  </div>`;
-
-  const added = [];
-  const listEl = document.getElementById("url-list");
-  const urlInput = document.getElementById("f-url");
-  const errUrl = document.getElementById("err-url");
-  const errVideos = document.getElementById("err-videos");
-
-  function showErr(el, msg) {
-    if (msg) { el.textContent = msg; el.hidden = false; } else { el.hidden = true; }
+  function applySessionsSearch() {
+    let anyVisible = false;
+    view.querySelectorAll("#sessions-rows > .trow").forEach((row) => {
+      const match = !sessionsQuery || (row.dataset.name || "").includes(sessionsQuery);
+      row.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    const empty = document.getElementById("sessions-empty");
+    if (empty) empty.style.display = anyVisible ? "none" : "block";
   }
-  function paintUrls() {
-    listEl.innerHTML = added.map((u, i) => `
-      <div class="url-row" role="listitem">
-        <span class="yt">${ICONS.yt}</span>
-        <span class="u">${esc(u)}</span>
-        <button class="icon-btn" type="button" data-rm="${i}" aria-label="Remove ${esc(u)}">${ICONS.x}</button>
-      </div>`).join("");
-    listEl.querySelectorAll("[data-rm]").forEach((b) => {
-      b.addEventListener("click", () => { added.splice(Number(b.dataset.rm), 1); paintUrls(); });
+
+  const searchInput = document.getElementById("sessions-search");
+  if (searchInput) {
+    searchInput.value = sessionsQuery;
+    searchInput.addEventListener("input", () => {
+      sessionsQuery = searchInput.value.trim().toLowerCase();
+      applySessionsSearch();
     });
   }
-  function addUrl() {
-    const val = urlInput.value;
-    const p = parseYouTubeUrl(val);
-    if (p.error) { showErr(errUrl, p.error); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
-    const dup = added.some((u) => parseYouTubeUrl(u).videoId === p.videoId);
-    if (dup) { showErr(errUrl, "That video is already in the list."); urlInput.classList.add("error"); urlInput.setAttribute("aria-invalid", "true"); return; }
-    showErr(errUrl, null); showErr(errVideos, null);
-    urlInput.classList.remove("error"); urlInput.removeAttribute("aria-invalid");
-    added.push(val.trim());
-    urlInput.value = "";
-    paintUrls();
-    urlInput.focus();
-  }
-  document.getElementById("btn-add-url").addEventListener("click", addUrl);
-  urlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); addUrl(); }
-  });
-
-  document.getElementById("setup-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = document.getElementById("f-session-name");
-    const errS = document.getElementById("err-session");
-    let ok = true;
-    let firstInvalid = null;
-    if (!name.value.trim()) {
-      showErr(errS, "Session name is required."); name.classList.add("error");
-      name.setAttribute("aria-invalid", "true"); ok = false; firstInvalid = firstInvalid || name;
-    } else { showErr(errS, null); name.classList.remove("error"); name.removeAttribute("aria-invalid"); }
-    if (!added.length) {
-      showErr(errVideos, "Add at least one YouTube link."); ok = false;
-      firstInvalid = firstInvalid || urlInput;
-    } else showErr(errVideos, null);
-    if (!ok) { if (firstInvalid) firstInvalid.focus(); return; }
-    try {
-      // Session name doubles as the campaign name; there is no separate field.
-      const { session, campaign } = await demoApi.createSession({
-        name: name.value, campaignName: name.value, videoUrls: added,
-      });
-      location.hash = `#/sessions/${session.id}/campaigns/${campaign.id}`;
-    } catch (err) {
-      showErr(errVideos, err.message);
-    }
-  });
+  applySessionsSearch();
 }
 
 /* ---------- Key Messages confirmation dialog ----------
    Reuses the existing modal/overlay foundation minimally: focus trap, Escape,
    and focus restoration all come from openModal/closeModal. This wraps that
    with a Continue/Cancel choice instead of a single close button. */
-function openConfirm(message, onContinue) {
+function openConfirm(message, onContinue, { title = "", confirmLabel = "Continue" } = {}) {
   closeModal();
   const prevFocus = document.activeElement;
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
-    <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm">
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" ${title ? `aria-labelledby="confirm-title"` : `aria-label="Confirm"`}>
       <div class="modal-body confirm-body">
+        ${title ? `<h2 class="confirm-title" id="confirm-title">${esc(title)}</h2>` : ""}
         <p class="confirm-msg">${esc(message)}</p>
         <div class="confirm-actions">
           <button class="btn secondary" type="button" data-confirm-cancel>Cancel</button>
-          <button class="btn primary" type="button" data-confirm-continue>Continue</button>
+          <button class="btn primary" type="button" data-confirm-continue>${esc(confirmLabel)}</button>
         </div>
       </div>
     </div>`;
@@ -1561,6 +1528,7 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
   let deferredRepaint = false; // background response landed while focus was inside the editor
   let pointerDownInside = false; // a pointer press landed on a control inside the editor, so a deferred repaint must not replace that control before its click is delivered
   let saveInFlight = false; // guards Save's own fullPatch against a duplicate/rapid re-click
+  const expandedKeys = new Set(); // rowKey()s manually expanded; dirty/invalid rows expand regardless
 
   function isFocusInside() {
     return container.contains(document.activeElement);
@@ -1625,36 +1593,46 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
       const dirty = st.dirtyIds.has(key);
       const labelInvalid = dirty && !r.label.trim();
       const descInvalid = dirty && r.description.length > 500;
+      const expanded = expandedKeys.has(key) || dirty || labelInvalid || descInvalid;
+      const editHtml = expanded ? `
+        <div class="km-edit" id="km-edit-${i}">
+          <div class="km-fields">
+            <label class="sr-only" for="km-label-${i}">Key Message ${i + 1} label</label>
+            <input class="km-label-in" id="km-label-${i}" data-km-f="label" data-km-i="${i}"
+              maxlength="120" value="${esc(r.label)}"
+              ${labelInvalid ? `aria-invalid="true" aria-describedby="km-label-err-${i}"` : ""}
+              ${pendingPatch ? "disabled" : ""}>
+            ${labelInvalid ? `<div class="field-error" id="km-label-err-${i}">Label is required.</div>` : ""}
+            <label class="sr-only" for="km-desc-${i}">Key Message ${i + 1} description</label>
+            <textarea class="km-desc-in" id="km-desc-${i}" data-km-f="description" data-km-i="${i}"
+              maxlength="500" rows="2"
+              ${descInvalid ? `aria-invalid="true" aria-describedby="km-desc-err-${i}"` : ""}
+              ${pendingPatch ? "disabled" : ""}>${esc(r.description)}</textarea>
+            ${descInvalid ? `<div class="field-error" id="km-desc-err-${i}">Description is limited to 500 characters.</div>` : ""}
+          </div>
+          <div class="km-tools">
+            <button class="icon-btn" type="button" data-km-up="${i}" aria-label="Move Key Message ${i + 1} up" ${pendingPatch || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
+            <button class="icon-btn" type="button" data-km-down="${i}" aria-label="Move Key Message ${i + 1} down" ${pendingPatch || i === rows.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
+            <button class="icon-btn" type="button" data-km-del="${i}" aria-label="Delete Key Message ${i + 1}" ${pendingPatch ? "disabled" : ""}>${ICONS.x}</button>
+          </div>
+        </div>` : "";
       return `
-      <div class="km-row" data-km-idx="${i}">
-        <span class="km-num">${String(i + 1).padStart(2, "0")}</span>
-        <div class="km-fields">
-          <label class="sr-only" for="km-label-${i}">Key Message ${i + 1} label</label>
-          <input class="km-label-in" id="km-label-${i}" data-km-f="label" data-km-i="${i}"
-            maxlength="120" value="${esc(r.label)}"
-            ${labelInvalid ? `aria-invalid="true" aria-describedby="km-label-err-${i}"` : ""}
-            ${pendingPatch ? "disabled" : ""}>
-          ${labelInvalid ? `<div class="field-error" id="km-label-err-${i}">Label is required.</div>` : ""}
-          <label class="sr-only" for="km-desc-${i}">Key Message ${i + 1} description</label>
-          <textarea class="km-desc-in" id="km-desc-${i}" data-km-f="description" data-km-i="${i}"
-            maxlength="500" rows="2"
-            ${descInvalid ? `aria-invalid="true" aria-describedby="km-desc-err-${i}"` : ""}
-            ${pendingPatch ? "disabled" : ""}>${esc(r.description)}</textarea>
-          ${descInvalid ? `<div class="field-error" id="km-desc-err-${i}">Description is limited to 500 characters.</div>` : ""}
-        </div>
-        <div class="km-tools">
+      <div class="km-row${expanded ? " expanded" : ""}" data-km-idx="${i}">
+        <div class="km-row-head">
+          <span class="km-num">${i + 1}</span>
+          <button class="km-row-toggle" type="button" aria-expanded="${expanded}" aria-controls="km-edit-${i}" data-km-toggle="${i}">
+            <span class="km-row-label${r.included ? "" : " excluded"}">${esc(r.label) || "Untitled Key Message"}</span>
+          </button>
           <button class="km-chip" type="button" data-km-inc="${i}" aria-pressed="${r.included}" ${pendingPatch ? "disabled" : ""}>${r.included ? "Included" : "Excluded"}</button>
-          <button class="icon-btn" type="button" data-km-up="${i}" aria-label="Move Key Message ${i + 1} up" ${pendingPatch || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
-          <button class="icon-btn" type="button" data-km-down="${i}" aria-label="Move Key Message ${i + 1} down" ${pendingPatch || i === rows.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
-          <button class="icon-btn" type="button" data-km-del="${i}" aria-label="Delete Key Message ${i + 1}" ${pendingPatch ? "disabled" : ""}>${ICONS.x}</button>
         </div>
+        ${editHtml}
       </div>`;
     }).join("") : `<div class="km-empty">No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.</div>`;
 
     container.innerHTML = `
     <section class="card km-section" aria-labelledby="km-h" aria-busy="${busy}">
       <div class="km-head">
-        <h2 class="panel-title" id="km-h">Key Messages - ${count}</h2>
+        <h2 class="panel-title" id="km-h">Key Messages · ${count}</h2>
         <div class="panel-note">Drafted from your User Inputs before any comment is read. The run checks them against the video transcripts and pauses for your review before labelling.</div>
       </div>
       <div class="km-status" role="status" aria-live="polite">${statusHtml}</div>
@@ -1738,9 +1716,29 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
         pendingPatch = false; paint();
       });
     });
+    container.querySelectorAll("[data-km-toggle]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = Number(b.dataset.kmToggle);
+        const key = rowKey(rows[i]);
+        const dirty = st.dirtyIds.has(key);
+        const labelInvalid = dirty && !rows[i].label.trim();
+        const descInvalid = dirty && rows[i].description.length > 500;
+        const forcedOpen = dirty || labelInvalid || descInvalid;
+        if (expandedKeys.has(key) && !forcedOpen) expandedKeys.delete(key);
+        else expandedKeys.add(key);
+        paint();
+        const nowExpanded = expandedKeys.has(key) || forcedOpen;
+        const toFocus = nowExpanded
+          ? container.querySelector(`#km-label-${i}`)
+          : container.querySelector(`[data-km-toggle="${i}"]`);
+        if (toFocus) toFocus.focus();
+      });
+    });
     const addBtn = container.querySelector("#km-add");
     addBtn.addEventListener("click", () => {
-      rows.push({ id: null, label: "", description: "", included: true, order: rows.length });
+      const newRow = { id: null, label: "", description: "", included: true, order: rows.length };
+      rows.push(newRow);
+      expandedKeys.add(rowKey(newRow));
       paint();
       const last = container.querySelector(`#km-label-${rows.length - 1}`);
       if (last) last.focus();
@@ -1835,37 +1833,33 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
   };
 }
 
-/* ---------- Campaign detail ---------- */
-async function renderCampaign(sessionId, campaignId) {
+/* ---------- Session editor: #/sessions/new (create) and Session detail share this ---------- */
+async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
-  const [session, campaign, runningRun, kmDraft] = await Promise.all([
-    demoApi.getSession(sessionId),
-    demoApi.getCampaign(campaignId),
-    demoApi.getRunningRun(sessionId),
-    demoApi.getKeyMessages(sessionId),
-  ]);
+  const createMode = sessionId == null;
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions">Sessions</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(session.name)}</span>
-        <span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${runningRun ? "" : `<div class="skip-pause">
-        <input type="checkbox" id="chk-skip-pause">
-        <label for="chk-skip-pause">
-          Skip the review step and run straight through
-          <span class="hint">We will not pause to ask you to confirm the Key Messages.</span>
-        </label>
-      </div>`}
-      <button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>
-    </div>`);
-  const runBtn = document.getElementById("btn-run");
+  let session = null, campaign = null, runningRun = null, kmDraft = null;
+  if (!createMode) {
+    [session, campaign, runningRun, kmDraft] = await Promise.all([
+      demoApi.getSession(sessionId),
+      demoApi.getCampaign(campaignId),
+      demoApi.getRunningRun(sessionId),
+      demoApi.getKeyMessages(sessionId),
+    ]);
+  }
+
+  if (createMode) {
+    sessionTopbar({ name: "New session" });
+  } else {
+    const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
+    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>`;
+    sessionTopbar({ name: session.name, badgeHtml, rightHtml });
+  }
+
+  let runBtn = null;
+  if (!createMode) {
+  runBtn = document.getElementById("btn-run");
   if (runningRun) {
     runBtn.disabled = false;
     runBtn.addEventListener("click", () => { location.hash = `#/runs/${runningRun.id}`; });
@@ -1891,7 +1885,11 @@ async function renderCampaign(sessionId, campaignId) {
         };
         // Live mode: confirm overwrite when session is not fresh (a previous result exists).
         if (live && session.status !== "ready") {
-          openConfirm("A new run replaces this session's previous results. Continue?", proceedOverwrite);
+          openConfirm(
+            "Starting a new run deletes this Session's current result, along with its report and files, before the new one begins. There's no history - this is the only copy.",
+            proceedOverwrite,
+            { title: "Run again and replace the result?", confirmLabel: "Delete and run" },
+          );
         } else {
           proceedOverwrite();
         }
@@ -1905,37 +1903,25 @@ async function renderCampaign(sessionId, campaignId) {
         startTheRun();
       }
     });
+    }
   }
 
-  // Live: videos show URL + kind tag from parseYouTubeUrl; no comment count line.
-  // Demo: videos show title, channel, comment count.
-  const videos = campaign.videos || [];
+  // Demo and live both show the URL; kind is a product classification, not a URL type.
+  const videos = createMode ? [] : (campaign.videos || []);
   const videoRowsHtml = videos.map((v) => {
-    const kindTag = (() => {
-      const parsed = parseYouTubeUrl(v.url || "");
-      const k = parsed.kind || v.kind || "video";
-      return k === "short" ? '<span class="kind-tag short">Short</span>' : '<span class="kind-tag">Video</span>';
-    })();
-    if (live) {
-      return `
-      <div class="video-row">
-        <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
-        <div class="video-info">
-          <div class="video-title">${esc(v.url)}</div>
-        </div>
-        ${kindTag}
-        <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.url)}">${ICONS.x}</button>
-      </div>`;
-    }
+    const url = v.url || "";
+    const kind = ["auto", "brand_ad", "review", "explainer"].includes(v.kind) ? v.kind : "auto";
     return `
     <div class="video-row">
-      <div class="video-thumb" aria-hidden="true">${ICONS.play}</div>
-      <div class="video-info">
-        <div class="video-title">${esc(v.title)}</div>
-        <div class="video-meta">${esc(v.channel)} · ${fmtNum(v.commentCount)} comments · demo metadata</div>
-      </div>
-      ${kindTag}
-      <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(v.title)}">${ICONS.x}</button>
+      <span class="video-yt" aria-hidden="true">${ICONS.yt}</span>
+      <span class="video-url" title="${esc(url)}">${esc(url)}</span>
+      <select class="kind-select" data-video-kind="${v.id}" aria-label="Video kind for ${esc(url)}" ${runningRun ? "disabled" : ""}>
+        <option value="auto"${kind === "auto" ? " selected" : ""}>Auto</option>
+        <option value="brand_ad"${kind === "brand_ad" ? " selected" : ""}>Brand ad</option>
+        <option value="review"${kind === "review" ? " selected" : ""}>Review</option>
+        <option value="explainer"${kind === "explainer" ? " selected" : ""}>Explainer</option>
+      </select>
+      <button class="icon-btn" type="button" data-rm-video="${v.id}" aria-label="Remove ${esc(url)}">${ICONS.x}</button>
     </div>`;
   }).join("");
 
@@ -1944,54 +1930,165 @@ async function renderCampaign(sessionId, campaignId) {
     ? ""
     : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
 
-  const priorResultWarning = session.status !== "ready" ? `
-    <div class="notice pink" role="note">This Session already has a result. Starting a new run deletes the current result and its files. You will be asked to confirm before anything is deleted.</div>` : "";
+  const priorResultWarning = (!createMode && session.status !== "ready") ? `
+    <div class="notice pink" role="note">This Session already has a result. Clicking "Run analysis" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
 
-  view.innerHTML = `
-  <div class="campaign-layout single-col">
-    <div class="campaign-main">
-      <div id="run-start-err" style="display:contents"></div>
-      ${priorResultWarning}
+  const videosSectionInner = `
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="panel-title" id="videos-h">Videos <span style="color:var(--quiet);font-weight:600">· ${videos.length}</span></div>
           ${commentCountLine}
         </div>
-        <div class="video-list">
-          ${videoRowsHtml}
-          ${videos.length === 0 ? '<div style="padding:18px 16px;font-size:13px;color:var(--muted)">No videos yet - add at least one before running an analysis.</div>' : ""}
+        <div class="video-panel">
+          <div class="video-list">
+            ${videoRowsHtml}
+            ${videos.length === 0 ? '<div class="video-empty">No videos yet - add at least one before running an analysis.</div>' : ""}
+          </div>
+          <div class="url-add">
+            <span class="add-ic" aria-hidden="true">${ICONS.plusSm}</span>
+            <input class="input" id="c-url" type="url" autocomplete="off" placeholder="Paste another YouTube link" aria-label="Add a YouTube link"${createMode ? " disabled" : ""}>
+            <button class="btn secondary" type="button" id="c-add-url"${createMode ? " disabled" : ""}>Add link</button>
+          </div>
         </div>
-        <div class="url-add">
-          <input class="input" id="c-url" type="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="Add a YouTube link">
-          <button class="btn secondary" type="button" id="c-add-url">Add link</button>
-        </div>
-        <div class="field-error" id="c-url-err" hidden></div>
-      </section>
+        <div class="field-error" id="c-url-err" role="alert" hidden></div>
+      </section>`;
+  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first") : videosSectionInner;
 
+  const assetsSectionInner = `
       <section aria-labelledby="assets-h" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-title" id="assets-h">User Inputs</div>
         <div class="panel-note">Briefs, articles, campaign images - what the campaign was trying to do. Never the comments.</div>
-        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
+        <div class="dropzone" id="dropzone" role="button" tabindex="${createMode ? "-1" : "0"}" aria-disabled="${createMode}" aria-label="Upload a file: PDF, PPTX, DOCX, PNG, JPG or WEBP up to 10 megabytes">
           <span class="up">${ICONS.up}</span>
           <span class="t">Drop a brief, a deck or an image</span>
           <span class="d">PDF, PPTX, DOCX, JPG, PNG, WEBP up to 10 MB - or paste an article URL below</span>
           <span class="d">Disallowed types bounce off; nothing is uploaded until it passes.</span>
         </div>
-        <input type="file" id="file-input" hidden multiple>
+        <input type="file" id="file-input" hidden multiple${createMode ? " disabled" : ""}>
         <div class="field-error" id="asset-err" hidden></div>
         <div class="url-add">
-          <input class="input" id="c-article" type="url" autocomplete="off" placeholder="Paste an article URL" aria-label="Add an article URL">
-          <button class="btn secondary" type="button" id="c-add-article">Add article</button>
+          <input class="input" id="c-article" type="url" autocomplete="off" placeholder="Paste an article URL" aria-label="Add an article URL"${createMode ? " disabled" : ""}>
+          <button class="btn secondary" type="button" id="c-add-article"${createMode ? " disabled" : ""}>Add article</button>
         </div>
         <div class="field-error" id="article-err" hidden></div>
         <div style="display:flex;flex-direction:column;gap:8px" id="asset-list">
-          ${(campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
+          ${createMode ? "" : (campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
-      </section>
+      </section>`;
+  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first") : assetsSectionInner;
 
-      <div id="km-container"></div>
+  const kmPlaceholderInner = `
+    <section class="card km-section" aria-labelledby="km-h">
+      <div class="km-head">
+        <h2 class="panel-title" id="km-h">Key Messages · 0</h2>
+        <div class="panel-note">Drafted from your User Inputs before any comment is read. The run checks them against the video transcripts and pauses for your review before labelling.</div>
+      </div>
+      <div class="km-rows"><div class="km-empty">No Key Messages yet. Add User Inputs and we'll draft them - or add one yourself.</div></div>
+      <div class="km-foot">
+        <button class="add-line" type="button" id="km-add" disabled>${ICONS.plusSm}<span>Add a Key Message</span></button>
+        <span class="tail"></span>
+        <button class="btn primary" type="button" id="km-save" disabled>Save changes</button>
+      </div>
+    </section>`;
+
+  const skipPauseHtml = (!createMode && !runningRun) ? `
+      <div class="skip-pause">
+        <input type="checkbox" id="chk-skip-pause">
+        <label for="chk-skip-pause">
+          Skip the review step and run straight through
+          <span class="hint">We will not pause to ask you to confirm the Key Messages.</span>
+        </label>
+      </div>` : "";
+
+  const footerHtml = setup ? `
+      <div class="setup-footer">
+        ${videos.length === 0
+          ? disWrap('<button class="btn primary lg" type="button" id="btn-create-session" disabled>Create session</button>', "Add at least one video")
+          : '<button class="btn primary lg" type="button" id="btn-create-session">Create session</button>'}
+        <a class="btn secondary lg" id="btn-save-draft" href="#/sessions">Save as draft</a>
+        <div class="quiet-line">Running the analysis comes next</div>
+      </div>` : "";
+
+  view.innerHTML = `
+  <div class="campaign-layout">
+    <div class="campaign-main">
+      <div class="field session-name-field">
+        <input id="f-session-name" class="input session-name-input" aria-label="Session name" placeholder="Name this Session" value="${createMode ? "" : esc(session.name)}">
+        <div id="err-name" role="alert"></div>
+      </div>
+      <div id="run-start-err" style="display:contents"></div>
+      ${priorResultWarning}
+      ${videosSectionHtml}
+      ${assetsSectionHtml}
+      ${footerHtml}
+    </div>
+    <div class="campaign-rail">
+      <div id="km-container">${createMode ? disWrap(kmPlaceholderInner, "Name the Session first") : ""}</div>
+      ${skipPauseHtml}
     </div>
   </div>`;
+
+  // Session name: create-mode submits a brand-new session; detail-mode renames.
+  const nameInput = document.getElementById("f-session-name");
+  const nameErr = document.getElementById("err-name");
+  let nameSubmitting = false;
+  const submitName = async (fromEnter) => {
+    if (nameSubmitting) return;
+    const value = nameInput.value.trim();
+    if (createMode) {
+      if (!value) {
+        if (fromEnter) nameErr.textContent = "Name the Session first.";
+        return;
+      }
+      nameSubmitting = true;
+      nameErr.textContent = "";
+      try {
+        const { session: newSession, campaign: newCampaign } = await demoApi.createSession({
+          name: value, campaignName: value, videoUrls: [],
+        });
+        history.replaceState(null, "", "#/sessions/" + newSession.id + "/campaigns/" + newCampaign.id);
+        currentRouteHash = location.hash;
+        activeDirtySessionId = newSession.id;
+        await renderCampaign(newSession.id, newCampaign.id, { setup: true });
+        const newUrlInput = document.getElementById("c-url");
+        if (newUrlInput) newUrlInput.focus();
+      } catch (err) {
+        nameErr.textContent = err.message;
+        nameInput.focus();
+      } finally {
+        nameSubmitting = false;
+      }
+      return;
+    }
+    if (!value) {
+      nameInput.value = session.name;
+      nameErr.textContent = "A Session needs a name.";
+      return;
+    }
+    if (value === session.name) { nameErr.textContent = ""; return; }
+    nameSubmitting = true;
+    try {
+      const updated = await demoApi.renameSession(sessionId, value);
+      session.name = updated.name;
+      nameErr.textContent = "";
+      const nameEl = document.querySelector(".session-title .name");
+      if (nameEl) nameEl.textContent = updated.name;
+    } catch (err) {
+      nameInput.value = session.name;
+      nameErr.textContent = err.message;
+    } finally {
+      nameSubmitting = false;
+    }
+  };
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitName(true); }
+  });
+  nameInput.addEventListener("blur", () => { submitName(false); });
+
+  if (createMode) {
+    routeCleanup = null;
+    return;
+  }
 
   // Key Messages editor: initialize rows/state from getKeyMessages, not from
   // any prior run's briefPoints.
@@ -2008,7 +2105,7 @@ async function renderCampaign(sessionId, campaignId) {
   const addUrl = async () => {
     try {
       await demoApi.addVideo(campaignId, urlInput.value);
-      renderCampaign(sessionId, campaignId);
+      renderCampaign(sessionId, campaignId, { setup });
     } catch (err) {
       urlErr.textContent = err.message; urlErr.hidden = false;
       urlInput.classList.add("error");
@@ -2019,7 +2116,21 @@ async function renderCampaign(sessionId, campaignId) {
   view.querySelectorAll("[data-rm-video]").forEach((b) => {
     b.addEventListener("click", async () => {
       await demoApi.removeVideo(b.dataset.rmVideo);
-      renderCampaign(sessionId, campaignId);
+      renderCampaign(sessionId, campaignId, { setup });
+    });
+  });
+  view.querySelectorAll("[data-video-kind]").forEach((sel) => {
+    let prevValue = sel.value;
+    sel.addEventListener("change", async () => {
+      const newValue = sel.value;
+      try {
+        await demoApi.updateVideo(sel.dataset.videoKind, newValue);
+        prevValue = newValue;
+        urlErr.hidden = true;
+      } catch (err) {
+        sel.value = prevValue;
+        urlErr.textContent = err.message; urlErr.hidden = false;
+      }
     });
   });
 
@@ -2039,12 +2150,12 @@ async function renderCampaign(sessionId, campaignId) {
       // recreated, so carry the text through the render. Failed upload keeps
       // its error and never drafts.
       const msg = assetErr.textContent;
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       const el = document.getElementById("asset-err");
       if (el && msg) { el.textContent = msg; el.hidden = false; }
       return;
     }
-    await renderCampaign(sessionId, campaignId);
+    await renderCampaign(sessionId, campaignId, { setup });
     requestDraftForCurrentEditor(sessionId);
   };
   dz.addEventListener("click", () => fi.click());
@@ -2062,7 +2173,7 @@ async function renderCampaign(sessionId, campaignId) {
   const addArticle = async () => {
     try {
       await demoApi.addArticle(campaignId, artInput.value);
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       requestDraftForCurrentEditor(sessionId);
     } catch (err) {
       artErr.textContent = err.message; artErr.hidden = false;
@@ -2075,10 +2186,21 @@ async function renderCampaign(sessionId, campaignId) {
   view.querySelectorAll("[data-rm-asset]").forEach((b) => {
     b.addEventListener("click", async () => {
       await demoApi.removeAsset(b.dataset.rmAsset);
-      await renderCampaign(sessionId, campaignId);
+      await renderCampaign(sessionId, campaignId, { setup });
       requestDraftForCurrentEditor(sessionId);
     });
   });
+
+  if (setup) {
+    const createBtn = document.getElementById("btn-create-session");
+    if (createBtn && !createBtn.disabled) {
+      createBtn.addEventListener("click", async () => {
+        await renderCampaign(sessionId, campaignId);
+        const rb = document.getElementById("btn-run");
+        if (rb) rb.focus();
+      });
+    }
+  }
 
   currentKmEditors.set(sessionId, kmEditor);
   routeCleanup = () => { currentKmEditors.delete(sessionId); };
@@ -2128,14 +2250,16 @@ function assetRowHtml(a, live) {
 
 /* ---------- Run ---------- */
 const STEP_DEFS = [
-  { key: "collect", label: "Collected the comments", pending: "Fetching every comment and reply" },
-  { key: "themes", label: "Found what people are talking about", pending: "Reading a sample to find the themes" },
-  { key: "classify", label: "Labelling every comment", pending: "Applying the codebook to the full set" },
-  { key: "emotion", label: "Double-checking the leftovers", pending: "If too much lands in \"Other\", we look for missed themes" },
-  { key: "report", label: "Writing your note", pending: "Two charts, the verdicts, and the quotes behind them" },
+  { title: "Collect", detail: "comments and transcripts" },
+  { title: "Brief", detail: "read against the transcripts" },
+  { title: "Key Message review", detail: "" },
+  { title: "Classify", detail: "Theme book, then every comment" },
+  { title: "Emotion", detail: "Sentiment and Emotion, every comment" },
+  { title: "Report", detail: "PDF, CSVs, results screen" },
 ];
 // error -> -2 (live terminal failure), running -> -1 (live pre-collect stage).
-const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 0, brief_pause: 1, themes: 1, classify: 2, emotion: 3, report: 4, complete: 5, failed: -2, error: -2 };
+// Doubles as the monotonic rank used to reject stale buffered SSE events.
+const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 1, brief_pause: 2, themes: 3, classify: 3, emotion: 4, report: 5, complete: 6, failed: -2, error: -2 };
 
 /* Parse adapter.py SSE detail strings into a plain object for counter updates.
    Live detail is a string; demo detail is already an object.
@@ -2172,23 +2296,42 @@ async function renderRun(runId) {
     : store.campaigns.get(session.campaignIds[0]);
   const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
-        <span class="badge" id="run-badge">${run.status === "failed" ? "Failed" : run.status === "complete" ? "Complete" : "Running"}</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo \u2014 a run always finishes.</span>'}
-    </div>`);
+  // Terminal mapping for the initial snapshot: failed/error is failed; complete
+  // is complete; brief_pause opens review immediately with persisted order.
+  const initialStage = run.status === "failed" ? "failed"
+    : run.stage === "error" ? "error"
+    : run.stage;
+  let state = {
+    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
+    failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
+    completed: initialStage === "complete",
+  };
+
+  function badgeText() {
+    if (state.failed) return "Failed";
+    if (state.completed) return "Complete";
+    if (state.stage === "brief_pause") return "Waiting for you";
+    return "Running";
+  }
+  function topbarRightHtml() {
+    if (state.completed || state.failed) return "";
+    const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
+    const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
+    return btn + note;
+  }
+  function paintTopbar() {
+    sessionTopbar({
+      name: session.name,
+      badgeHtml: `<span class="badge" id="run-badge">${esc(badgeText())}</span>`,
+      rightHtml: topbarRightHtml(),
+    });
+  }
+  paintTopbar();
 
   view.innerHTML = `
   <div class="run-layout">
     <div class="run-main">
-      <div style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
+      <div id="run-header" style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
         <h1 class="run-title" id="run-title">Getting ready\u2026</h1>
         <p class="run-sub" id="run-sub">${live ? "Connecting to the server\u2026" : "This demo runs on fixture data in about half a minute."}</p>
       </div>
@@ -2216,33 +2359,21 @@ async function renderRun(runId) {
           <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
         </div>
       </div>
-      ${live
-        ? `<div class="notice pink">The full picture lands with the note.</div>`
-        : `<div class="notice pink"><strong>Early read.</strong> Street-football nostalgia tends to lead. The full picture lands with the note.</div>`}
+      <p class="run-reliability" id="run-reliability"></p>
     </div>
   </div>`;
 
+  const layoutEl = view.querySelector(".run-layout");
   const stepperEl = document.getElementById("stepper");
   const titleEl = document.getElementById("run-title");
   const subEl = document.getElementById("run-sub");
   const bannerEl = document.getElementById("run-banner");
   const briefEl = document.getElementById("brief-review");
-  const badgeEl = document.getElementById("run-badge");
   const cntLabelled = document.getElementById("cnt-labelled");
   const cntThemes = document.getElementById("cnt-themes");
   const cntOther = document.getElementById("cnt-other");
+  const reliabilityEl = document.getElementById("run-reliability");
 
-  // Terminal mapping for the initial snapshot: failed/error is failed; complete
-  // is complete; brief_pause opens review immediately with persisted order.
-  // STAGE_TO_STEP gives a monotonic rank used to reject stale buffered SSE below.
-  const initialStage = run.status === "failed" ? "failed"
-    : run.stage === "error" ? "error"
-    : run.stage;
-  let state = {
-    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
-    failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
-    completed: initialStage === "complete",
-  };
   let currentStep = STAGE_TO_STEP[initialStage] != null ? Math.max(STAGE_TO_STEP[initialStage], -1) : -1;
   // Authoritative-stage floor: a fresh initial brief_pause/complete/failed/error
   // snapshot can never be regressed by a stale buffered SSE event. For other
@@ -2255,31 +2386,12 @@ async function renderRun(runId) {
   briefPointsSnapshot = briefPointsSnapshot.slice().sort((a, b) => a.order - b.order);
 
   // paintSteps() rebuilds every row on each progress tick, so the CSS
-  // insertion animation would replay on all five. Mark only the row whose
+  // insertion animation would replay on all six. Mark only the row whose
   // index just became currentStep, and only on that first paint.
   let paintedStep = currentStep;
 
   function paintSteps() {
     const d = state.detail || {};
-    const details = [
-      state.stage === "collect" || currentStep > 0
-        ? (live && totalComments() === 0
-            ? "—"
-            : `${fmtNum(live ? totalComments() : (d.collected || (currentStep > 0 ? totalComments() : 0)))} across ${d.videos || videoCount()} videos, replies included`)
-        : STEP_DEFS[0].pending,
-      currentStep > 1
-        ? (d.themes ? d.themes + " themes, identified from the sample" : (live ? "Themes identified from the sample" : "7 themes, drawn from a 640-comment read"))
-        : STEP_DEFS[1].pending,
-      state.stage === "classify"
-        ? (live && d.labelled == null
-            ? "—"
-            : `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total || totalComments())} · batch ${d.batch || 1} of ${d.batches || 1}`)
-        : currentStep > 2 ? `${fmtNum(totalComments())} labelled` : STEP_DEFS[2].pending,
-      currentStep > 3
-        ? (d.otherShare != null ? `"Other" held at ${d.otherShare.toFixed(1)}%` : (live ? 'Theme list holds' : 'Theme list holds \u2014 "Other" stayed low'))
-        : STEP_DEFS[3].pending,
-      currentStep > 4 ? "Note written" : STEP_DEFS[4].pending,
-    ];
     stepperEl.innerHTML = STEP_DEFS.map((s, i) => {
       const done = currentStep > i || state.completed;
       const cur = !state.completed && currentStep === i && !state.failed;
@@ -2287,44 +2399,56 @@ async function renderRun(runId) {
         ? `<div class="step-dot done">${ICONS.check}</div>`
         : cur ? `<div class="step-dot current" role="img" aria-label="In progress"></div>` : `<div class="step-dot"></div>`;
       const line = i < STEP_DEFS.length - 1 ? `<div class="step-line"></div>` : "";
-      const bar = cur && state.stage === "classify" && d.total != null
-        ? `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`
-        : "";
+      let detail = s.detail;
+      let extra = "";
+      let bar = "";
+      if (i === 2) { // Key Message review
+        if (run.skipPause) detail = "Skipped";
+        else if (done) {
+          const total = briefPointsSnapshot.length;
+          const included = briefPointsSnapshot.filter((p) => p.included).length;
+          detail = total ? `You confirmed ${included} of ${total}` : "";
+        } else detail = "";
+      } else if (i === 3 && state.stage === "classify" && d.total != null) { // Classify, active
+        extra = `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total)} labelled`;
+        bar = `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`;
+      } else if (i === 5) { // Report
+        extra = "report.pdf, four small CSVs, and comments.csv";
+      }
+      const name = detail ? `${s.title} - ${detail}` : s.title;
       return `
       <div class="step-row${i === currentStep && currentStep !== paintedStep ? " advanced" : ""}">
         <div class="step-glyph">${glyph}${line}</div>
         <div class="step-body">
-          <div class="step-name ${done || cur ? "" : "pending"}">${s.label}</div>
-          <div class="step-detail ${done || cur ? "" : "pending"}">${details[i]}</div>
+          <div class="step-name ${done || cur ? "" : "pending"}">${esc(name)}</div>
+          ${extra ? `<div class="step-detail ${done || cur ? "" : "pending"}">${esc(extra)}</div>` : ""}
           ${bar}
         </div>
       </div>`;
     }).join("");
     paintedStep = currentStep;
   }
-
+  // Analysis-base comment count: the collect/classify SSE detail once it
+  // arrives, else the RunSnapshot value (null until collect finishes).
   function totalComments() {
-    return (state.detail && state.detail.total) || initialTotal;
+    const d = state.detail || {};
+    return d.total != null ? d.total : (run.totalComments != null ? run.totalComments : null);
   }
-  function videoCount() {
-    if (state.detail && state.detail.videos) return state.detail.videos;
-    return campaign ? (campaign.videoIds ? campaign.videoIds.length : (campaign.videos ? campaign.videos.length : 1)) : 1;
+  function paintReliability() {
+    const total = totalComments();
+    let text = "Under about 100 comments the percentages here aren't reliable.";
+    if (total != null) {
+      text += total >= 100 ? " This Session is well past that." : ` This Session has ${total}, so read them as directional.`;
+    }
+    reliabilityEl.textContent = text;
   }
-
-  // Live: the run snapshot's persisted total_comments once collect has
-  // finished (survives a reopen with no SSE replay); 0 is the sentinel
-  // before that, so totalComments() falls through to detail.total.
-  // Demo: the real sum of the added videos' comment counts, with no floor and no
-  // placeholder, so the progress screen never shows a number nothing counted.
-  const initialTotal = live ? (run.totalComments || 0) : (campaign
-    ? campaign.videoIds.map((id) => store.videos.get(id)).filter(Boolean).reduce((a, v) => a + v.commentCount, 0)
-    : 0);
 
   function paintHeader() {
+    layoutEl.classList.toggle("reviewing", state.stage === "brief_pause");
+    paintTopbar();
     if (state.failed) {
       titleEl.textContent = "This run stopped";
       subEl.textContent = "Nothing was written. Your campaign setup is untouched.";
-      badgeEl.textContent = "Failed";
       bannerEl.innerHTML = `
         <div class="banner error" role="alert">
           <div style="flex:1">${esc(state.failed)}</div>
@@ -2348,13 +2472,12 @@ async function renderRun(runId) {
         }
       });
     } else if (state.completed) {
-      titleEl.textContent = "Your note is ready";
-      subEl.textContent = "Two charts, the written read, and the comments behind every number.";
-      badgeEl.textContent = "Complete";
+      titleEl.textContent = "Results are ready";
+      subEl.textContent = "Every theme, the sentiment, and the comments behind every number.";
       bannerEl.innerHTML = `
         <div class="banner warn" role="status">
           <div style="flex:1">Run complete.</div>
-          <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open the strategy note</a>
+          <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open results</a>
         </div>`;
     } else if (state.disconnected) {
       titleEl.textContent = "Reconnecting\u2026";
@@ -2365,23 +2488,25 @@ async function renderRun(runId) {
           <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
         </div>`;
     } else {
+      const total = totalComments();
+      const labelling = total != null ? `Labelling ${fmtNum(total)} comments` : "Labelling comments";
       const msg = {
-        connecting: "Connecting\u2026", running: "Connecting\u2026",
-        collect: "Reading " + fmtNum(totalComments()) + " comments",
-        brief: "Reading the brief\u2026", brief_pause: "Confirm the ideas before we label",
-        themes: "Finding what people are talking about",
-        classify: "Reading " + fmtNum(totalComments()) + " comments",
-        emotion: "Reading " + fmtNum(totalComments()) + " comments",
-        report: "Reading " + fmtNum(totalComments()) + " comments",
-      }[state.stage] || "Working\u2026";
+        connecting: "Starting the run", running: "Starting the run",
+        collect: "Collecting comments and transcripts",
+        brief: "Reading the brief against the transcripts",
+        brief_pause: "Confirm the Key Messages before we label",
+        themes: labelling,
+        classify: labelling,
+        emotion: "Reading Sentiment and Emotion",
+        report: "Writing the report",
+      }[state.stage] || "Starting the run";
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
-        : live
-          ? "You can leave the page - the analysis runs on the server."
-          : "You can leave the page - in this demo the run finishes in under a minute.";
+        : "You can leave this page - the Session list will show the same status when you're back.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }
+    paintReliability();
   }
 
   // brief_pause paints twice when it has to. The first paint is synchronous,
@@ -2417,42 +2542,64 @@ async function renderRun(runId) {
     briefEl.hidden = false;
     let saving = false;
     let focusedField = null; // { i, f } of the control focused when Save was pressed
+    const expanded = new Set(); // row indices currently showing their edit panel
+
+    function swapExpanded(a, b) {
+      const ea = expanded.has(a), eb = expanded.has(b);
+      expanded.delete(a); expanded.delete(b);
+      if (ea) expanded.add(b);
+      if (eb) expanded.add(a);
+    }
+    function reindexAfterDelete(delIdx) {
+      const next = new Set();
+      expanded.forEach((idx) => {
+        if (idx < delIdx) next.add(idx);
+        else if (idx > delIdx) next.add(idx - 1);
+      });
+      expanded.clear();
+      next.forEach((v) => expanded.add(v));
+    }
 
     function paint() {
+      const includedCount = points.filter((p) => p.included).length;
       briefEl.innerHTML = `
-      <section class="card" aria-labelledby="brief-h" style="border-color:var(--pink-border);display:flex;flex-direction:column;gap:14px" aria-busy="${saving}">
+      <section class="card brief-review-card" aria-labelledby="brief-h" aria-busy="${saving}">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <h2 class="panel-title" id="brief-h" style="font-size:16px">Key Messages we'll test for transfer</h2>
-          <div class="panel-note">Edit, reorder, drop or add - these are what we look for in the comments. Nothing is saved until you confirm.</div>
+          <h2 class="brief-review-h" id="brief-h" tabindex="-1">Check the Key Messages before we label anything</h2>
+          <div class="panel-note">These came from your brief and the transcripts. Confirm them, or edit, reorder, drop, or add one - nothing is saved until you confirm.</div>
         </div>
         <div class="brief-list">
           ${points.map((p, i) => `
           <div class="brief-item ${p.included ? "" : "excluded"}" data-idx="${i}">
-            <div class="top">
-              <div class="fields">
-                <label class="sr-only" for="bp-label-${i}">Key Message ${i + 1} label</label>
-                <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" maxlength="120" value="${esc(p.label)}" ${saving ? "disabled" : ""}>
-                <label class="sr-only" for="bp-desc-${i}">Key Message ${i + 1} description</label>
-                <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" maxlength="500" rows="2" ${saving ? "disabled" : ""}>${esc(p.description)}</textarea>
-              </div>
+            <div class="row-top">
+              <span class="bp-num">${i + 1}</span>
+              <span class="bp-label">${esc(p.label || "Untitled Key Message")}</span>
+              ${p.source === "sharpened" ? `<span class="bp-badge">SHARPENED</span>` : p.source === "transcript" ? `<span class="bp-badge">NEW FROM TRANSCRIPT</span>` : ""}
+              ${!p.included ? `<span class="bp-excluded-tag">Excluded</span>` : ""}
+              <label class="bp-check">
+                <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""} ${saving ? "disabled" : ""} aria-label="Include Key Message ${i + 1}">
+              </label>
+              <button class="icon-btn bp-edit-btn" type="button" data-edit="${i}" aria-expanded="${expanded.has(i)}" aria-label="${expanded.has(i) ? "Collapse" : "Edit"} Key Message ${i + 1}" ${saving ? "disabled" : ""}>${ICONS.pencil}</button>
+            </div>
+            ${expanded.has(i) ? `
+            <div class="bp-edit">
+              <label class="sr-only" for="bp-label-${i}">Key Message ${i + 1} label</label>
+              <input class="label-in" id="bp-label-${i}" data-f="label" data-i="${i}" maxlength="120" value="${esc(p.label)}" ${saving ? "disabled" : ""}>
+              <label class="sr-only" for="bp-desc-${i}">Key Message ${i + 1} description</label>
+              <textarea class="desc-in" id="bp-desc-${i}" data-f="description" data-i="${i}" maxlength="500" rows="2" ${saving ? "disabled" : ""}>${esc(p.description)}</textarea>
               <div class="brief-tools">
                 <button class="icon-btn" type="button" data-up="${i}" aria-label="Move Key Message ${i + 1} up" ${saving || i === 0 ? "disabled" : ""}>${ICONS.upArr}</button>
                 <button class="icon-btn" type="button" data-down="${i}" aria-label="Move Key Message ${i + 1} down" ${saving || i === points.length - 1 ? "disabled" : ""}>${ICONS.downArr}</button>
                 <button class="icon-btn" type="button" data-del="${i}" aria-label="Delete Key Message ${i + 1}" ${saving ? "disabled" : ""}>${ICONS.x}</button>
               </div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" data-inc="${i}" ${p.included ? "checked" : ""} ${saving ? "disabled" : ""}>
-              <span class="track" aria-hidden="true"></span>
-              <span class="sw-label">${p.included ? "Included" : "Excluded"}</span>
-            </label>
+            </div>` : ""}
           </div>`).join("")}
         </div>
         <button class="add-line" type="button" id="bp-add" ${saving ? "disabled" : ""}>${ICONS.plusSm}<span>Add a Key Message</span></button>
         <div class="field-error" id="bp-err" role="alert" ${saving ? "hidden" : ""}></div>
         <div class="brief-foot">
           <button class="btn primary lg" type="button" id="bp-confirm" ${saving ? "disabled" : ""}>${saving ? "Saving\u2026" : "Confirm and continue"}</button>
-          <span class="panel-note">At least one Key Message must stay included.</span>
+          <span class="panel-note" id="bp-count">${includedCount} of ${points.length} included</span>
         </div>
       </section>`;
 
@@ -2462,23 +2609,33 @@ async function renderRun(runId) {
       briefEl.querySelectorAll("[data-f]").forEach((inp) => {
         inp.addEventListener("input", () => { points[Number(inp.dataset.i)][inp.dataset.f] = inp.value; });
       });
+      briefEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+        const i = Number(b.dataset.edit);
+        if (expanded.has(i)) expanded.delete(i); else expanded.add(i);
+        paint();
+      }));
       briefEl.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
         const i = Number(b.dataset.up);
         [points[i - 1], points[i]] = [points[i], points[i - 1]];
+        swapExpanded(i - 1, i);
         paint();
       }));
       briefEl.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
         const i = Number(b.dataset.down);
         [points[i + 1], points[i]] = [points[i], points[i + 1]];
+        swapExpanded(i, i + 1);
         paint();
       }));
       briefEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
-        points.splice(Number(b.dataset.del), 1);
+        const i = Number(b.dataset.del);
+        points.splice(i, 1);
+        reindexAfterDelete(i);
         paint();
       }));
       const addLine = briefEl.querySelector("#bp-add");
       if (addLine) addLine.addEventListener("click", () => {
-        points.push({ id: null, label: "", description: "", included: true, order: points.length });
+        points.push({ id: null, label: "", description: "", included: true, order: points.length, source: "input" });
+        expanded.add(points.length - 1);
         paint();
         const last = briefEl.querySelector(`#bp-label-${points.length - 1}`);
         if (last) last.focus();
@@ -2524,7 +2681,7 @@ async function renderRun(runId) {
       });
     }
     paint();
-    const first = briefEl.querySelector(".label-in");
+    const first = briefEl.querySelector("#brief-h");
     if (first) first.focus();
   }
 
@@ -2562,17 +2719,17 @@ async function renderRun(runId) {
 
     const stepIdx = STAGE_TO_STEP[e.stage];
     if (stepIdx >= 0) currentStep = Math.max(currentStep, stepIdx);
-    if (e.stage === "complete") currentStep = 5;
+    if (e.stage === "complete") currentStep = 6;
 
     if (state.detail) {
       if (state.detail.labelled != null) cntLabelled.textContent = fmtNum(state.detail.labelled);
       else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
       else if (live) cntLabelled.textContent = "—";
       if (state.detail.themes != null) cntThemes.textContent = String(state.detail.themes);
-      else if (currentStep >= 1 && !live) cntThemes.textContent = "7";
+      else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
       if (state.detail.otherShare != null) cntOther.textContent = state.detail.otherShare.toFixed(1) + "%";
       else if (state.detail.other != null) cntOther.textContent = state.detail.other + "%";
-      else if (currentStep >= 3 && !live) cntOther.textContent = "6%";
+      else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
     }
 
     if (e.stage === "brief_pause" && !briefRendered) {
@@ -2645,17 +2802,6 @@ async function renderRun(runId) {
 }
 
 /* ---------- Results ---------- */
-let evDrawerState = null;
-
-/* Drawer kicker per metric family. Order does not matter: the trailing dash
-   makes the prefixes mutually exclusive ("m-th-0" does not start with "m-t-"). */
-const EV_KICKERS = [
-  ["m-t-",  "IDEA FROM YOUR BRIEF"],
-  ["m-th-", "THEME"],
-  ["m-em-", "EMOTION"],
-  ["m-se-", "SENTIMENT"],
-  ["m-is-", "SENTIMENT ON THIS IDEA"],
-];
 
 /* Model labels are snake_case ("other_neutral"). Display only — filters and
    metric IDs keep the raw value. */
@@ -2663,107 +2809,18 @@ function fmtLabel(label) {
   return String(label).replace(/_/g, " ");
 }
 
-function closeEvidenceDrawer() {
-  if (!evDrawerState) return;
-  const { root, prevFocus, keyHandler } = evDrawerState;
-  document.removeEventListener("keydown", keyHandler);
-  root.remove();
-  if (prevFocus && prevFocus.focus) prevFocus.focus();
-  evDrawerState = null;
+/* Evidence-card metadata is title-cased for display; the raw value never
+   changes (metric IDs, filters, CSV rows all keep the snake_case form). */
+function displayLabel(s) {
+  if (!s) return "";
+  const t = fmtLabel(s);
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-function openEvidenceDrawer(report, metric, originEl) {
-  closeEvidenceDrawer();
-  const live = demoApi.mode === "live";
-  const prevFocus = originEl || document.activeElement;
-  const overlay = window.matchMedia("(max-width: 1179px)").matches;
-  const host = overlay ? overlayRoot : view.querySelector(".report-layout");
-
-  // Both modes derive pills from the emotion labels actually present in the
-  // evidence, so a pill can never offer a filter that matches nothing.
-  const emotionPills = [...new Set((report.evidence || []).map((e) => e.emotion).filter(Boolean))].map(
-    (em) => `<button class="pill sm" type="button" data-filter="${esc(em)}" aria-pressed="false">${esc(fmtLabel(em))}</button>`
-  ).join("");
-  const kicker = (EV_KICKERS.find(([p]) => metric.id.startsWith(p)) || [null, "METRIC"])[1];
-
-  const root = document.createElement("div");
-  root.style.display = "contents";
-  root.innerHTML = `
-    ${overlay ? '<div class="ev-backdrop" data-ev-backdrop></div>' : ""}
-    <aside class="ev-drawer ${overlay ? "overlay" : ""}" role="dialog" aria-modal="${overlay}" aria-label="Evidence for ${esc(metric.label)}">
-      <div class="ev-head">
-        <div class="ev-title-row">
-          <div class="ev-id">
-            <span class="ev-kicker">${kicker}</span>
-            <span class="ev-title">${esc(metric.label)}</span>
-            <span class="ev-sub">${metric.sub
-              ? esc(metric.sub)
-              : `${fmtNum(metric.evidenceCount)} of ${fmtNum(report._totalComments)} comments · ${metric.value}%`}</span>
-          </div>
-          <button class="ev-close" type="button" data-ev-close aria-label="Close evidence">${ICONS.xLg}</button>
-        </div>
-        <div class="pill-row" role="group" aria-label="Evidence filters">
-          <button class="pill sm active" type="button" data-filter="All" aria-pressed="true">All</button>
-          ${emotionPills}
-          <button class="pill sm" type="button" data-filter="Most liked" aria-pressed="false">Most liked</button>
-        </div>
-      </div>
-      <div class="ev-body" data-ev-body></div>
-    </aside>`;
-  host.appendChild(root);
-
-  const body = root.querySelector("[data-ev-body]");
-  const items = report.evidence.filter((e) => e.metricId === metric.id);
-  let filter = "All";
-
-  function paintList() {
-    let list = items.slice();
-    if (filter === "Most liked") list.sort((a, b) => b.likes - a.likes);
-    else if (filter !== "All") list = list.filter((e) => e.emotion === filter);
-    body.innerHTML = list.length
-      ? list.map((e) => {
-      const meta = [e.emotion && fmtLabel(e.emotion), fmtNum(e.likes) + " likes", e.sentiment]
-        .filter(Boolean).map((part) => esc(String(part))).join(" · ");
-          return `
-        <div class="ev-card">
-          <div class="ev-text">${esc(e.text)}</div>
-          <div class="ev-meta">${meta}</div>
-        </div>`;
-        }).join("")
-        + `<div class="ev-count">Showing ${list.length} of ${fmtNum(metric.evidenceCount)} labelled comments.${live ? " Full list in comments.csv." : " Fixture evidence in this demo."}</div>`
-      : `<div class="ev-empty">No comments match this filter for "${esc(metric.label)}". Try another filter.</div>`;
-  }
-
-  root.querySelectorAll("[data-filter]").forEach((b) => {
-    b.addEventListener("click", () => {
-      filter = b.dataset.filter;
-      root.querySelectorAll("[data-filter]").forEach((x) => {
-        const on = x === b;
-        x.classList.toggle("active", on);
-        x.setAttribute("aria-pressed", on ? "true" : "false");
-      });
-      paintList();
-    });
-  });
-  root.querySelector("[data-ev-close]").addEventListener("click", closeEvidenceDrawer);
-  const backdrop = root.querySelector("[data-ev-backdrop]");
-  if (backdrop) backdrop.addEventListener("click", closeEvidenceDrawer);
-
-  const keyHandler = (e) => {
-    if (e.key === "Escape") { e.stopPropagation(); closeEvidenceDrawer(); }
-    if (e.key === "Tab" && overlay) {
-      const f = root.querySelectorAll("button, [href]");
-      if (!f.length) return;
-      const first = f[0], last = f[f.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-  };
-  document.addEventListener("keydown", keyHandler);
-
-  evDrawerState = { root, prevFocus, keyHandler };
-  paintList();
-  root.querySelector("[data-ev-close]").focus();
+/* aria-controls / panel element ids must be valid HTML ids; metric ids are
+   already "m-t-slug" shaped, but this keeps the mapping total. */
+function evSafeId(id) {
+  return String(id).replace(/[^A-Za-z0-9_-]/g, "-");
 }
 
 async function renderResults(runId) {
@@ -2787,10 +2844,6 @@ async function renderResults(runId) {
   }
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
-  const campaign = live
-    ? ((session.campaigns && session.campaigns[0]) || null)
-    : store.campaigns.get(session.campaignIds[0]);
-  const campaignId = campaign ? campaign.id : ((session.campaignIds && session.campaignIds[0]) || "");
   // Live: artifacts come from run.artifacts (present when status===complete).
   // Demo: artifacts come from store. Both already filtered/sorted to the six
   // public kinds in contract order by listArtifacts.
@@ -2799,20 +2852,21 @@ async function renderResults(runId) {
   const pdf = byKind.get("report_pdf");
   report._totalComments = session.commentCount || 0;
 
-  setTopbar(`
-    <div class="topbar-left">
-      <nav class="crumb" aria-label="Breadcrumb">
-        <a href="#/sessions/${session.id}/campaigns/${campaignId}">${esc(session.name)}</a>
-        <span class="sep">/</span>
-        <span class="here">${esc(campaign ? campaign.name : "Campaign")}</span>
-        <span class="badge neutral">Complete</span>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      ${pdf
-        ? '<button class="btn secondary" type="button" id="btn-pdf">Download PDF</button>'
-        : disWrap('<button class="btn secondary" type="button" id="btn-pdf" disabled>Download PDF</button>', "This file was not generated.")}
-    </div>`);
+  const exportItems = PUBLIC_ARTIFACTS.filter((m) => m.kind !== "report_pdf").map((meta) => {
+    const art = byKind.get(meta.kind);
+    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)}</button>`;
+    return art ? btn : disWrap(btn, "This file was not generated.");
+  }).join("");
+  const rightHtml = `
+    <details class="export-menu">
+      <summary class="btn secondary">Export CSVs</summary>
+      <div class="export-list" role="group" aria-label="CSV downloads">${exportItems}</div>
+    </details>
+    ${pdf
+      ? '<button class="btn secondary" type="button" id="btn-pdf" data-artifact="report_pdf">Download PDF</button>'
+      : disWrap('<button class="btn secondary" type="button" id="btn-pdf" data-artifact="report_pdf" disabled>Download PDF</button>', "This file was not generated.")}`;
+
+  sessionTopbar({ name: session.name, badgeHtml: '<span class="badge neutral">Complete</span>', rightHtml });
 
   const topbarErr = document.createElement("div");
   topbarErr.id = "results-dl-err";
@@ -2820,9 +2874,32 @@ async function renderResults(runId) {
   topbarErr.className = "sr-only-err";
   document.querySelector(".topbar-right").appendChild(topbarErr);
 
-  if (pdf) {
-    document.getElementById("btn-pdf").addEventListener("click", () => downloadArtifact(pdf, topbarErr));
-  }
+  // Single handler for every [data-artifact] control in the topbar (the five
+  // CSV entries in the menu plus #btn-pdf), so no button is ever bound twice.
+  topbar.querySelectorAll("[data-artifact]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const art = byKind.get(b.dataset.artifact);
+      if (art) downloadArtifact(art, topbarErr);
+      // A CSV pick closes the menu; focus goes back to its summary so it is
+      // not lost on a now-hidden item.
+      const menu = b.closest("details");
+      if (menu) { menu.open = false; menu.querySelector("summary").focus(); }
+    });
+  });
+
+  const exportMenu = topbar.querySelector(".export-menu");
+  const exportSummary = exportMenu.querySelector("summary");
+  const onOutsideClick = (e) => {
+    if (exportMenu.open && !exportMenu.contains(e.target)) exportMenu.open = false;
+  };
+  exportMenu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && exportMenu.open) {
+      e.stopPropagation();
+      exportMenu.open = false;
+      exportSummary.focus();
+    }
+  });
+  document.addEventListener("click", onOutsideClick);
 
   const [line1, line2] = report.title.split("\n");
   const metaLine = live
@@ -2840,10 +2917,9 @@ async function renderResults(runId) {
   const splits = (report.keyMessageSentiment || []).map((m) => ({
     id: m.metricId, label: m.label,
     value: m.positivePercent, evidenceCount: m.baseN,
+    positiveCount: m.positiveCount, negativeCount: m.negativeCount,
     positivePercent: m.positivePercent, negativePercent: m.negativePercent,
     baseN: m.baseN,
-    sub: `${fmtNum(m.positiveCount)} positive · ${fmtNum(m.negativeCount)} negative`
-       + ` of ${fmtNum(m.baseN)} comments that mentioned it`,
   }));
   // m-t-<slug> and m-is-<slug> share a slug by construction, so the split
   // for a Key Message row is found by swapping the prefix.
@@ -2852,9 +2928,16 @@ async function renderResults(runId) {
     report.transfers.concat(report.themes, sentiments, emotions, splits)
       .map((m) => [m.id, m]));
 
+  const sectionCsvBtn = (kind) => {
+    const meta = PUBLIC_ARTIFACTS.find((m) => m.kind === kind);
+    const art = byKind.get(kind);
+    const btn = `<button class="btn ghost small" type="button" data-section-csv="${kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
+    return art ? btn : disWrap(btn, "This file was not generated.");
+  };
+
   // Sentiment and Emotions render identically: a labelled percentage bar
   // per label, in the count order report.json already sorted them into.
-  const labelChart = (key, heading, sub, metrics) => metrics.length ? `
+  const labelChart = (key, heading, sub, metrics, csvKind) => metrics.length ? `
         <section class="chart" aria-labelledby="${key}-h">
           <h2 id="${key}-h">${heading}</h2>
           <p class="sub">${sub}</p>
@@ -2863,36 +2946,45 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val dark" type="button" data-metric="${esc(m.id)}">${m.value}%</button>
+                <button class="bar-val dark" type="button" data-metric="${esc(m.id)}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
+          <div class="section-foot">${sectionCsvBtn(csvKind)}</div>
         </section>` : "";
 
-  const artifactRow = (meta) => {
-    const art = byKind.get(meta.kind);
-    const btn = `<button class="btn ghost small" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)} ↓</button>`;
-    return art ? btn : disWrap(btn, "This file was not generated.");
-  };
+  // Excluded Key Messages have no report.transfers row at all; run.briefPoints
+  // is undefined in some demo fixtures, so this simply renders no excluded
+  // rows there instead of throwing.
+  const transferLabels = new Set(report.transfers.map((m) => m.label.trim().toLowerCase()));
+  const excludedRows = (run.briefPoints || [])
+    .filter((p) => p.included === false && !transferLabels.has((p.label || "").trim().toLowerCase()))
+    .map((p) => `<div class="bar-row excluded"><span class="bar-label dim">${esc(p.label)} · excluded from this run</span></div>`)
+    .join("");
+
+  // "Other" always sorts last in Theme mix; everything else keeps report order.
+  const orderedThemes = report.themes.slice().sort((a, b) =>
+    (a.label.trim().toLowerCase() === "other" ? 1 : 0) - (b.label.trim().toLowerCase() === "other" ? 1 : 0));
+
   view.innerHTML = `
   <div class="report-layout">
     <div class="report-scroll">
       <article class="report">
         <div style="display:flex;flex-direction:column;gap:12px">
-          <span class="kicker">STRATEGY NOTE · ${new Date(run.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</span>
+          <span class="kicker">DEBRIEF · ${new Date(run.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</span>
           <h1>${esc(line1)}<br>${esc(line2 || "")}</h1>
           <div class="meta">${metaLine}</div>
         </div>
 
         <div class="stat-block">
-          <div><button class="big-stat" type="button" data-metric="overall">${report.overallTransfer}%</button></div>
-          <p class="explain">of comments echoed at least one idea from your brief. Click any number to read the comments behind it.</p>
+          <div><button class="big-stat" type="button" data-metric="overall" aria-expanded="false" aria-controls="ev-overall">${report.overallTransfer}%</button></div>
+          <p class="explain">overall Travel - the share of comments that echoed at least one Key Message. Every number here opens the comments behind it, right under the number.</p>
         </div>
 
         <section class="chart" aria-labelledby="chart-transfer-h">
-          <h2 id="chart-transfer-h">Which ideas arrived</h2>
-          <p class="sub">Share of all ${fmtNum(report._totalComments)} comments that echoed each idea in the brief</p>
+          <h2 id="chart-transfer-h">Key Message travel</h2>
+          <p class="sub">Share of all ${fmtNum(report._totalComments)} comments that echoed each Key Message, with its positive/neutral/negative split. Click a number to open the comments under it.</p>
           <div class="bars">
             ${report.transfers.map((m) => {
               const split = splitFor.get(m.id);
@@ -2900,29 +2992,39 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val" type="button" data-metric="${m.id}">${m.value}%</button>
+                <button class="bar-val" type="button" data-metric="${m.id}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill" style="width:${m.value}%"></div></div>
               ${split && split.baseN ? `
-              <button class="bar-split" type="button" data-metric="${esc(split.id)}">
+              <div class="km-split-bar" aria-hidden="true">
+                <div class="seg-pos" style="width:${split.positiveCount / split.baseN * 100}%"></div>
+                <div class="seg-neu" style="width:${Math.max(0, split.baseN - split.positiveCount - split.negativeCount) / split.baseN * 100}%"></div>
+                <div class="seg-neg" style="width:${split.negativeCount / split.baseN * 100}%"></div>
+              </div>
+              <button class="bar-split" type="button" data-metric="${esc(split.id)}" aria-expanded="false" aria-controls="ev-${evSafeId(split.id)}">
                 <span class="split-pos">${split.positivePercent}% positive</span>
                 <span class="split-neg">${split.negativePercent}% negative</span>
                 <span class="split-base">of the ${fmtNum(split.baseN)} that mentioned it</span>
               </button>` : ""}
             </div>`;
             }).join("")}
+            ${excludedRows}
           </div>
-          <div class="method-line"><span>Counted from per-comment labels — never estimated.</span></div>
+          <div class="km-legend"><span class="sw pos"></span>Positive<span class="sw neu"></span>Neutral<span class="sw neg"></span>Negative</div>
+          <div class="section-foot">
+            <div class="method-line"><span>Counted from per-comment labels - never estimated.</span></div>
+            ${sectionCsvBtn("key_messages_csv")}
+          </div>
         </section>
 
         <section class="chart" aria-labelledby="chart-themes-h">
-          <h2 id="chart-themes-h">What the audience talked about</h2>
-          <p class="sub">Every comment carries exactly one theme label</p>
+          <h2 id="chart-themes-h">Theme mix</h2>
+          <p class="sub">Every comment carries exactly one Theme - these sum to 100</p>
           <div class="bars">
-            ${report.themes.map((m) => m.label === "Other" ? `
+            ${orderedThemes.map((m) => m.label.trim().toLowerCase() === "other" ? `
             <div class="bar-row">
               <div class="bar-head">
-                <span class="bar-label dim">Other</span>
+                <span class="bar-label dim">${esc(m.label)}</span>
                 <span class="bar-val static">${m.value}%</span>
               </div>
               <div class="bar-track"><div class="bar-fill dim" style="width:${m.value}%"></div></div>
@@ -2930,18 +3032,19 @@ async function renderResults(runId) {
             <div class="bar-row">
               <div class="bar-head">
                 <span class="bar-label">${esc(m.label)}</span>
-                <button class="bar-val dark" type="button" data-metric="${m.id}">${m.value}%</button>
+                <button class="bar-val dark" type="button" data-metric="${m.id}" aria-expanded="false" aria-controls="ev-${evSafeId(m.id)}">${m.value}%</button>
               </div>
               <div class="bar-track"><div class="bar-fill dark" style="width:${m.value}%"></div></div>
             </div>`).join("")}
           </div>
+          <div class="section-foot">${sectionCsvBtn("themes_csv")}</div>
         </section>
 
-        ${labelChart("chart-sentiment", "How the audience felt",
-          "Every comment carries exactly one Sentiment label", sentiments)}
+        ${labelChart("chart-sentiment", "Overall Sentiment",
+          "Every comment carries exactly one Sentiment label", sentiments, "sentiment_csv")}
 
-        ${labelChart("chart-emotions", "The emotion behind the comments",
-          "Every comment carries exactly one Emotion label", emotions)}
+        ${labelChart("chart-emotions", "Overall Emotions",
+          "Every comment carries exactly one Emotion label", emotions, "emotions_csv")}
 
         ${report.interpretation ? `
         <section class="read" aria-labelledby="read-h">
@@ -2952,50 +3055,153 @@ async function renderResults(runId) {
             : ""}
           ${report.caveat ? `<div class="caveat"><strong>One caution.</strong> ${esc(report.caveat)}</div>` : ""}
         </section>` : ""}
-
-        <section class="downloads" aria-labelledby="downloads-h">
-          <h2 id="downloads-h">Files from this run</h2>
-          <div class="dl-row">${PUBLIC_ARTIFACTS.map(artifactRow).join("")}</div>
-        </section>
       </article>
     </div>
   </div>`;
 
-  view.querySelectorAll("[data-metric]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const id = b.dataset.metric;
-      const metric = id === "overall"
-        ? { id: report.transfers[0] ? report.transfers[0].id : "none", label: "Overall transfer", value: report.overallTransfer, evidenceCount: Math.round(report.overallTransfer / 100 * report._totalComments) }
-        : metricIndex.get(id);
-      if (metric && metric.id !== "none") openEvidenceDrawer(report, metric, b);
+  /* Inline evidence: one panel open at a time, inserted right after the
+     row (or stat-block) that owns the clicked metric button. */
+  let openPanel = null; // { id, panelEl, btnEl }
+
+  function evidenceFor(id) {
+    return (report.evidence || []).filter((e) => e.metricId === id).slice(0, 3);
+  }
+
+  // Overall has no single metricId of its own: it is the union of every
+  // Key Message, de-duplicated by comment text, in fixed evidence order.
+  function overallEvidence() {
+    const seen = new Set();
+    const out = [];
+    for (const e of report.evidence || []) {
+      if (!e.metricId || !e.metricId.startsWith("m-t-") || seen.has(e.text)) continue;
+      seen.add(e.text);
+      out.push(e);
+      if (out.length === 3) break;
+    }
+    return out;
+  }
+
+  function nounFor(id) {
+    return id.startsWith("m-th-") ? "comments carry this Theme" : "comments carry this label";
+  }
+
+  function panelHtml(safeId, ariaLabel, count, noun, items) {
+    const cardsHtml = items.length
+      ? items.map((e) => {
+          const meta = [displayLabel(e.emotion), displayLabel(e.sentiment), e.likes != null ? fmtNum(e.likes) + " likes" : ""]
+            .filter(Boolean).join(" · ");
+          return `<div class="ev-card"><div class="ev-text">${esc(e.text)}</div><div class="ev-meta">${meta}</div></div>`;
+        }).join("")
+      : `<div class="ev-empty">No example comments were saved for this number.</div>`;
+    const commentsArt = byKind.get("comments_csv");
+    const seeAllBtn = `<button class="ev-see-all" type="button" data-see-all${commentsArt ? "" : " disabled"}>See all ${fmtNum(count)} in comments.csv →</button>`;
+    return `
+    <div class="ev-panel" id="ev-${safeId}" role="region" aria-label="Comments behind ${esc(ariaLabel)}">
+      <div class="ev-panel-h" tabindex="-1">${fmtNum(count)} ${noun}</div>
+      ${cardsHtml}
+      <div class="ev-panel-foot">
+        ${commentsArt ? seeAllBtn : disWrap(seeAllBtn, "This file was not generated.")}
+        <button class="ev-collapse" type="button" data-ev-collapse>Collapse</button>
+      </div>
+    </div>`;
+  }
+
+  function removePanel() {
+    if (!openPanel) return;
+    openPanel.panelEl.remove();
+    openPanel.btnEl.setAttribute("aria-expanded", "false");
+    openPanel = null;
+  }
+
+  function collapsePanel() {
+    if (!openPanel) return;
+    const btnEl = openPanel.btnEl;
+    removePanel();
+    btnEl.focus();
+  }
+
+  function openPanelFor(id, btn) {
+    const safeId = evSafeId(id);
+    let ariaLabel, count, noun, items;
+    if (id === "overall") {
+      ariaLabel = "Overall Travel";
+      // ponytail: rounded derivation from the percent, until report.json
+      // carries an overall comment count of its own.
+      count = Math.round(report.overallTransfer / 100 * report._totalComments);
+      noun = "comments echoed at least one Key Message";
+      items = overallEvidence();
+    } else {
+      const metric = metricIndex.get(id);
+      ariaLabel = metric ? metric.label : id;
+      count = metric ? metric.evidenceCount : 0;
+      noun = nounFor(id);
+      items = evidenceFor(id);
+    }
+    const rowEl = btn.closest(".bar-row") || btn.closest(".stat-block");
+    rowEl.insertAdjacentHTML("afterend", panelHtml(safeId, ariaLabel, count, noun, items));
+    const panelEl = document.getElementById(`ev-${safeId}`);
+    btn.setAttribute("aria-expanded", "true");
+    openPanel = { id, panelEl, btnEl: btn };
+    panelEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); collapsePanel(); }
     });
-  });
-  view.querySelectorAll("[data-artifact]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const art = byKind.get(b.dataset.artifact);
+    panelEl.querySelector(".ev-panel-h").focus();
+  }
+
+  // One delegated handler covers every metric toggle, panel collapse, see-all
+  // download and section CSV download, including buttons that do not exist
+  // until a panel is inserted.
+  view.querySelector(".report").addEventListener("click", (e) => {
+    const metricBtn = e.target.closest("[data-metric]");
+    if (metricBtn) {
+      const id = metricBtn.dataset.metric;
+      if (openPanel && openPanel.id === id) { collapsePanel(); return; }
+      removePanel();
+      openPanelFor(id, metricBtn);
+      return;
+    }
+    if (e.target.closest("[data-ev-collapse]")) { collapsePanel(); return; }
+    const seeAllBtn = e.target.closest("[data-see-all]");
+    if (seeAllBtn && !seeAllBtn.disabled) {
+      const art = byKind.get("comments_csv");
       if (art) downloadArtifact(art, topbarErr);
-    });
+      return;
+    }
+    const csvBtn = e.target.closest("[data-section-csv]");
+    if (csvBtn && !csvBtn.disabled) {
+      const art = byKind.get(csvBtn.dataset.sectionCsv);
+      if (art) downloadArtifact(art, topbarErr);
+    }
   });
 
-  routeCleanup = () => closeEvidenceDrawer();
+  routeCleanup = () => {
+    document.removeEventListener("click", onOutsideClick);
+  };
 }
 
 /* ---------- Files ---------- */
 let filesFilter = "all";
+let filesQuery = "";
+const FILE_TIER_SUFFIX = {
+  report_pdf: "primary", key_messages_csv: "primary", themes_csv: "primary",
+  sentiment_csv: "primary", emotions_csv: "primary", comments_csv: "advanced",
+};
 
 async function renderFiles() {
   setSidebarActive("files");
   const live = demoApi.mode === "live";
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Files</span></div>
-    <div class="topbar-right"></div>`);
+    <div class="topbar-right">
+      <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="files-search" class="topbar-search" placeholder="Search files" aria-label="Search files"></span>
+    </div>`);
 
   const files = await demoApi.listFiles();
   const shown = files.filter((f) =>
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
   const rows = shown.map((f) => {
-    const campaign = (f.campaignName ? { name: f.campaignName } : store.campaigns.get(f.campaignId)) || null;
+    const sessionName = f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
     const isArtifact = f._file === "artifact";
     const displayName = isArtifact ? f.filename : f.name;
     const ext = isArtifact ? (f.contentType === "application/pdf" ? "PDF" : "CSV")
@@ -3008,13 +3214,15 @@ async function renderFiles() {
     const action = canOpen
       ? `<button class="file-open" type="button" data-open="${f.id}" data-kind="${f._file}">Open</button>`
       : `<button class="file-open" type="button" data-dl-file="${f.id}" data-kind="${f._file}">Download</button>`;
+    const tier = isArtifact ? FILE_TIER_SUFFIX[f.kind] : null;
+    const tierHtml = tier ? ` <span class="file-tier">· ${tier}</span>` : "";
     return `
-    <div class="trow" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
+    <div class="trow" data-name="${esc(displayName.toLowerCase())}" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
       <div style="display:flex;gap:11px;align-items:center;min-width:0">
         ${icon}
-        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(displayName)}">${esc(displayName)}</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(displayName)}">${esc(displayName)}${tierHtml}</div>
       </div>
-      <div class="trow-dim">${esc(campaign ? campaign.name : "—")}</div>
+      <div class="trow-dim">${esc(sessionName || "-")}</div>
       <div>${isArtifact ? '<span class="badge">We made</span>' : '<span class="badge outline">You added</span>'}</div>
       <div class="trow-dim">${fmtSize(f.size)}</div>
       <div class="trow-dim">${fmtAgo(f.addedAt)}</div>
@@ -3027,7 +3235,7 @@ async function renderFiles() {
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
         <h2 class="greeting">Files</h2>
-        <div class="greeting-sub">Everything you gave us, and everything we made — across all sessions${live ? "" : " in this demo run"}.</div>
+        <div class="greeting-sub">Everything you gave us, and everything we made - across all sessions${live ? "" : " in this demo run"}.</div>
       </div>
       <div class="pill-row" role="group" aria-label="File filters">
         <button class="pill ${filesFilter === "all" ? "active" : ""}" type="button" data-ff="all" aria-pressed="${filesFilter === "all"}">All</button>
@@ -3039,18 +3247,19 @@ async function renderFiles() {
     <div class="empty-block">
       <div class="empty-icon">${ICONS.folder}</div>
       <h3>No files yet</h3>
-      <p>Upload briefs, articles or images to a campaign, or run an analysis — reports and CSVs land here.</p>
+      <p>Upload briefs, articles or images to a campaign, or run an analysis - reports and CSVs land here.</p>
       <div class="actions"><a class="btn primary" href="#/sessions/new">Create a session</a></div>
     </div>` : `
     <div class="table-scroll">
     <div class="table" style="min-width:820px">
       <div class="thead" style="grid-template-columns:1.7fr 1.4fr .7fr .6fr .8fr 80px">
-        <div>FILE</div><div>CAMPAIGN</div><div>KIND</div><div>SIZE</div><div>ADDED</div><div></div>
+        <div>FILE</div><div>SESSION</div><div>KIND</div><div>SIZE</div><div>ADDED</div><div></div>
       </div>
-      ${rows.join("") || '<div style="padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>'}
+      <div id="files-rows">${rows.join("")}</div>
+      <div id="files-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
     </div>
     </div>
-    <div style="font-size:12px;color:var(--quiet)">${shown.length} file${shown.length === 1 ? "" : "s"}. Deleting an input you added won't change a report that has already run — reports are immutable.</div>`}
+    <div style="font-size:12px;color:var(--quiet)">${shown.length} file${shown.length === 1 ? "" : "s"}. Deleting an input you added won't change a report that has already run - reports are immutable.</div>`}
   </div>`;
 
   const filesDlErr = document.createElement("div");
@@ -3062,6 +3271,27 @@ async function renderFiles() {
   view.querySelectorAll("[data-ff]").forEach((b) => {
     b.addEventListener("click", () => { filesFilter = b.dataset.ff; renderFiles(); });
   });
+
+  function applyFilesSearch() {
+    let anyVisible = false;
+    view.querySelectorAll("#files-rows > .trow").forEach((row) => {
+      const match = !filesQuery || (row.dataset.name || "").includes(filesQuery);
+      row.style.display = match ? "" : "none";
+      if (match) anyVisible = true;
+    });
+    const empty = document.getElementById("files-empty");
+    if (empty) empty.style.display = anyVisible ? "none" : "block";
+  }
+
+  const filesSearchInput = document.getElementById("files-search");
+  if (filesSearchInput) {
+    filesSearchInput.value = filesQuery;
+    filesSearchInput.addEventListener("input", () => {
+      filesQuery = filesSearchInput.value.trim().toLowerCase();
+      applyFilesSearch();
+    });
+  }
+  applyFilesSearch();
   view.querySelectorAll("[data-dl-file]").forEach((b) => {
     b.addEventListener("click", async () => {
       const item = files.find((x) => x.id === b.dataset.dlFile);
@@ -3152,7 +3382,7 @@ async function route() {
   try {
     if (parts.length === 0 || parts[0] === "home") await renderHome();
     else if (parts[0] === "sessions" && parts.length === 1) await renderSessions();
-    else if (parts[0] === "sessions" && parts[1] === "new") await renderNewSession();
+    else if (parts[0] === "sessions" && parts[1] === "new") await renderCampaign(null, null);
     else if (parts[0] === "sessions" && parts[2] === "campaigns") { activeDirtySessionId = parts[1]; await renderCampaign(parts[1], parts[3]); }
     else if (parts[0] === "runs" && parts.length === 2) await renderRun(parts[1]);
     else if (parts[0] === "runs" && parts[2] === "results") await renderResults(parts[1]);

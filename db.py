@@ -83,7 +83,11 @@ CREATE TABLE IF NOT EXISTS brief_points (
     approved    INTEGER NOT NULL DEFAULT 0,
     edited      INTEGER NOT NULL DEFAULT 0,
     included    INTEGER NOT NULL DEFAULT 1,
-    sort_order  INTEGER NOT NULL DEFAULT 0
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    -- Where the point came from: input (User Inputs or the review screen),
+    -- sharpened (an input point whose description a transcript refreshed),
+    -- or transcript (derived from transcripts alone). See brief.reconcile().
+    source      TEXT NOT NULL DEFAULT 'input'
 );
 
 CREATE TABLE IF NOT EXISTS run_artifacts (
@@ -127,6 +131,10 @@ def init() -> None:
                 "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
         if "total_comments" not in cols:
             conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
+        bp_cols = {row[1] for row in conn.execute("PRAGMA table_info(brief_points)")}
+        if "source" not in bp_cols:
+            conn.execute(
+                "ALTER TABLE brief_points ADD COLUMN source TEXT NOT NULL DEFAULT 'input'")
         conn.commit()
     finally:
         conn.close()

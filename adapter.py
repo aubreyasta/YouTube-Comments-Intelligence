@@ -277,7 +277,8 @@ def _load_session_key_messages(session_id: str) -> list[dict]:
 
 def _replace_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> None:
     """Replace this run's brief_points with `points` (KeyMessage-shaped
-    dicts: id, label, description, included, order, edited). video_id is
+    dicts: id, label, description, included, order, edited, source; a
+    missing source is stored as 'input'). video_id is
     always NULL here - these are Session-level Key Messages, not the old
     per-video brief() points - so analyze.classify() broadcasts each one
     to every video's batch (see pipeline/analyze.py).
@@ -295,11 +296,11 @@ def _replace_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> 
             conn.execute(
                 """INSERT INTO brief_points
                    (id, run_id, campaign_id, video_id, label, description,
-                    approved, edited, included, sort_order)
-                   VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?, ?)""",
+                    approved, edited, included, sort_order, source)
+                   VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?)""",
                 (pt["id"], run_id, campaign_id, pt["label"], pt.get("description", ""),
                  int(pt.get("edited", False)), int(pt.get("included", True)),
-                 pt.get("order", 0)))
+                 pt.get("order", 0), pt.get("source", "input")))
         conn.commit()
     finally:
         conn.close()
