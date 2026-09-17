@@ -20,11 +20,11 @@ external browser
   -> frontend or /api route
 
 FastAPI pipeline
-  -> LM Studio 127.0.0.1:1234
+  -> LM Studio at LLM_BASE_URL (same host, or a private-network host with a token)
   -> Qwen3.8-27B
 ```
 
-Only FastAPI is published. LM Studio, YouTube credentials, Session data, uploads, and generated files stay on the host.
+Only FastAPI is published. LM Studio is never published to the internet. YouTube credentials, Session data, uploads, and generated files stay on the FastAPI host.
 
 The application has three code areas:
 
@@ -57,6 +57,10 @@ The local model fields are:
 - `LLM_MODEL`
 - `LLM_CONTEXT_LENGTH`
 - `LLM_TIMEOUT_SECONDS`
+- `LLM_HEADERS`
+- `LLM_ALLOW_INSECURE`
+
+`pipeline.config_types.llm_env()` reads these fields from environment variables for the backend.
 
 The backend also reads `CLASSIFY_BATCH_SIZE` from the environment. The code defaults are a 32,768-token context and batch size 8. Batch size 16 is validated for `qwen/qwen3.8-27b`; see [Setup](setup.md#configure-the-backend).
 
@@ -89,7 +93,7 @@ The model never produces report percentages. Python counts per-comment labels. T
 
 All model calls live in `pipeline/llm.py`. Callers use `ask()`, `ask_json()`, `classify_batch()`, and `extract_image_context()` without handling the provider wire format.
 
-`pipeline.llm._validated_base_url()` accepts only an HTTP loopback origin without credentials, a path, a query, or a fragment. The supported deployment does not use a remote model server, an LM Studio API token, provider selection, or a cloud fallback.
+`pipeline.llm._validated_base_url()` accepts an `http` or `https` URL with any host and an optional path prefix. It rejects credentials, a query, a fragment, and an invalid port. `LLM_HEADERS` carries credentials instead, such as an LM Studio API token; `_call()` sends them on every request and no error message includes them. `LLM_ALLOW_INSECURE` disables TLS certificate verification. The application has no provider selection or cloud fallback. Preflight uses LM Studio's native `/api/v1/models`, so the endpoint must be LM Studio or a proxy in front of it.
 
 Calls use non-streaming OpenAI-compatible `POST /v1/chat/completions`. Structured calls add strict JSON Schema. Image calls use base64 `data:` URLs with the original MIME type. Connection failures, timeouts, HTTP 429, and HTTP 5xx retry three times.
 

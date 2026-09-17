@@ -8,7 +8,7 @@ Related: [Deployment](deployment.md), [Architecture](architecture.md), [API refe
 
 ## Prerequisites
 
-The server runs wherever Python 3.10 or newer runs. LM Studio must answer on a loopback port of the server's machine: either directly, or through a local relay (see [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio)). The shell commands below target macOS and Linux. On Windows, use `python` and `.venv\Scripts\activate`.
+The server runs wherever Python 3.10 or newer runs. LM Studio runs on the same machine or on another machine the server can reach (see [Using a remote LM Studio](#using-a-remote-lm-studio)). The shell commands below target macOS and Linux. On Windows, use `python` and `.venv\Scripts\activate`.
 
 Install:
 
@@ -65,7 +65,7 @@ curl -s http://127.0.0.1:1234/api/v1/models
 
 Record the exact model key returned by LM Studio. Set that key as `LLM_MODEL`.
 
-Load the model with a 32,768-token context. Disable thinking in the model settings because the pipeline requires direct schema-only responses. Keep the server on its default loopback bind.
+Load the model with a 32,768-token context. Disable thinking in the model settings because the pipeline requires direct schema-only responses. When LM Studio runs on the server's machine, keep the server on its default loopback bind.
 
 Verify the bind:
 
@@ -73,7 +73,7 @@ Verify the bind:
 lsof -nP -iTCP:1234 -sTCP:LISTEN
 ```
 
-The listener must be `127.0.0.1:1234` or `localhost:1234`. Do not enable **Serve on Local Network**.
+For a same-machine setup, the listener must be `127.0.0.1:1234` or `localhost:1234`. Enable **Serve on Local Network** only for a remote setup, and only with an API token (see [Using a remote LM Studio](#using-a-remote-lm-studio)).
 
 See [Deployment](deployment.md) for model smoke tests and real-device acceptance.
 
@@ -95,12 +95,14 @@ CLASSIFY_BATCH_SIZE=16
 
 - `YOUTUBE_API_KEY` stays on the server. The browser never receives it.
 - `APP_PASSWORD` protects the frontend, API, downloads, and SSE stream. The server refuses to start when it is empty.
-- `LLM_BASE_URL` must be a loopback HTTP origin without a path, credentials, query, or fragment.
+- `LLM_BASE_URL` is an `http` or `https` URL with any host and an optional path prefix. It must not contain credentials, a query, or a fragment.
+- `LLM_HEADERS` (optional) is a JSON object of headers sent on every model request, for example `{"Authorization": "Bearer <LM Studio API token>"}`. Values must be single-line strings. Error messages never include them.
+- `LLM_ALLOW_INSECURE=true` (optional) skips TLS certificate verification for an `https` `LLM_BASE_URL`. Use it only for a self-signed endpoint on a network you control.
 - `LLM_MODEL` must exactly match the LM Studio model inventory.
 - `CLASSIFY_BATCH_SIZE=16` is validated for `qwen/qwen3.8-27b`: a 574-comment run labelled every comment with no validation failure in 32 minutes, against 2h27m at batch 4. The code default is `8`, so set `16` explicitly.
 - `LLM_CONTEXT_LENGTH` is a starting value. Change it only after a real run shows memory pressure.
 - `.env`, `config.py`, and `data/` are gitignored. Never commit them.
-- The application has no LM Studio API-token setting. Keep LM Studio on loopback. Do not publish port 1234 or replace `LLM_BASE_URL` with a remote URL.
+- Never publish LM Studio to the internet. A remote LM Studio belongs on a private network and requires an API token.
 
 Check the exclusions:
 
@@ -159,21 +161,26 @@ See [Deployment](deployment.md) for external security checks, automatic login st
 
 ---
 
-## Developing against a remote LM Studio
+## Using a remote LM Studio
 
-`LLM_BASE_URL` must stay a loopback URL. `pipeline/llm.py`'s `_validated_base_url()` rejects any other host, and the application has no LM Studio API-token setting. This holds even when the person developing works on a different machine than the one running LM Studio.
+The server can call LM Studio on another machine, for example over a private mesh network such as Tailscale, or from a container that has no host network.
 
-Run a local relay instead of changing that boundary. The relay is a small process on the developer's own machine:
+On the LM Studio machine:
 
-- It listens on `http://127.0.0.1:<port>`.
-- It forwards every request to the remote LM Studio endpoint, using whatever network path and credentials that endpoint requires (a private mesh network and an API token, for example).
-- It returns the response unchanged.
+1. Enable **Serve on Local Network**.
+2. Enable API token authentication and create a token.
+3. Keep port 1234 off the public internet.
 
-Set `LLM_BASE_URL=http://127.0.0.1:<port>` to the relay's own port, not LM Studio's. `pipeline/llm.py` then sees a plain loopback URL and needs no other change.
+In the server's `.env`:
 
-The relay is a personal development tool, not part of the application. Keep its script and any token it holds out of the repository. Never commit them.
+```text
+LLM_BASE_URL=http://<lm-studio-host>:1234
+LLM_HEADERS={"Authorization": "Bearer <LM Studio API token>"}
+```
 
-With the relay running, follow the rest of this file as written: create `.env`, start `python server.py`, and use the application at `http://127.0.0.1:8000` like any other local run. Every model call now reaches the remote LM Studio; everything else stays local.
+A reverse proxy in front of LM Studio also works. Include its path prefix in `LLM_BASE_URL` and its credentials in `LLM_HEADERS`.
+
+Then follow the rest of this file as written. Every model call reaches the remote LM Studio; everything else stays local. A wrong token fails preflight with `LM Studio request failed (HTTP 401).`
 
 A code change needs only a restart of `python server.py` to test. No redeploy is required. The remote machine's only requirement is that LM Studio and the configured model stay loaded and running.
 
@@ -217,7 +224,9 @@ After a provider or model change, run one real Session through the web app again
 |---|---|---|
 | `RuntimeError: APP_PASSWORD must be set before the server can start.` | `.env` is missing or `APP_PASSWORD` is empty | Create `.env` in the repository root and restart FastAPI. |
 | LM Studio connection failure | The daemon or API server is stopped | Run `lms daemon up`, then `lms server start --port 1234`. |
-| `LLM_BASE_URL host must be loopback` | `LLM_BASE_URL` points at another machine | Run a local relay and point `LLM_BASE_URL` at it. See [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio). |
+| `LM Studio request failed (HTTP 401).` | LM Studio requires a token and `LLM_HEADERS` is missing or wrong | Set `LLM_HEADERS` to the current token. See [Using a remote LM Studio](#using-a-remote-lm-studio). |
+| `LLM_HEADERS must be a JSON object of string values` | `LLM_HEADERS` is not valid JSON | Quote the header name and value with double quotes, as in the example. |
+| LM Studio connection failure over `https` with a certificate error | The endpoint uses a self-signed certificate | Install a trusted certificate, or set `LLM_ALLOW_INSECURE=true` on a network you control. |
 | Model not found | `LLM_MODEL` does not exactly match LM Studio's model key | Read `curl -s http://127.0.0.1:1234/api/v1/models` and copy the exact key. |
 | Vision preflight failure | The downloaded build does not expose vision support | Download a vision-capable `Qwen3.8-27B` 4-bit MLX build. |
 | Structured response fails validation | Thinking is enabled or the local runtime did not enforce the schema | Disable thinking, confirm the selected model, and run the structured-output smoke test. |

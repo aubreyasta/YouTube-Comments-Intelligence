@@ -10,6 +10,7 @@ Run: python tests/test_llm.py
 import base64
 import json
 import os
+import ssl
 import sys
 import time
 from unittest.mock import MagicMock, patch
@@ -17,7 +18,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pipeline import llm
-from pipeline.config_types import PipelineConfig
+from pipeline.config_types import PipelineConfig, llm_env
 
 
 def make_cfg():
@@ -457,18 +458,70 @@ def test_preflight_success():
     print("  ok  preflight succeeds with valid model and vision")
 
 
-def test_config_validation_loopback_only():
-    """LLM_BASE_URL must be loopback only."""
+def test_config_validation_base_url():
+    """Any http(s) host and path prefix is accepted; credentials, query, other schemes are not."""
+    for url in ("http://0.0.0.0:1234", "https://llm.example.com/lmstudio/",
+                "http://192.168.1.20:1234"):
+        cfg = make_cfg()
+        cfg.LLM_BASE_URL = url
+        assert llm._validate_config(cfg) == url.rstrip("/"), url
+
+    for url in ("https://user:pw@llm.example.com", "http://llm.example.com?x=1",
+                "ftp://llm.example.com", "http://llm.example.com:99999"):
+        cfg = make_cfg()
+        cfg.LLM_BASE_URL = url
+        try:
+            llm._validate_config(cfg)
+            assert False, f"Should have rejected {url}"
+        except ValueError as e:
+            assert "pw" not in str(e)
+
+    print("  ok  LLM_BASE_URL accepts remote http(s) and rejects credentials, query, bad scheme/port")
+
+
+def test_headers_and_insecure_tls():
+    """LLM_HEADERS reach the request; LLM_ALLOW_INSECURE passes an unverified context."""
+    response_data = {"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]}
+
     cfg = make_cfg()
-    cfg.LLM_BASE_URL = "http://example.com:1234"
+    with patch("urllib.request.urlopen", return_value=mock_response(response_data)) as m:
+        llm.ask("Test", cfg, num_predict=10)
+    assert "context" not in m.call_args.kwargs
 
-    try:
-        llm._validate_config(cfg)
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "loopback" in str(e)
+    cfg.LLM_HEADERS = {"Authorization": "Bearer secret-token", "Content-Type": "text/plain"}
+    cfg.LLM_ALLOW_INSECURE = True
+    with patch("urllib.request.urlopen", return_value=mock_response(response_data)) as m:
+        llm.ask("Test", cfg, num_predict=10)
+    req = m.call_args.args[0]
+    assert req.get_header("Authorization") == "Bearer secret-token"
+    assert req.get_header("Content-type") == "application/json"
+    context = m.call_args.kwargs["context"]
+    assert context.verify_mode == ssl.CERT_NONE and not context.check_hostname
 
-    print("  ok  LLM_BASE_URL must be loopback only")
+    for bad in ({"Authorization": "Bearer x\r\nX-Evil: 1"}, {"": "v"}, {"A": 1}, ["A"]):
+        cfg.LLM_HEADERS = bad
+        try:
+            llm._validate_config(cfg)
+            assert False, f"Should have rejected {bad!r}"
+        except ValueError as e:
+            assert "Bearer" not in str(e)
+
+    print("  ok  headers are sent, Content-Type wins, insecure TLS is opt-in, bad headers rejected")
+
+
+def test_llm_env():
+    """llm_env parses LLM_HEADERS JSON and LLM_ALLOW_INSECURE flags."""
+    env = llm_env({"LLM_HEADERS": '{"Authorization": "Bearer t"}', "LLM_ALLOW_INSECURE": "TRUE"})
+    assert env["LLM_HEADERS"] == {"Authorization": "Bearer t"}
+    assert env["LLM_ALLOW_INSECURE"] is True
+    assert llm_env({})["LLM_HEADERS"] == {} and llm_env({})["LLM_ALLOW_INSECURE"] is False
+    for bad in ("Bearer t", "[1]"):
+        try:
+            llm_env({"LLM_HEADERS": bad})
+            assert False, f"Should have rejected {bad!r}"
+        except ValueError as e:
+            assert bad not in str(e)
+    print("  ok  llm_env parses headers JSON and the insecure flag, rejects non-objects")
 
 
 def test_config_validation_nonempty_model():
@@ -533,7 +586,9 @@ if __name__ == "__main__":
         test_preflight_model_not_found,
         test_preflight_vision_not_supported,
         test_preflight_success,
-        test_config_validation_loopback_only,
+        test_config_validation_base_url,
+        test_headers_and_insecure_tls,
+        test_llm_env,
         test_config_validation_nonempty_model,
         test_config_validation_positive_context,
         test_config_validation_positive_timeout,

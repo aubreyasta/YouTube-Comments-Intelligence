@@ -13,6 +13,8 @@ try:
 except ImportError:
     pass  # python-dotenv optional; env vars may be set by the shell
 
+from pipeline.config_types import llm_env
+
 # ---------------------------------------------------------------- inputs
 # One entry per video. "group" is how results get compared: give two videos
 # the same group name and they are treated as one campaign.
@@ -47,14 +49,20 @@ SESSION_NAME = ""
 # Never hardcode a key in this file.
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
-# ---------------------------------------------------------- local LM Studio
-# LM Studio must run on this computer and listen on loopback.
+# ---------------------------------------------------------------- LM Studio
 # Load the vision-capable Qwen3.8-27B 4-bit MLX model first. Use the exact
 # API identifier from LM Studio, or the deployment alias below.
+# LLM_BASE_URL may point at another machine or a reverse proxy (http or
+# https, optional path prefix). A remote LM Studio should require its API
+# token. Put the headers in .env as JSON, never hardcoded here:
+#   LLM_HEADERS={"Authorization": "Bearer your-token"}
 LLM_BASE_URL = "http://127.0.0.1:1234"
 LLM_MODEL = "youtube-intelligence"
 LLM_CONTEXT_LENGTH = 32768
 LLM_TIMEOUT_SECONDS = 600
+LLM_HEADERS = llm_env(os.environ)["LLM_HEADERS"]
+# True skips TLS certificate checks (self-signed https endpoints only).
+LLM_ALLOW_INSECURE = False
 
 # ---------------------------------------------------------------- filters
 # Languages to keep. Add codes as needed: id=Indonesian, ms=Malay,

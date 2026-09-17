@@ -95,7 +95,7 @@ The tool runs a multimodal `Qwen3.8-27B` build through LM Studio (API key `qwen/
 
 Python validates every label and counts every percentage. The model never emits report statistics directly.
 
-The server reaches LM Studio only through a loopback URL. Local inference has no per-run API cost and keeps client material on machines you control. Throughput depends on the model build, context, batch size, and corpus. With `CLASSIFY_BATCH_SIZE=16`, a 574-comment run finished in 32 minutes.
+The server reaches LM Studio on the same machine or on a private-network host through `LLM_BASE_URL`, with an optional API token in `LLM_HEADERS`. Local inference has no per-run API cost and keeps client material on machines you control. Throughput depends on the model build, context, batch size, and corpus. With `CLASSIFY_BATCH_SIZE=16`, a 574-comment run finished in 32 minutes.
 
 ---
 

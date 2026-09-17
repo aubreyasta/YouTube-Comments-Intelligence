@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
-import ipaddress
 import json
 import socket
+import ssl
 import time
 from collections.abc import Callable
 from urllib import error, parse, request
@@ -257,16 +257,12 @@ def _validated_base_url(cfg: PipelineConfig) -> str:
     if not isinstance(cfg.LLM_BASE_URL, str):
         raise ValueError("LLM_BASE_URL must be a string")
     url = parse.urlsplit(cfg.LLM_BASE_URL)
-    if url.scheme != "http" or not url.hostname or url.username or url.password:
-        raise ValueError("LLM_BASE_URL must be an HTTP loopback URL without credentials")
-    if url.query or url.fragment or url.path not in ("", "/"):
-        raise ValueError("LLM_BASE_URL must not contain a path, query, or fragment")
-    try:
-        loopback = ipaddress.ip_address(url.hostname).is_loopback
-    except ValueError:
-        loopback = url.hostname.lower() == "localhost"
-    if not loopback:
-        raise ValueError("LLM_BASE_URL host must be loopback")
+    if url.scheme not in ("http", "https") or not url.hostname:
+        raise ValueError("LLM_BASE_URL must be an HTTP or HTTPS URL")
+    if url.username or url.password:
+        raise ValueError("LLM_BASE_URL must not contain credentials; use LLM_HEADERS")
+    if url.query or url.fragment:
+        raise ValueError("LLM_BASE_URL must not contain a query or fragment")
     try:
         url.port
     except ValueError as exc:
@@ -276,6 +272,14 @@ def _validated_base_url(cfg: PipelineConfig) -> str:
 
 def _validate_config(cfg: PipelineConfig) -> str:
     base_url = _validated_base_url(cfg)
+    headers = cfg.LLM_HEADERS
+    if not isinstance(headers, dict) or any(
+            not isinstance(k, str) or not k.strip() or not isinstance(v, str)
+            or any(c in k + v for c in "\r\n") for k, v in headers.items()):
+        # Never echo the headers: they usually carry a token.
+        raise ValueError("LLM_HEADERS must map header names to single-line string values")
+    if not isinstance(cfg.LLM_ALLOW_INSECURE, bool):
+        raise ValueError("LLM_ALLOW_INSECURE must be a boolean")
     model = cfg.LLM_MODEL
     if not isinstance(model, str) or not model.strip():
         raise ValueError("LLM_MODEL must be a nonempty string")
@@ -289,13 +293,16 @@ def _validate_config(cfg: PipelineConfig) -> str:
 def _call(cfg: PipelineConfig, method: str, path: str, payload: dict | None = None) -> dict:
     base_url = _validate_config(cfg)
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"} if data is not None else {}
+    headers = dict(cfg.LLM_HEADERS)
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    tls = {"context": ssl._create_unverified_context()} if cfg.LLM_ALLOW_INSECURE else {}
     retry_statuses = {429, 500, 502, 503, 504}
     last = ""
     for attempt in range(3):
         try:
             req = request.Request(base_url + path, data=data, headers=headers, method=method)
-            with request.urlopen(req, timeout=cfg.LLM_TIMEOUT_SECONDS) as response:
+            with request.urlopen(req, timeout=cfg.LLM_TIMEOUT_SECONDS, **tls) as response:
                 raw = response.read()
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):

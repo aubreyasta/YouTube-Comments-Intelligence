@@ -36,6 +36,7 @@ import db
 import storage
 import adapter
 from pipeline import brief as pipeline_brief
+from pipeline.config_types import llm_env
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,8 @@ def _startup():
     # publishes every Session to whoever finds the tunnel URL.
     if not _app_password():
         raise RuntimeError("APP_PASSWORD must be set before the server can start.")
+    # A malformed LLM_HEADERS fails here, not minutes into the first run.
+    llm_env(os.environ)
     db.init()
     # Run threads die with the process, so an active row at startup has no
     # worker behind it and would block every new run forever.

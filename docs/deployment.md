@@ -18,7 +18,7 @@ A Dokploy instance on a remote workstation keeps a test copy in sync with `main`
 
 Open operational decisions:
 
-- **Model access.** The container cannot reach LM Studio. Dokploy runs the app as a Docker Swarm service, which has no host-network mode, and `pipeline/llm.py` accepts only a loopback `LLM_BASE_URL`. Either rebuild the service as plain Docker Compose, or relax the loopback check. Neither option is chosen.
+- **Model access.** Dokploy runs the app as a Docker Swarm service, which has no host-network mode, so the container cannot use a loopback `LLM_BASE_URL`. Since #29, `LLM_BASE_URL` accepts any host. Point it at the workstation's private address and set `LLM_HEADERS` to an LM Studio API token (see [Setup](setup.md#using-a-remote-lm-studio)). This configuration is not applied yet.
 - **Persistence.** The Dokploy service has no persistent volume for `data/`. A redeploy loses Sessions, uploads, and reports.
 
 ---
@@ -227,7 +227,7 @@ CLASSIFY_BATCH_SIZE=16
 
 Keep `APP_PASSWORD` long and unique. Anyone who has it can read every Session, upload, and report. There are no accounts or per-user permissions.
 
-Do not add an LM Studio API token. The approved boundary relies on loopback isolation. If the LM Studio server requires a token, stop and update the application contract rather than placing an unsupported secret in `.env`.
+On this single-host procedure LM Studio stays on loopback, so `LLM_HEADERS` is not needed. If LM Studio moves to another host, follow [Setup](setup.md#using-a-remote-lm-studio).
 
 ### Evidence
 
