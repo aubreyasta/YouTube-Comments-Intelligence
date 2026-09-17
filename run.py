@@ -29,6 +29,8 @@ def _load_cfg() -> PipelineConfig:
         LLM_MODEL=getattr(_config_module, "LLM_MODEL", "youtube-intelligence"),
         LLM_CONTEXT_LENGTH=getattr(_config_module, "LLM_CONTEXT_LENGTH", 32768),
         LLM_TIMEOUT_SECONDS=getattr(_config_module, "LLM_TIMEOUT_SECONDS", 600),
+        LLM_HEADERS=getattr(_config_module, "LLM_HEADERS", {}),
+        LLM_ALLOW_INSECURE=getattr(_config_module, "LLM_ALLOW_INSECURE", False),
         VIDEOS=_config_module.VIDEOS,
         SESSION_NAME=_config_module.SESSION_NAME,
         OUTPUT_DIR=_config_module.OUTPUT_DIR,
@@ -65,6 +67,8 @@ def preflight(cfg: PipelineConfig):
     if problems:
         raise SystemExit("Cannot start:\n  - " + "\n  - ".join(problems))
 
+    if cfg.LLM_ALLOW_INSECURE:
+        print("  !  LLM_ALLOW_INSECURE is on: the model server's TLS certificate is not verified")
     llm.preflight(cfg)
 
 

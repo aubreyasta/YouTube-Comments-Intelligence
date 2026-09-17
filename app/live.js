@@ -31,6 +31,10 @@ async function apiFetch(path, opts) {
     e.code = "network"; e.field = null;
     throw e;
   }
+  if (resp.status === 401) {
+    // The login session expired or an admin blocked this account.
+    location.assign("/auth/login");
+  }
   if (!resp.ok) {
     let body;
     try { body = await resp.json(); } catch { body = {}; }
@@ -388,6 +392,27 @@ const liveApi = {
       message: "Key visuals are not supported.",
       field: null,
     });
+  },
+
+  /* Account and admin user management. Live only: demo mode has no users. */
+  async me() {
+    return apiJson("/api/me");
+  },
+
+  async signOut() {
+    await apiFetch("/auth/logout", { method: "POST" });
+  },
+
+  async listUsers() {
+    return apiJson("/api/users");
+  },
+
+  async setUserBlocked(userId, blocked) {
+    await apiFetch("/api/users/" + userId, patch({ blocked }));
+  },
+
+  async eraseUser(userId) {
+    await apiFetch("/api/users/" + userId, { method: "DELETE" });
   },
 
   /* These two are demo-only; live mode never calls them but the signatures

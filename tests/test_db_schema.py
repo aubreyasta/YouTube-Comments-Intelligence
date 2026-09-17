@@ -374,6 +374,47 @@ def test_init_migrates_pre_source_brief_points():
           "to an old database (old rows read 'input') and to a fresh one")
 
 
+def test_init_migrates_pre_sign_in_database():
+    """A database from before Google sign-in gains users, auth_sessions, and
+    sessions.created_by. Erasing a user nulls created_by on a migrated
+    database and cascades to their login sessions."""
+    tmp_dir = tempfile.mkdtemp()
+    path = __import__("pathlib").Path(tmp_dir) / "app.db"
+    saved_path = db._DB_PATH
+    db._DB_PATH = path
+    try:
+        pre_conn = sqlite3.connect(path)
+        pre_conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        pre_conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) VALUES ('old', 'Old', 't', 't')")
+        pre_conn.commit()
+        pre_conn.close()
+
+        db.init()
+        db.init()  # idempotent
+
+        conn = db.get_conn()
+        try:
+            assert conn.execute("SELECT created_by FROM sessions WHERE id = 'old'").fetchone()[0] is None
+            conn.execute("INSERT INTO users (id, email, created_at) VALUES ('u1', 'a@example.com', 't')")
+            conn.execute("INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) "
+                         "VALUES ('h', 'u1', 't', 't')")
+            conn.execute("UPDATE sessions SET created_by = 'u1' WHERE id = 'old'")
+            conn.commit()
+            conn.execute("DELETE FROM users WHERE id = 'u1'")
+            conn.commit()
+            assert conn.execute("SELECT created_by FROM sessions WHERE id = 'old'").fetchone()[0] is None
+            assert conn.execute("SELECT COUNT(*) FROM auth_sessions").fetchone()[0] == 0
+        finally:
+            conn.close()
+    finally:
+        db._DB_PATH = saved_path
+    print("  ok  db.init() adds sign-in tables and sessions.created_by to an old database; "
+          "erasing a user nulls created_by and deletes their login sessions")
+
+
 def test_key_messages_orphan_session_rejected():
     conn = _fresh_db()
     try:
@@ -401,6 +442,7 @@ if __name__ == "__main__":
         test_init_idempotent_on_skip_pause_column,
         test_init_migrates_pre_total_comments_database,
         test_init_migrates_pre_source_brief_points,
+        test_init_migrates_pre_sign_in_database,
         test_key_messages_orphan_session_rejected,
     ]
     failed = 0

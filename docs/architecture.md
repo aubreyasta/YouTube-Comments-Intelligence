@@ -14,17 +14,17 @@ The reference deployment runs FastAPI and LM Studio on one host. [Deployment](de
 
 ```text
 external browser
-  -> Cloudflare quick tunnel
+  -> HTTPS at a stable APP_BASE_URL (named tunnel or reverse proxy)
   -> FastAPI 127.0.0.1:8000
-  -> Basic Auth middleware
+  -> login session middleware (Google sign-in)
   -> frontend or /api route
 
 FastAPI pipeline
-  -> LM Studio 127.0.0.1:1234
+  -> LM Studio at LLM_BASE_URL (same host, or a private-network host with a token)
   -> Qwen3.8-27B
 ```
 
-Only FastAPI is published. LM Studio, YouTube credentials, Session data, uploads, and generated files stay on the host.
+Only FastAPI is published. LM Studio is never published to the internet. YouTube credentials, Session data, uploads, and generated files stay on the FastAPI host.
 
 The application has three code areas:
 
@@ -57,6 +57,10 @@ The local model fields are:
 - `LLM_MODEL`
 - `LLM_CONTEXT_LENGTH`
 - `LLM_TIMEOUT_SECONDS`
+- `LLM_HEADERS`
+- `LLM_ALLOW_INSECURE`
+
+`pipeline.config_types.llm_env()` reads these fields from environment variables for the backend.
 
 The backend also reads `CLASSIFY_BATCH_SIZE` from the environment. The code defaults are a 32,768-token context and batch size 8. Batch size 16 is validated for `qwen/qwen3.8-27b`; see [Setup](setup.md#configure-the-backend).
 
@@ -89,7 +93,7 @@ The model never produces report percentages. Python counts per-comment labels. T
 
 All model calls live in `pipeline/llm.py`. Callers use `ask()`, `ask_json()`, `classify_batch()`, and `extract_image_context()` without handling the provider wire format.
 
-`pipeline.llm._validated_base_url()` accepts only an HTTP loopback origin without credentials, a path, a query, or a fragment. The supported deployment does not use a remote model server, an LM Studio API token, provider selection, or a cloud fallback.
+`pipeline.llm._validated_base_url()` accepts an `http` or `https` URL with any host and an optional path prefix. It rejects credentials, a query, a fragment, and an invalid port. `LLM_HEADERS` carries credentials instead, such as an LM Studio API token; `_call()` sends them on every request and no error message includes them. `LLM_ALLOW_INSECURE` disables TLS certificate verification. The application has no provider selection or cloud fallback. Preflight uses LM Studio's native `/api/v1/models`, so the endpoint must be LM Studio or a proxy in front of it.
 
 Calls use non-streaming OpenAI-compatible `POST /v1/chat/completions`. Structured calls add strict JSON Schema. Image calls use base64 `data:` URLs with the original MIME type. Connection failures, timeouts, HTTP 429, and HTTP 5xx retry three times.
 
@@ -105,17 +109,27 @@ Transient socket and SSL failures retry three times with a fresh client. YouTube
 
 ## Backend
 
-`server.py` serves FastAPI on `127.0.0.1:8000`. Fail-closed HTTP Basic Auth middleware runs before routing and protects static files, API routes, downloads, and SSE. `APP_PASSWORD` must be non-empty. Any non-empty username is accepted because the product has one shared workspace, not user accounts.
+`server.py` serves FastAPI on `127.0.0.1:8000`. The backend reads `.env` before reading configuration. It never sends `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_SECRET`, or model configuration to the browser.
 
-The backend reads `.env` before reading configuration. It never sends `YOUTUBE_API_KEY`, `APP_PASSWORD`, or model configuration to the browser.
+### Sign-in and users
+
+Users sign in with Google. `server.py` runs the OAuth authorization code flow with state, nonce, and PKCE through `httpx`; there is no auth library. The callback reads the ID token straight from Google's token endpoint over TLS, so it checks the claims without a signature check (OpenID Connect Core 3.1.3.7). Only a verified email with an `hd` (Google Workspace domain) claim in `AUTH_ALLOWED_DOMAINS` can sign in.
+
+A successful sign-in creates a login session: a random token in the HttpOnly `yi_session` cookie, stored as a SHA-256 hash in `auth_sessions` for 7 days. Middleware runs before routing and checks the session on every request except `/auth/*`. It protects static files, API routes, downloads, and SSE. The same middleware refuses a `POST`, `PATCH`, or `DELETE` whose `Origin` header differs from the `APP_BASE_URL` origin. SameSite=Lax already blocks cross-site forgery; the `Origin` check also blocks a sibling subdomain, which counts as the same site. `_startup` refuses to start when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_BASE_URL`, or `AUTH_ALLOWED_DOMAINS` is empty.
+
+Admins are the emails in `ADMIN_EMAILS`. The server computes admin status on every request and stores no role. Admins block, unblock, and erase users on the Users screen. Blocking deletes the user's login sessions and rejects later sign-ins. Erasing deletes the user row; an erased user in an allowed domain can sign in again.
+
+All signed-in users share one workspace. `sessions.created_by` records who created each Session, for display only; it grants no permission.
 
 ### Storage
 
-`data/app.db` uses stdlib SQLite in WAL mode. Eight tables hold the shared state:
+`data/app.db` uses stdlib SQLite in WAL mode. Ten tables hold the shared state:
 
 | Table | Purpose |
 |---|---|
-| `sessions` | Session identity, timestamps, and Key Message draft state. |
+| `users` | Google account email, name, blocked flag, and sign-in timestamps. |
+| `auth_sessions` | Login session token hashes and expiry. |
+| `sessions` | Session identity, creator, timestamps, and Key Message draft state. |
 | `campaigns` | One internal group row per Session. |
 | `videos` | YouTube URLs and kinds. |
 | `assets` | User Input metadata, extracted text, article snapshot, and upload path. |
@@ -187,7 +201,7 @@ A completed run stores seven artifacts in fixed order:
 
 ### Live and demo isolation
 
-A plain `/` probes `GET /api/sessions` through `window.__liveApi`. Success selects live mode. A failed or unavailable backend can fall back to the in-memory demo store.
+A plain `/` probes `GET /api/sessions` through `window.__liveApi`. Success selects live mode and loads `GET /api/me` for the sidebar's Sign out control and the admin-only Users item. A `401` from the probe or any later API call sends the browser to `/auth/login`. A failed or unavailable backend can fall back to the in-memory demo store.
 
 `?demo=1` explicitly enters the committed Indomie demo and stores that choice in `sessionStorage` for the current tab. Explicit demo mode skips the probe and never delegates to `window.__liveApi`, so demo actions cannot reach the live database. A second tab opened at plain `/` remains live.
 
@@ -218,8 +232,9 @@ Every number in the results view links to deterministic evidence rows. The drawe
 | Two users start together | SQLite `BEGIN IMMEDIATE` admits only one active analysis. |
 | Browser closes during a run | The backend thread continues; persisted state restores the view. |
 | FastAPI or host restarts during a run | The active run is lost. Recovery is out of scope. Startup marks it failed, so new runs are not blocked. |
-| Cloudflare quick tunnel restarts | The public URL changes. |
+| Public URL changes | Google rejects the sign-in redirect. `APP_BASE_URL` and the OAuth client's redirect URI must match a stable URL. |
+| A user leaves the company | An admin blocks the account. Google also stops that Workspace account from signing in. An existing login session lasts until it expires or an admin blocks the user. |
 | Model or schema output drifts | Strict JSON Schema plus Python validation rejects invalid labels or row coverage. |
 | Public article resolves privately | Resolution pinning and redirect revalidation reject the request before asset creation. |
 
-Future multi-user deployment would require identity and authorization, durable job execution, shared object storage, backups, and a server database. None is implemented now.
+Per-user ownership, roles beyond admin, durable job execution, shared object storage, backups, and a server database are not implemented.

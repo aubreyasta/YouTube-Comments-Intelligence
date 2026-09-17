@@ -56,7 +56,7 @@ import db
 import storage
 from pipeline import collect, brief, analyze, report as pipeline_report
 from pipeline import llm as pipeline_llm
-from pipeline.config_types import PipelineConfig
+from pipeline.config_types import PipelineConfig, llm_env
 
 logger = logging.getLogger(__name__)
 
@@ -350,10 +350,7 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
     """
     return PipelineConfig(
         YOUTUBE_API_KEY=os.environ.get("YOUTUBE_API_KEY", ""),
-        LLM_BASE_URL=os.environ.get("LLM_BASE_URL", "http://127.0.0.1:1234"),
-        LLM_MODEL=os.environ.get("LLM_MODEL", "youtube-intelligence"),
-        LLM_CONTEXT_LENGTH=int(os.environ.get("LLM_CONTEXT_LENGTH", "32768")),
-        LLM_TIMEOUT_SECONDS=int(os.environ.get("LLM_TIMEOUT_SECONDS", "600")),
+        **llm_env(os.environ),
         VIDEOS=[
             {"url": v["url"], "group": campaign["name"],
              "kind": v.get("kind", "auto")}

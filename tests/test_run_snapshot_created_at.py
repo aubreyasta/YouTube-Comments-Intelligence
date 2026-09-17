@@ -18,7 +18,6 @@ model, or the GPU.
 Run: python tests/test_run_snapshot_created_at.py
 """
 
-import base64
 import os
 import pathlib
 import sys
@@ -39,20 +38,13 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-# server refuses to start without APP_PASSWORD, and its Basic Auth
-# middleware guards every route. Assigned, not setdefault: a developer
-# machine with its own APP_PASSWORD exported would otherwise 401 every
-# request here. server.py's load_dotenv() does not override an existing
-# variable, so this value survives the import.
-_TEST_PASSWORD = "test-password"
-os.environ["APP_PASSWORD"] = _TEST_PASSWORD
+from auth_helper import login  # sets the sign-in env the startup hook requires
 
 import server
 import adapter
 
 db.init()  # server's startup hook only fires inside TestClient's `with` block
-_AUTH = "Basic " + base64.b64encode(f"office:{_TEST_PASSWORD}".encode()).decode()
-client = TestClient(server.app, headers={"Authorization": _AUTH})
+client = login(TestClient(server.app))
 
 
 def _new_session():
