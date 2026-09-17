@@ -54,7 +54,10 @@ NUMBERS
 Theme mix per group (% of that group's comments):
 {themes}
 
-Key Message mentions, did each idea the video pushed appear in the comments:
+Key Message mentions, did each idea the video pushed appear in the comments.
+percent = share of the group's comments that mentioned it; count = those
+comments; positive_percent and negative_percent = share of those mentioning
+comments that were positive and negative:
 {transfer}
 
 Emotion distribution:
@@ -85,24 +88,29 @@ STRUCTURE - follow exactly, in markdown
 
 [[CHART:transfer]]
 
+[[CHART:sentiment]]
+
 Then for EACH group:
 
 ## [Group name]
 
-*[tagline if known] - [n] comments - [dominant emotion and share, one phrase]*
+*[tagline if known] - [n] comments - [dominant emotion and share, one phrase] - [positive share] positive, [negative share] negative*
 
 **Background**
 
 [2 to 3 sentences. What it is, what it led with, the mechanic it used.
 Write "unverified" beside anything from the BACKGROUND section.]
 
-| Decision | Travelled? | How the audience handled it |
-|---|---|---|
+| Decision | Travelled? | Positive / negative | How the audience handled it |
+|---|---|---|---|
 
 [One row per idea in the Key Message table for this group, plus one
 final row for anything the audience raised loudly that the brand did not.
-Verdict must be exactly one of: {verdicts}. Third column: under 15 words,
-derived from what the labeled comments above actually show.]
+Verdict must be exactly one of: {verdicts}. Third column: that row's
+positive_percent and negative_percent from the Key Message table, written
+as "62% / 8%"; "-" when count is 0 and on the final audience row. Fourth
+column: under 15 words, derived from what the labeled comments above
+actually show.]
 
 **Talked about instead**
 
@@ -152,7 +160,7 @@ sarcasm reads as anger; commenters are not buyers.]
 RULES
 =====================================================================
 - Use ONLY the numbers supplied. Never invent or estimate a figure.
-- The [[CHART:transfer]] and [[CHART:themes]] tokens are replaced by
+- The [[CHART:transfer]], [[CHART:sentiment]] and [[CHART:themes]] tokens are replaced by
   code-generated charts. Do NOT invent numbers for them. Keep the tokens
   exactly as written.
 - Quote ONLY from the candidate list, verbatim. Translation goes in the
@@ -213,10 +221,13 @@ def _quotes(df, cap=120):
 def write(brief, themes, transfer, affect_result, df, cfg: PipelineConfig):
     emotion = affect_result["emotion"]
     sentiment = affect_result["sentiment"]
+    key_messages = _key_message_rows(df, transfer)[
+        ["group", "key_message", "percent", "count",
+         "positive_percent", "negative_percent"]]
     return llm.ask(PROMPT.format(
         brief=brief[:9000],
         themes=themes.to_string(),
-        transfer=(transfer.to_string(index=False) if not transfer.empty
+        transfer=(key_messages.to_string(index=False) if not key_messages.empty
                   else "(none measured)"),
         emotion=(emotion["table"].to_string() + "\n\nCaveat: "
                  + emotion["caveat"]),
@@ -404,26 +415,36 @@ def _build_charts(df, transfer):
     """
     Pre-compute both chart HTML blocks for token replacement in render().
 
-    Returns (transfer_html, themes_html).
+    Returns (transfer_html, sentiment_html, themes_html).
     """
-    # Transfer chart: label = "group - point", value = echoed_pct, sorted desc.
-    if not transfer.empty:
-        t_rows = [(f"{r.group} - {r.point}", float(r.echoed_pct))
-                  for r in transfer.itertuples()]
-        transfer_html = _chart_html(
-            t_rows,
-            title="Which ideas arrived",
-            subtitle=("Share of each conversation that echoed the idea"
-                      " the brand led with."))
-    else:
-        transfer_html = ""
+    # Key Message chart: label = "group - Key Message (split)", value =
+    # mention percent, sorted desc.
+    key_messages = _key_message_rows(df, transfer)
+    t_rows = [(f"{r.group} - {r.key_message}"
+               + (f" ({r.positive_percent:.0f}% positive, "
+                  f"{r.negative_percent:.0f}% negative)"
+                  if r.sentiment_base_n else ""),
+               float(r.percent))
+              for r in key_messages.itertuples()]
+    transfer_html = _chart_html(
+        t_rows,
+        title="Which ideas arrived",
+        subtitle=("Share of each conversation that echoed the idea"
+                  " the brand led with, and how those comments felt."))
+
+    # Sentiment chart: overall share across the full corpus.
+    sentiment_counts = (df["sentiment"].dropna().value_counts(normalize=True) * 100
+                        if "sentiment" in df.columns else pd.Series(dtype=float))
+    sentiment_html = _chart_html(
+        [(label, float(pct)) for label, pct in sentiment_counts.items()],
+        title="Overall Sentiment")
 
     # Themes chart: overall frequency across the full corpus, sorted desc.
     theme_counts = df["theme"].value_counts(normalize=True) * 100
     th_rows = [(theme, float(pct)) for theme, pct in theme_counts.items()]
     themes_html = _chart_html(th_rows, title="What the audience talked about")
 
-    return transfer_html, themes_html
+    return transfer_html, sentiment_html, themes_html
 
 
 def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None, _transfer=None):
@@ -440,15 +461,14 @@ def render(markdown_text, out_dir, cfg: PipelineConfig, debug_dir=None, _df=None
     body = _style(md.markdown(markdown_text,
                               extensions=["tables", "sane_lists"]))
 
-    # Replace [[CHART:transfer]] and [[CHART:themes]] tokens.
-    # markdown wraps bare paragraphs, so the token arrives as <p>[[CHART:...]]</p>.
+    # Replace the [[CHART:...]] tokens. markdown wraps bare paragraphs, so a
+    # token arrives as <p>[[CHART:...]]</p>.
     if _df is not None and _transfer is not None:
-        transfer_html, themes_html = _build_charts(_df, _transfer)
+        charts = _build_charts(_df, _transfer)
     else:
-        transfer_html = themes_html = ""
-
-    body = re.sub(r"<p>\[\[CHART:transfer\]\]</p>", transfer_html, body)
-    body = re.sub(r"<p>\[\[CHART:themes\]\]</p>", themes_html, body)
+        charts = ("", "", "")
+    for name, html in zip(("transfer", "sentiment", "themes"), charts):
+        body = body.replace(f"<p>[[CHART:{name}]]</p>", html)
 
     document = (f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
                 f"<style>{CSS}</style></head><body>{body}</body></html>")
@@ -612,10 +632,16 @@ def _label_to_pt_col(df, label):
     return None
 
 
-def _key_messages_csv(df, transfer, out_path):
+KEY_MESSAGE_COLS = ["group", "key_message", "count", "percent", "base_n",
+                    "positive_count", "positive_percent",
+                    "negative_count", "negative_percent", "sentiment_base_n"]
+
+
+def _key_message_rows(df, transfer):
     """
-    Write key-messages.csv: per (group, Key Message) mention count and
-    sentiment split, recomputed from raw comment-level pt__ columns.
+    Per (group, Key Message) mention count and sentiment split, recomputed
+    from raw comment-level pt__ columns. Feeds key-messages.csv, the
+    report prompt, and the report's Key Message chart.
 
     transfer (analyze.summarise()'s second table) supplies the set of
     applicable (group, point) pairs - a pair appears there only when that
@@ -626,15 +652,8 @@ def _key_messages_csv(df, transfer, out_path):
     are then sorted group-first (by first appearance in df), then by
     count descending, then case-insensitive key_message.
     """
-    cols = ["group", "key_message", "count", "percent", "base_n",
-            "positive_count", "positive_percent",
-            "negative_count", "negative_percent", "sentiment_base_n"]
     if transfer.empty:
-        pd.DataFrame(columns=cols).to_csv(out_path, index=False,
-                                          encoding="utf-8-sig",
-                                          lineterminator="\n")
-        print(f"    {os.path.basename(out_path)}: 0 rows")
-        return
+        return pd.DataFrame(columns=KEY_MESSAGE_COLS)
 
     has_sentiment = "sentiment" in df.columns
     rows = []
@@ -669,8 +688,13 @@ def _key_messages_csv(df, transfer, out_path):
             "sentiment_base_n": sentiment_base_n,
         })
 
-    out = pd.DataFrame(rows, columns=cols)
-    out = _sort_group_first(out, _group_order(df), "key_message", "count")
+    out = pd.DataFrame(rows, columns=KEY_MESSAGE_COLS)
+    return _sort_group_first(out, _group_order(df), "key_message", "count")
+
+
+def _key_messages_csv(df, transfer, out_path):
+    """Write key-messages.csv from _key_message_rows()."""
+    out = _key_message_rows(df, transfer)
     out.to_csv(out_path, index=False, encoding="utf-8-sig",
               lineterminator="\n")
     print(f"    {os.path.basename(out_path)}: {len(out)} rows")

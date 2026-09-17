@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- _set_run_total). NULL before then. Persisted so GET /runs/{id} can
     -- paint it after a reopen with no SSE connection to replay from.
     total_comments INTEGER,
+    -- Latest classify progress detail ("themes=N;labelled=N;total=N;..."),
+    -- the same string the SSE event carried. Persisted so a reopened run
+    -- page repaints its labelling progress and theme count (issue #20).
+    progress_detail TEXT,
     started_at  TEXT,
     finished_at TEXT,
     error       TEXT
@@ -131,6 +135,8 @@ def init() -> None:
                 "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
         if "total_comments" not in cols:
             conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
+        if "progress_detail" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN progress_detail TEXT")
         bp_cols = {row[1] for row in conn.execute("PRAGMA table_info(brief_points)")}
         if "source" not in bp_cols:
             conn.execute(

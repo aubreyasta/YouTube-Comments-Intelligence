@@ -129,12 +129,13 @@ type RunSnapshot = {
   error: string | null;
   skipPause: boolean;
   totalComments: number | null;
+  progressDetail: string | null;
   briefPoints: BriefPoint[];
   artifacts: Artifact[];
 };
 ```
 
-`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
+`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay. `progressDetail` is `null` until `classify` starts, then holds the latest `classify` event `detail` (see [`GET /runs/{id}/events`](#get-runsidevents)), so a reopened run repaints its labelling progress and Theme count.
 
 ### Artifact
 
@@ -505,9 +506,9 @@ Stages:
 | Stage | `detail` | Meaning |
 |---|---|---|
 | `collect` | `total=N` | Comments in the analysis base. |
-| `classify` | `N themes` | Themes discovered. |
-| `classify` | `labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
-| `classify` | `other_share=X.Y` | Percent left in `Other`. |
+| `classify` | `themes=K;labelled=0;total=M` | Themes discovered; classification starts. |
+| `classify` | `themes=K;labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
+| `classify` | `themes=K;labelled=M;total=M;other_share=X.Y` | Classification done; percent left in `Other`. |
 
 Any other `detail` is prose and carries no counts.
 

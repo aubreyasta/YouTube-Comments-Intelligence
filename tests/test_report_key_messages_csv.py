@@ -170,10 +170,53 @@ def test_key_messages_csv_empty_input_still_has_headers():
     print("  ok  empty input still writes key-messages.csv headers")
 
 
+def test_report_carries_sentiment_and_key_message_split():
+    """Issue #26: report.pdf must carry overall Sentiment and the per-Key
+    Message positive/negative split the results screen shows. The prompt
+    gets the split numbers; render() replaces all three chart tokens."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    df = pd.DataFrame([
+        {"group": "G1", "pt__speed": True, "sentiment": "positive",
+         "theme": "Price", "emotion": "joy", "likes": 1, "comment": "a"},
+        {"group": "G1", "pt__speed": True, "sentiment": "negative",
+         "theme": "Price", "emotion": "anger", "likes": 2, "comment": "b"},
+        {"group": "G1", "pt__speed": True, "sentiment": "positive",
+         "theme": "Other", "emotion": "joy", "likes": 3, "comment": "c"},
+        {"group": "G1", "pt__speed": False, "sentiment": "neutral",
+         "theme": "Other", "emotion": "other_neutral", "likes": 4, "comment": "d"},
+    ])
+    transfer = pd.DataFrame([{"group": "G1", "point": "Speed",
+                              "echoed_pct": 75.0, "n": 3}])
+    affect = {k: {"table": pd.DataFrame(), "caveat": ""}
+              for k in ("emotion", "sentiment")}
+    cfg = SimpleNamespace(REPORT_LANGUAGE="English")
+
+    with patch.object(report.llm, "ask", side_effect=lambda prompt, *a, **k: prompt):
+        prompt = report.write("brief", EMPTY_TABLE, transfer, affect, df, cfg)
+    assert "positive_percent" in prompt and "66.7" in prompt and "33.3" in prompt, prompt
+    assert "[[CHART:sentiment]]" in prompt
+    assert "| Positive / negative |" in prompt
+
+    markdown = "# T\n\n[[CHART:transfer]]\n\n[[CHART:sentiment]]\n\n[[CHART:themes]]\n"
+    with tempfile.TemporaryDirectory() as out_dir, \
+            patch.object(report, "_render_pdf", return_value=None):
+        report.render(markdown, out_dir, cfg, debug_dir=out_dir,
+                      _df=df, _transfer=transfer)
+        with open(os.path.join(out_dir, "report.html"), encoding="utf-8") as fh:
+            html = fh.read()
+    assert "[[CHART:" not in html, html
+    assert "G1 - Speed (67% positive, 33% negative)" in html, html
+    assert "Overall Sentiment" in html and "50.0%" in html, html
+    print("  ok  report prompt and charts carry Sentiment and the split")
+
+
 if __name__ == "__main__":
     tests = [
         test_key_messages_csv_rows_and_math,
         test_key_messages_csv_empty_input_still_has_headers,
+        test_report_carries_sentiment_and_key_message_split,
     ]
     failed = 0
     for t in tests:

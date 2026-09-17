@@ -442,10 +442,13 @@ def ask_json(prompt: str, cfg: PipelineConfig, *, schema: dict,
 
 def classify_batch(prompt: str, expected_indices: list[int], theme_names: list[str],
                    point_labels: list[str], cfg: PipelineConfig) -> list[dict]:
+    # One attempt: at temperature 0 a re-sent prompt returns the same
+    # rejection. analyze.classify() recovers by splitting the batch instead.
     result = ask_json(
         prompt, cfg, schema=classification_schema(theme_names, point_labels),
         validation=lambda value: validate_classification(
-            value, expected_indices, theme_names, point_labels))
+            value, expected_indices, theme_names, point_labels),
+        retries=1)
     return result  # type: ignore[return-value]
 
 
