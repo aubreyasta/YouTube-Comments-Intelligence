@@ -211,29 +211,31 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
     themes_text = "\n".join(
         f"- {t['name']}: {t['definition']}" for t in themes)
 
-    batches = []
-    for vid, group_df in df.groupby("video_id", sort=False):
+    def build_prompt(vid, chunk_idx):
         vid_points = points_by_video.get(vid, [])
-        point_labels = [p["label"] for p in vid_points]
         points_text = "\n".join(
             f"- {p['label']}: {p['description']}" for p in vid_points
         ) if vid_points else "(none)"
+        comments_text = "\n".join(
+            f"{i}: {str(df.at[i, 'comment'])[:300]}" for i in chunk_idx)
+        return CLASSIFY_PROMPT.format(
+            themes=themes_text, points=points_text,
+            comments=comments_text,
+            theme_names=", ".join(
+                f'"{n}"' for n in theme_names + ["Other"]),
+            point_labels=", ".join(
+                f'"{p["label"]}"' for p in vid_points) or "(none)",
+        )
+
+    batches = []
+    for vid, group_df in df.groupby("video_id", sort=False):
         indices = group_df.index.tolist()
         start = 0
         while start < len(indices):
             end = min(start + batch_size, len(indices))
             while True:
                 chunk_idx = indices[start:end]
-                comments_text = "\n".join(
-                    f"{i}: {str(df.at[i, 'comment'])[:300]}" for i in chunk_idx)
-                prompt = CLASSIFY_PROMPT.format(
-                    themes=themes_text, points=points_text,
-                    comments=comments_text,
-                    theme_names=", ".join(
-                        f'"{n}"' for n in theme_names + ["Other"]),
-                    point_labels=", ".join(
-                        f'"{label}"' for label in point_labels) or "(none)",
-                )
+                prompt = build_prompt(vid, chunk_idx)
                 if len(prompt) <= 80000 or len(chunk_idx) == 1:
                     break
                 end = start + max(1, len(chunk_idx) // 2)
@@ -241,6 +243,45 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
                 raise ValueError("A single comment classification prompt exceeds 80000 characters")
             batches.append((vid, group_df.index, chunk_idx, prompt))
             start = end
+
+    def label_batch(vid, chunk_idx, prompt, point_labels):
+        """Labels for chunk_idx, validated but not yet applied.
+
+        The model runs at temperature 0, so re-sending a rejected prompt
+        returns the same rejection. A different prompt can succeed: split
+        the batch in half and label each half. A single comment that still
+        fails raises, and nothing from the parent batch has been applied."""
+        try:
+            results = llm.classify_batch(
+                prompt, chunk_idx, theme_names, point_labels, cfg)
+            # llm.classify_batch already enforces exact index coverage, theme
+            # membership, and Key Message subset via validate_classification
+            # before it returns. These checks stay because tests replace
+            # llm.classify_batch wholesale (bypassing that validation), and
+            # analyze.classify() must not trust unvalidated input from any
+            # caller that stubs it.
+            expected = set(chunk_idx)
+            returned = [row.get("index") for row in results]
+            if len(returned) != len(expected) or set(returned) != expected:
+                raise ValueError("Classification batch did not return every index exactly once")
+            if any(row.get("theme") not in theme_names + ["Other"]
+                   or not isinstance(row.get("echoed"), list)
+                   or not set(row["echoed"]).issubset(point_labels)
+                   or row.get("sentiment") not in llm.SENTIMENT_LABELS
+                   or row.get("emotion") not in llm.EMOTION_LABELS
+                   for row in results):
+                raise ValueError("Classification batch returned invalid labels")
+            return results
+        except (llm.LMStudioResponseError, ValueError) as exc:
+            if len(chunk_idx) == 1:
+                raise
+            half = len(chunk_idx) // 2
+            print(f"    ! batch of {len(chunk_idx)} rejected ({exc}); "
+                  f"retrying as {half} + {len(chunk_idx) - half}")
+            return [row
+                    for part in (chunk_idx[:half], chunk_idx[half:])
+                    for row in label_batch(vid, part, build_prompt(vid, part),
+                                           point_labels)]
 
     total_batches = len(batches)
     completed_batches = 0
@@ -262,31 +303,10 @@ def classify(df, themes, points, cfg: "PipelineConfig" = None,
                 df.loc[group_index, col] = False
             activated_videos.add(vid)
 
-        results = llm.classify_batch(
-            prompt, chunk_idx, theme_names, point_labels, cfg)
+        results = label_batch(vid, chunk_idx, prompt, point_labels)
 
-        # llm.classify_batch already enforces exact index coverage, theme
-        # membership, and Key Message subset via validate_classification
-        # before it returns - these checks are not needed against the real
-        # boundary. They stay here because tests replace llm.classify_batch
-        # wholesale (bypassing that validation) to exercise the atomic-apply
-        # contract of this function specifically; removing them would make
-        # analyze.classify() trust unvalidated input from any future caller
-        # that stubs classify_batch, which is a correctness regression, not
-        # just a test break.
-        expected = set(chunk_idx)
-        returned = [row.get("index") for row in results]
-        if len(returned) != len(expected) or set(returned) != expected:
-            raise ValueError("Classification batch did not return every index exactly once")
-        if any(row.get("theme") not in theme_names + ["Other"]
-               or not isinstance(row.get("echoed"), list)
-               or not set(row["echoed"]).issubset(point_labels)
-               or row.get("sentiment") not in llm.SENTIMENT_LABELS
-               or row.get("emotion") not in llm.EMOTION_LABELS
-               for row in results):
-            raise ValueError("Classification batch returned invalid labels")
-
-        # Apply only after the complete batch has passed every check.
+        # Apply only after the complete batch, every split half included,
+        # has passed every check.
         for row in results:
             idx = row["index"]
             df.at[idx, "theme"] = row["theme"]

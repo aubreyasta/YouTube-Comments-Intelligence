@@ -111,6 +111,35 @@ def test_omitted_index_fails_atomically():
         llm.classify_batch = original
 
 
+def test_short_batch_recovers_by_splitting():
+    """Issue #19: the model dropped the last index of a full batch, and the
+    identical retry could only repeat it. A deterministic stub that drops
+    the last row of any batch over one comment must still label everything,
+    atomically, reporting one progress tick per original batch."""
+    original = llm.classify_batch
+    calls = []
+
+    def short_batch(prompt, expected_indices, theme_names, point_labels, cfg):
+        calls.append(list(expected_indices))
+        rows = canned_batch(prompt, expected_indices, theme_names, point_labels, cfg)
+        if len(rows) > 1:
+            raise llm.LMStudioResponseError(
+                "classification indices must exactly cover the requested indices once")
+        return rows
+
+    llm.classify_batch = short_batch
+    progress = []
+    try:
+        out, _ = analyze.classify(DF, THEMES, POINTS, make_cfg(2),
+                                  on_progress=lambda c, t, n: progress.append((c, t, n)))
+    finally:
+        llm.classify_batch = original
+    assert out["theme"].tolist() == ["Quality", "Price", "Quality", "Price"]
+    assert out.loc[1, "pt__value_for_money"] is True
+    assert calls == [[0, 1], [0], [1], [2, 3], [2], [3]], calls
+    assert progress == [(1, 2, 2), (2, 2, 4)], progress
+
+
 def test_progress_reports_completed_and_total_batches():
     original = llm.classify_batch
     llm.classify_batch = canned_batch
