@@ -117,11 +117,27 @@ def test_progress_reports_completed_and_total_batches():
     progress = []
     try:
         analyze.classify(DF, THEMES, POINTS, make_cfg(1),
-                         on_progress=lambda completed, total:
-                         progress.append((completed, total)))
+                         on_progress=lambda completed, total, labelled:
+                         progress.append((completed, total, labelled)))
     finally:
         llm.classify_batch = original
-    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)], progress
+    assert progress == [(1, 4, 1), (2, 4, 2), (3, 4, 3), (4, 4, 4)], progress
+
+
+def test_progress_labelled_counts_comments_not_batches():
+    """Batch size 3, but batches never span videos, so each of the two
+    videos yields one 2-comment batch. completed * batch_size would claim
+    3 comments labelled after the first; the real count is 2."""
+    original = llm.classify_batch
+    llm.classify_batch = canned_batch
+    progress = []
+    try:
+        analyze.classify(DF, THEMES, POINTS, make_cfg(3),
+                         on_progress=lambda completed, total, labelled:
+                         progress.append((completed, total, labelled)))
+    finally:
+        llm.classify_batch = original
+    assert progress == [(1, 2, 2), (2, 2, 4)], progress
 
 
 def test_summarise_percentages():

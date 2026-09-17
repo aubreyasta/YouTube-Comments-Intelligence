@@ -25,8 +25,8 @@ Public API (for server.py / Wave 3):
 PROGRESS_SHAPE:
   {
     "run_id":  str,           # the run UUID
-    "stage":   str,           # collect | brief | brief_pause | classify |
-                              # emotion | report | complete | error
+    "stage":   str,           # collect | brief | brief_pause | themes |
+                              # classify | emotion | report | complete | error
     "message": str,           # human-readable status line
     "pct":     int,           # 0-100
     "detail":  str | None,    # extra context (error message, counts, etc.)
@@ -185,6 +185,18 @@ def _set_run_stage(run_id: str, stage: str) -> None:
         conn.close()
 
 
+def _set_run_total(run_id: str, total: int) -> None:
+    """Persist the analysis-base comment count once collect finishes, so
+    GET /runs/{id} can paint it after a reopen with no SSE connection to
+    replay from (see _push). Best-effort, same as _set_run_stage."""
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE runs SET total_comments = ? WHERE id = ?", (total, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _load_run(run_id: str) -> dict:
     """Return the run row as a plain dict."""
     conn = db.get_conn()
@@ -265,7 +277,8 @@ def _load_session_key_messages(session_id: str) -> list[dict]:
 
 def _replace_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> None:
     """Replace this run's brief_points with `points` (KeyMessage-shaped
-    dicts: id, label, description, included, order, edited). video_id is
+    dicts: id, label, description, included, order, edited, source; a
+    missing source is stored as 'input'). video_id is
     always NULL here - these are Session-level Key Messages, not the old
     per-video brief() points - so analyze.classify() broadcasts each one
     to every video's batch (see pipeline/analyze.py).
@@ -283,11 +296,11 @@ def _replace_brief_points(run_id: str, campaign_id: str, points: list[dict]) -> 
             conn.execute(
                 """INSERT INTO brief_points
                    (id, run_id, campaign_id, video_id, label, description,
-                    approved, edited, included, sort_order)
-                   VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?, ?)""",
+                    approved, edited, included, sort_order, source)
+                   VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?)""",
                 (pt["id"], run_id, campaign_id, pt["label"], pt.get("description", ""),
                  int(pt.get("edited", False)), int(pt.get("included", True)),
-                 pt.get("order", 0)))
+                 pt.get("order", 0), pt.get("source", "input")))
         conn.commit()
     finally:
         conn.close()
@@ -423,43 +436,78 @@ def _row_source_order(base_df) -> "pd.Series":
     return pd.Series(range(len(base_df)), index=base_df.index)
 
 
+def _clean_emotion(value) -> str | None:
+    """Trimmed emotion label, or None when null/empty. Unlike sentiment this
+    is not matched against a fixed set: the emotion metrics are counted from
+    whatever labels the column holds, and the evidence must agree with them."""
+    text = _clean_text(value)
+    if text is None:
+        return None
+    text = text.strip()
+    return text or None
+
+
 def _make_metric_comments(sub, order: "pd.Series") -> list[dict]:
     """
-    Build MetricComment dicts {text, likes, videoId, sentiment} from sub (a
-    base_df slice), excluding rows whose comment text is null, empty, or
-    whitespace-only. Sort by likes desc, then text length desc, then
-    original source order (via `order`, indexed to match base_df). Cap 8.
+    Build MetricComment dicts {text, likes, videoId, sentiment, emotion}
+    from sub (a base_df slice), excluding rows whose comment text is null,
+    empty, or whitespace-only. Sort by likes desc, then text length desc,
+    then original source order (via `order`, indexed to match base_df). Cap 8.
+    """
+    ranked = _rank_evidence(sub, order)
+    if ranked is None:
+        return []
+    return _as_comments(ranked.head(8))
+
+
+def _rank_evidence(sub, order: "pd.Series"):
+    """
+    Shared preamble for both evidence selectors: drop rows with no usable
+    comment text, then rank by likes desc, text length desc, original
+    source order. Returns the ranked frame, or None when nothing survives.
     """
     if len(sub) == 0:
-        return []
+        return None
 
     texts = sub["comment"].apply(_clean_text)
     keep_mask = texts.notna()
     sub = sub[keep_mask]
     texts = texts[keep_mask]
     if len(sub) == 0:
-        return []
+        return None
 
-    likes = sub["likes"].apply(_clean_likes) if "likes" in sub.columns else pd.Series(
-        0, index=sub.index)
-    video_ids = (sub["video_id"].apply(_clean_video_id) if "video_id" in sub.columns
-                 else pd.Series("", index=sub.index))
-    sentiments = (sub["sentiment"].apply(_clean_sentiment) if "sentiment" in sub.columns
-                  else pd.Series(None, index=sub.index))
-    tlens = texts.str.len()
-    src_order = order.loc[sub.index]
+    def _col(name, cleaner, default):
+        return (sub[name].apply(cleaner) if name in sub.columns
+                else pd.Series(default, index=sub.index))
 
     frame = pd.DataFrame({
-        "_text": texts, "_likes": likes, "_video": video_ids,
-        "_sentiment": sentiments, "_tlen": tlens, "_order": src_order,
+        "_text":      texts,
+        "_likes":     _col("likes", _clean_likes, 0),
+        "_video":     _col("video_id", _clean_video_id, ""),
+        "_sentiment": _col("sentiment", _clean_sentiment, None),
+        "_emotion":   _col("emotion", _clean_emotion, None),
+        "_tlen":      texts.str.len(),
+        "_order":     order.loc[sub.index],
     })
-    ranked = frame.sort_values(
-        ["_likes", "_tlen", "_order"], ascending=[False, False, True]).head(8)
+    return frame.sort_values(
+        ["_likes", "_tlen", "_order"], ascending=[False, False, True])
 
+
+def _str_or_none(value) -> str | None:
+    """The cleaners above return a str or None, but applying one to a
+    str-dtype column round-trips None back to NaN, and JSON has no NaN.
+    Re-assert the contract at the point the dict is built."""
+    return value if isinstance(value, str) else None
+
+
+def _as_comments(ranked) -> list[dict]:
+    """Ranked frame rows -> MetricComment dicts, in frame order."""
     return [
         {
             "text": row["_text"], "likes": int(row["_likes"]),
-            "videoId": row["_video"], "sentiment": row["_sentiment"],
+            "videoId": row["_video"],
+            "sentiment": _str_or_none(row["_sentiment"]),
+            "emotion": _str_or_none(row["_emotion"]),
         }
         for _, row in ranked.iterrows()
     ]
@@ -474,35 +522,12 @@ def _select_sentiment_evidence(sub, order: "pd.Series") -> list[dict]:
     recognized rows (including neutral) by ordinary order. No duplicate
     source row. Output: selected positive, selected negative, backfill.
     """
-    if len(sub) == 0:
+    ranked = _rank_evidence(sub, order)
+    if ranked is None:
         return []
-
-    texts = sub["comment"].apply(_clean_text)
-    keep_mask = texts.notna()
-    sub = sub[keep_mask]
-    texts = texts[keep_mask]
-    if len(sub) == 0:
+    ranked = ranked[ranked["_sentiment"].notna()]
+    if len(ranked) == 0:
         return []
-
-    likes = sub["likes"].apply(_clean_likes) if "likes" in sub.columns else pd.Series(
-        0, index=sub.index)
-    video_ids = (sub["video_id"].apply(_clean_video_id) if "video_id" in sub.columns
-                 else pd.Series("", index=sub.index))
-    sentiments = (sub["sentiment"].apply(_clean_sentiment) if "sentiment" in sub.columns
-                  else pd.Series(None, index=sub.index))
-    tlens = texts.str.len()
-    src_order = order.loc[sub.index]
-
-    frame = pd.DataFrame({
-        "_text": texts, "_likes": likes, "_video": video_ids,
-        "_sentiment": sentiments, "_tlen": tlens, "_order": src_order,
-    })
-    frame = frame[frame["_sentiment"].notna()]
-    if len(frame) == 0:
-        return []
-
-    ranked = frame.sort_values(
-        ["_likes", "_tlen", "_order"], ascending=[False, False, True])
 
     positive = ranked[ranked["_sentiment"] == "positive"].head(4)
     negative = ranked[ranked["_sentiment"] == "negative"].head(4)
@@ -512,24 +537,18 @@ def _select_sentiment_evidence(sub, order: "pd.Series") -> list[dict]:
     slots_left = 8 - len(positive) - len(negative)
     backfill = remaining.head(max(slots_left, 0))
 
-    ordered = pd.concat([positive, negative, backfill])
-
-    return [
-        {
-            "text": row["_text"], "likes": int(row["_likes"]),
-            "videoId": row["_video"], "sentiment": row["_sentiment"],
-        }
-        for _, row in ordered.iterrows()
-    ]
+    return _as_comments(pd.concat([positive, negative, backfill]))
 
 
 def _build_evidence(base_df, key_message_metrics: list[dict],
                     theme_metrics: list[dict], emotion_metrics: list[dict],
-                    sentiment_metrics: list[dict], applicable_masks: dict) -> list[dict]:
+                    overall_sentiment_metrics: list[dict],
+                    key_message_sentiment_metrics: list[dict],
+                    applicable_masks: dict) -> list[dict]:
     """
     Return evidence_json: a list of EvidenceMetric dicts {metricId, comments},
-    in order: Key Messages, Themes, Emotions, Key Message Sentiment. Every
-    metric group is emitted even if empty.
+    in order: Key Messages, Themes, Emotions, Sentiment, Key Message
+    Sentiment. Every metric group is emitted even if empty.
 
     applicable_masks maps a Key Message metricId to the boolean Series of
     base_df rows where that message applies AND was mentioned (exact True).
@@ -557,21 +576,24 @@ def _build_evidence(base_df, key_message_metrics: list[dict],
         groups.append({"metricId": m["metricId"],
                        "comments": _make_metric_comments(sub, order)})
 
-    # Emotions: trimmed casefold match.
-    for m in emotion_metrics:
-        target = m["label"].strip().casefold()
-        if "emotion" in base_df.columns:
-            sub = base_df[base_df["emotion"].apply(
-                lambda v: (_clean_text(v) or "").strip().casefold() == target
-                if _clean_text(v) is not None else False)]
-        else:
-            sub = base_df.iloc[0:0]
-        groups.append({"metricId": m["metricId"],
-                       "comments": _make_metric_comments(sub, order)})
+    # Emotions, then overall Sentiment: trimmed casefold match on the
+    # label column each metric family was counted from.
+    for metrics, col_name in ((emotion_metrics, "emotion"),
+                              (overall_sentiment_metrics, "sentiment")):
+        for m in metrics:
+            target = m["label"].strip().casefold()
+            if col_name in base_df.columns:
+                sub = base_df[base_df[col_name].apply(
+                    lambda v: (_clean_text(v) or "").strip().casefold() == target
+                    if _clean_text(v) is not None else False)]
+            else:
+                sub = base_df.iloc[0:0]
+            groups.append({"metricId": m["metricId"],
+                           "comments": _make_metric_comments(sub, order)})
 
     # Key Message Sentiment: reuses the same applicable+mentioned mask,
     # selected with balanced positive/negative + neutral backfill.
-    for m in sentiment_metrics:
+    for m in key_message_sentiment_metrics:
         mask = applicable_masks.get(m["_source_metric_id"])
         sub = base_df[mask] if mask is not None else base_df.iloc[0:0]
         groups.append({"metricId": m["metricId"],
@@ -908,22 +930,27 @@ def _build_report_json(base_df, transfer_table, key_messages: list[dict],
             "percent":  _one_decimal(count, total),
         })
 
-    emotion_metrics = []
-    emotion_used_slugs: dict[str, int] = {}
-    for label, count in _merge_labels("emotion"):
-        base_slug = _slugify(label)
-        if base_slug in emotion_used_slugs:
-            emotion_used_slugs[base_slug] += 1
-            metric_id = f"m-em-{base_slug}-{emotion_used_slugs[base_slug]}"
-        else:
-            emotion_used_slugs[base_slug] = 1
-            metric_id = f"m-em-{base_slug}"
-        emotion_metrics.append({
-            "metricId": metric_id,
-            "label":    label,
-            "count":    count,
-            "percent":  _one_decimal(count, total),
-        })
+    def _label_metrics(col_name: str, prefix: str) -> list[dict]:
+        """Slug-keyed metrics for a free-text label column. Collisions get a
+        numeric suffix so two spellings never share a metricId."""
+        used_slugs: dict[str, int] = {}
+        metrics = []
+        for label, count in _merge_labels(col_name):
+            base_slug = _slugify(label)
+            used_slugs[base_slug] = used_slugs.get(base_slug, 0) + 1
+            suffix = "" if used_slugs[base_slug] == 1 else f"-{used_slugs[base_slug]}"
+            metrics.append({
+                "metricId": f"{prefix}-{base_slug}{suffix}",
+                "label":    label,
+                "count":    count,
+                "percent":  _one_decimal(count, total),
+            })
+        return metrics
+
+    emotion_metrics = _label_metrics("emotion", "m-em")
+    # Overall Sentiment, counted over the same denominator as emotions and
+    # themes (every row in the analysis base), matching sentiment.csv.
+    sentiment_metrics = _label_metrics("sentiment", "m-se")
 
     # --- key message sentiment -------------------------------------------------
     key_message_sentiment = []
@@ -967,13 +994,14 @@ def _build_report_json(base_df, transfer_table, key_messages: list[dict],
 
     evidence = _build_evidence(
         base_df, key_message_metrics, theme_metrics, emotion_metrics,
-        sentiment_metrics_for_evidence, applicable_masks)
+        sentiment_metrics, sentiment_metrics_for_evidence, applicable_masks)
 
     return {
         "overallTransfer":     overall_transfer,
         "keyMessages":         key_message_metrics,
         "themes":              theme_metrics,
         "emotions":            emotion_metrics,
+        "sentiment":           sentiment_metrics,
         "keyMessageSentiment": key_message_sentiment,
         "evidence":            evidence,
     }
@@ -1062,9 +1090,10 @@ def _execute(run_id: str) -> None:
         comments_df, meta_df = collect.fetch(cfg)
         comments_df = collect.clean(comments_df, cfg)
         base_df = comments_df[comments_df["in_base"]].reset_index(drop=True)
+        _set_run_total(run_id, len(base_df))
         _push(run_id, "collect",
               f"Collected {len(base_df)} comments in analysis base", 20,
-              detail=f"total fetched: {len(comments_df)}")
+              detail=f"total={len(base_df)}")
 
         # --- 6. Brief: reconcile the snapshot against transcripts -----------
         # brief.reconcile() keeps edited entries and stable ids verbatim,
@@ -1126,16 +1155,17 @@ def _execute(run_id: str) -> None:
                 "All brief points were excluded. At least one must be included.")
 
         # --- 9. Classify ----------------------------------------------------
-        _push(run_id, "classify", "Discovering themes", 42)
+        _push(run_id, "themes", "Discovering themes", 42)
         themes = analyze.build(base_df, summary_str, cfg)
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
               detail=f"{len(themes)} themes")
-        def classify_progress(completed, total):
+        def classify_progress(completed, total, labelled):
             pct = 50 + int(completed / max(total, 1) * 9)
             _push(run_id, "classify",
                   f"Classified batch {completed} of {total}", pct,
-                  detail=f"completed_batches={completed};total_batches={total}")
+                  detail=(f"labelled={labelled};total={len(base_df)};"
+                          f"batch={completed};batches={total}"))
 
         base_df, columns = analyze.classify(
             base_df, themes, classifier_points, cfg,
@@ -1170,6 +1200,17 @@ def _execute(run_id: str) -> None:
         # --- 12. Build report.json ------------------------------------------
         report_data = _build_report_json(
             base_df, transfer_table, db_points, columns)
+
+        # The written read for the results screen. _build_report_json stays
+        # counting-only and model-free, so the prose is merged in here rather
+        # than built inside it. _build_prose never raises: a failed model call
+        # falls back to deterministic prose instead of failing the run.
+        _push(run_id, "report", "Writing the read", 90)
+        report_data.update(_build_prose(
+            grounded, transfer_table, base_df, affect_result,
+            [{"label": m["label"], "value": m["percent"]}
+             for m in report_data["themes"]],
+            cfg))
 
         report_json_path = os.path.join(out_dir, "report.json")
         with open(report_json_path, "w", encoding="utf-8") as fh:

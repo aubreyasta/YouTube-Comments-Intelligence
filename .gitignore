@@ -11,6 +11,8 @@ PLAN.md
 DESIGN.md
 PRODUCT.md
 CLAUDE.md
+CODE-REVIEW-*.md
+.claude/
 
 # ── Pipeline outputs ──────────────────────────────────────────────────────────
 output/

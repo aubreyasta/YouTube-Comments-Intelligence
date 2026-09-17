@@ -10,6 +10,7 @@ import binascii
 import csv
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -411,7 +412,7 @@ def _ser_campaign(row, conn) -> dict:
     }
 
 
-_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
+_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "themes", "classify",
                "emotion", "report", "complete", "error"}
 
 
@@ -466,21 +467,23 @@ def _ser_run(row, conn) -> dict:
         "message": "",
         "error": row["error"],
         "skipPause": bool(row["skip_pause"]),
+        "totalComments": row["total_comments"],
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
         "artifacts": [_ser_artifact(a) for a in public_arts],
     }
 
 
 def _ser_brief_point(row) -> dict:
-    """BriefPoint shape (== KeyMessage, docs/api-reference.md "Key Message"): only
-    these five fields. `approved`/`edited`/`runId`/`campaignId`/`videoId`
-    stay in the DB row for internal bookkeeping but never cross the wire."""
+    """BriefPoint shape (KeyMessage plus `source`, docs/api-reference.md "Brief
+    point"): only these six fields. `approved`/`edited`/`runId`/`campaignId`/
+    `videoId` stay in the DB row for internal bookkeeping but never cross the wire."""
     return {
         "id": row["id"],
         "label": row["label"],
         "description": row["description"],
         "included": bool(row["included"]),
         "order": row["sort_order"],
+        "source": row["source"],
     }
 
 
@@ -530,6 +533,7 @@ def _ser_artifact(row) -> dict:
         "filename": filename,
         "contentType": content_type,
         "downloadUrl": f"/api/runs/{row['run_id']}/artifacts/{row['id']}",
+        "size": _file_size(row["file_path"]),
     }
 
 
@@ -546,6 +550,9 @@ class CampaignBody(BaseModel):
 class VideoBody(BaseModel):
     url: str
     kind: str = "auto"
+
+class VideoKindBody(BaseModel):
+    kind: str
 
 class ArticleBody(BaseModel):
     url: str
@@ -577,11 +584,16 @@ class StartRunBody(BaseModel):
 # /api/sessions
 # ---------------------------------------------------------------------------
 
-@app.post("/api/sessions", status_code=201)
-def create_session(body: SessionBody):
-    name = (body.name or "").strip()
+def _session_name(raw) -> str:
+    name = (raw or "").strip()
     if not name:
         _422("Session name is required.", "name")
+    return name
+
+
+@app.post("/api/sessions", status_code=201)
+def create_session(body: SessionBody):
+    name = _session_name(body.name)
     sid = str(uuid.uuid4())
     now = _now()
     conn = db.get_conn()
@@ -613,26 +625,51 @@ def list_sessions():
         conn.close()
 
 
+def _ser_session_detail(session_id: str, conn) -> dict:
+    """GET /sessions/{id} shape: Session plus nested campaigns and runs."""
+    row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if row is None:
+        _404("Session not found.")
+    s = _ser_session(row, conn)
+    # Nested campaigns (with their nested videos + assets)
+    camps = conn.execute(
+        "SELECT * FROM campaigns WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    s["campaigns"] = [_ser_campaign(c, conn) for c in camps]
+    # Run summaries
+    runs = conn.execute(
+        "SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC, rowid DESC",
+        (session_id,)
+    ).fetchall()
+    s["runs"] = [_ser_run(r, conn) for r in runs]
+    return s
+
+
 @app.get("/api/sessions/{session_id}")
 def get_session(session_id: str):
     conn = db.get_conn()
     try:
-        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if row is None:
+        return _ser_session_detail(session_id, conn)
+    finally:
+        conn.close()
+
+
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, body: SessionBody):
+    name = _session_name(body.name)
+    conn = db.get_conn()
+    try:
+        # One Session holds one campaign, so both names move together in
+        # one transaction and can never diverge.
+        cur = conn.execute(
+            "UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
+            (name, _now(), session_id)
+        )
+        if cur.rowcount == 0:
             _404("Session not found.")
-        s = _ser_session(row, conn)
-        # Nested campaigns (with their nested videos + assets)
-        camps = conn.execute(
-            "SELECT * FROM campaigns WHERE session_id = ?", (session_id,)
-        ).fetchall()
-        s["campaigns"] = [_ser_campaign(c, conn) for c in camps]
-        # Run summaries
-        runs = conn.execute(
-            "SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC, rowid DESC",
-            (session_id,)
-        ).fetchall()
-        s["runs"] = [_ser_run(r, conn) for r in runs]
-        return s
+        conn.execute("UPDATE campaigns SET name = ? WHERE session_id = ?", (name, session_id))
+        conn.commit()
+        return _ser_session_detail(session_id, conn)
     finally:
         conn.close()
 
@@ -1071,6 +1108,31 @@ def add_video(campaign_id: str, body: VideoBody):
         conn.close()
 
 
+@app.patch("/api/videos/{video_id}")
+def update_video_kind(video_id: str, body: VideoKindBody):
+    # No running-run guard: adapter reads kind once at run start, so a
+    # change mid-run only affects the next run.
+    conn = db.get_conn()
+    try:
+        v = conn.execute(
+            "SELECT v.id, c.session_id FROM videos v JOIN campaigns c ON c.id = v.campaign_id "
+            "WHERE v.id = ?", (video_id,)
+        ).fetchone()
+        if v is None:
+            _404("Video not found.")
+        kind = body.kind.strip()
+        if kind not in _ALLOWED_KINDS:
+            _422(f"kind must be one of: {', '.join(sorted(_ALLOWED_KINDS))}.", "kind")
+        conn.execute("UPDATE videos SET kind = ? WHERE id = ?", (kind, video_id))
+        conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?", (_now(), v["session_id"]))
+        conn.commit()
+        row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+        return _ser_video(row)
+    finally:
+        conn.close()
+
+
 @app.delete("/api/videos/{video_id}", status_code=204)
 def remove_video(video_id: str):
     conn = db.get_conn()
@@ -1351,9 +1413,10 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         messages = body.messages
 
         existing = conn.execute(
-            "SELECT id, campaign_id FROM brief_points WHERE run_id = ?", (run_id,)
+            "SELECT id, campaign_id, source FROM brief_points WHERE run_id = ?", (run_id,)
         ).fetchall()
-        existing_ids = {r["id"] for r in existing}
+        existing_sources = {r["id"]: r["source"] for r in existing}
+        existing_ids = set(existing_sources)
         if existing:
             campaign_id = existing[0]["campaign_id"]
         else:
@@ -1391,17 +1454,20 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
 
         # Atomic full replace: delete then reinsert in submitted order.
         # A row omitted from `messages` is simply not reinserted, so it
-        # is deleted along with everything else.
+        # is deleted along with everything else. A kept row keeps its
+        # source (an edit at review does not rewrite where it came from);
+        # an id:null row is the user's own, so 'input'.
         conn.execute("DELETE FROM brief_points WHERE run_id = ?", (run_id,))
         for sort_order, m in enumerate(messages):
             row_id = m.id if m.id is not None else str(uuid.uuid4())
+            source = existing_sources.get(m.id, "input")
             conn.execute(
                 """INSERT INTO brief_points
                    (id, run_id, campaign_id, video_id, label, description,
-                    approved, edited, included, sort_order)
-                   VALUES (?, ?, ?, NULL, ?, ?, 0, 1, ?, ?)""",
+                    approved, edited, included, sort_order, source)
+                   VALUES (?, ?, ?, NULL, ?, ?, 0, 1, ?, ?, ?)""",
                 (row_id, run_id, campaign_id, m.label.strip(),
-                 (m.description or "").strip(), int(m.included), sort_order)
+                 (m.description or "").strip(), int(m.included), sort_order, source)
             )
         conn.commit()
 
@@ -1606,6 +1672,8 @@ def download_artifact(run_id: str, artifact_id: str):
 # ---------------------------------------------------------------------------
 
 _APP_DIR = Path(__file__).parent / "app"
+# Windows' mimetypes registry lacks .woff2, so StaticFiles would send octet-stream.
+mimetypes.add_type("font/woff2", ".woff2")
 if _APP_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_APP_DIR), html=True), name="static")
 
@@ -1616,4 +1684,4 @@ if _APP_DIR.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

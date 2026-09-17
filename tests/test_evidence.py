@@ -107,7 +107,7 @@ def test_top_level_keys_exact():
     df = _make_df()
     result = _build_report_json(df, TRANSFER_TABLE, KEY_MESSAGES, COLUMNS)
     expected = {
-        "overallTransfer", "keyMessages", "themes", "emotions",
+        "overallTransfer", "keyMessages", "themes", "emotions", "sentiment",
         "keyMessageSentiment", "evidence",
     }
     assert set(result.keys()) == expected, (
@@ -392,6 +392,62 @@ def test_emotions():
     print(f"  ok  emotions: counts/order/ids {labels_in_order}")
 
 
+def test_overall_sentiment():
+    """Overall Sentiment mirrors emotions: counted over every base row, so
+    the percentages match sentiment.csv rather than the recognized-only
+    denominator keyMessageSentiment uses."""
+    df = _make_df()
+    result = _build_report_json(df, TRANSFER_TABLE, KEY_MESSAGES, COLUMNS)
+    sentiment = result["sentiment"]
+
+    # positive for i<10, negative for i>=10 -> tie -> casefold: negative < positive.
+    labels_in_order = [s["label"] for s in sentiment]
+    assert labels_in_order == ["negative", "positive"], labels_in_order
+    ids_in_order = [s["metricId"] for s in sentiment]
+    assert ids_in_order == ["m-se-negative", "m-se-positive"], ids_in_order
+    for s in sentiment:
+        assert s["count"] == 10, s
+        assert s["percent"] == 50.0, s  # over all 20 rows, not over 20 recognized
+
+    # Every overall Sentiment metric owns an evidence group whose comments
+    # all carry that label, so the percentage opens to what produced it.
+    by_id = {g["metricId"]: g["comments"] for g in result["evidence"]}
+    for s in sentiment:
+        comments = by_id[s["metricId"]]
+        assert comments, f"no evidence for {s['metricId']}"
+        assert all(c["sentiment"] == s["label"] for c in comments), comments
+    print(f"  ok  overall sentiment: counts/order/ids {labels_in_order}")
+
+
+def test_evidence_carries_emotion_label():
+    """Evidence comments carry the Emotion label so the drawer can build
+    its filter pills in live mode (issue #9)."""
+    df = _make_df()
+    result = _build_report_json(df, TRANSFER_TABLE, KEY_MESSAGES, COLUMNS)
+    joy = next(g for g in result["evidence"] if g["metricId"] == "m-em-joy")
+    assert joy["comments"], "expected joy evidence"
+    assert all(c["emotion"] == "joy" for c in joy["comments"]), joy["comments"]
+
+    # Present on every group, not just the emotion ones.
+    km = next(g for g in result["evidence"]
+              if g["metricId"] == "m-t-value-for-money")
+    assert all(c["emotion"] in ("joy", "neutral") for c in km["comments"]), km
+
+    # Null/whitespace labels degrade to None, never NaN: a str-dtype column
+    # turns an applied None back into NaN, which is not valid JSON.
+    df2 = _make_df()
+    df2.loc[0, "emotion"] = "   "
+    df2.loc[1, "emotion"] = None
+    df2.loc[2, "sentiment"] = None
+    result2 = _build_report_json(df2, TRANSFER_TABLE, KEY_MESSAGES, COLUMNS)
+    labels2 = [c[k] for g in result2["evidence"] for c in g["comments"]
+               for k in ("emotion", "sentiment")]
+    assert all(v is None or (isinstance(v, str) and v.strip())
+               for v in labels2), labels2
+    json.dumps(result2, allow_nan=False)  # raises on a leaked NaN
+    print("  ok  evidence carries emotion; blank label -> None, not NaN")
+
+
 def test_emotion_slug_collision_suffix():
     # Two distinct labels that slugify to the same string must get -2 onward.
     rows = []
@@ -508,6 +564,7 @@ def test_evidence_group_order_and_shape():
         [m["metricId"] for m in result["keyMessages"]] +
         [m["metricId"] for m in result["themes"]] +
         [m["metricId"] for m in result["emotions"]] +
+        [m["metricId"] for m in result["sentiment"]] +
         [m["metricId"] for m in result["keyMessageSentiment"]]
     )
     actual_ids = [g["metricId"] for g in evidence]
@@ -518,11 +575,13 @@ def test_evidence_group_order_and_shape():
         assert isinstance(g["metricId"], str)
         assert isinstance(g["comments"], list)
         for c in g["comments"]:
-            assert set(c.keys()) == {"text", "likes", "videoId", "sentiment"}, c
+            assert set(c.keys()) == {
+                "text", "likes", "videoId", "sentiment", "emotion"}, c
             assert isinstance(c["text"], str)
             assert isinstance(c["likes"], int)
             assert isinstance(c["videoId"], str)
             assert c["sentiment"] is None or isinstance(c["sentiment"], str)
+            assert c["emotion"] is None or isinstance(c["emotion"], str)
     print(f"  ok  evidence: {len(evidence)} groups, order matches, shape correct")
 
 
@@ -756,6 +815,8 @@ if __name__ == "__main__":
         test_themes,
         test_theme_case_merge_preserves_first_spelling,
         test_emotions,
+        test_overall_sentiment,
+        test_evidence_carries_emotion_label,
         test_emotion_slug_collision_suffix,
         test_slugify_punctuation_fallback,
         test_key_message_slug_collision_shared_across_mt_and_mis,

@@ -85,6 +85,24 @@ type KeyMessageDraft = {
 
 `id:null` creates a server UUID. The submitted array defines order; the server does not trust the submitted `order` value. Labels are trimmed, required, and limited to 120 characters. Descriptions are trimmed and limited to 500 characters.
 
+### Brief point
+
+A run's Key Message. Session-level Key Messages carry no `source`.
+
+```ts
+type BriefPoint = KeyMessage & {
+  source: "input" | "sharpened" | "transcript";
+};
+```
+
+| `source` | Meaning |
+|---|---|
+| `input` | Came from the Session's Key Messages (User Inputs) or was added at review. Kept as given. |
+| `sharpened` | An unedited Session Key Message whose label matched a transcript-derived point and whose description changed to the transcript-grounded one. |
+| `transcript` | Derived from transcripts alone; no Session Key Message matched it. |
+
+Rows stored before `source` existed read `input`.
+
 ### Run snapshot
 
 ```ts
@@ -93,6 +111,7 @@ type RunStage =
   | "collect"
   | "brief"
   | "brief_pause"
+  | "themes"
   | "classify"
   | "emotion"
   | "report"
@@ -109,12 +128,13 @@ type RunSnapshot = {
   message: string;
   error: string | null;
   skipPause: boolean;
-  briefPoints: KeyMessage[];
+  totalComments: number | null;
+  briefPoints: BriefPoint[];
   artifacts: Artifact[];
 };
 ```
 
-`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay.
+`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay.
 
 ### Artifact
 
@@ -125,8 +145,11 @@ type Artifact = {
   filename: string;
   contentType: string;
   downloadUrl: string;
+  size: number | null;
 };
 ```
+
+`size` is the stored file's size in bytes, or `null` when the file is missing on disk.
 
 ---
 
@@ -177,7 +200,7 @@ List Sessions newest first. Each item adds `campaignCount`.
 {
   "id": "...",
   "status": "queued | running | complete | failed",
-  "stage": "queued | collect | brief | brief_pause | classify | emotion | report | complete | error",
+  "stage": "queued | collect | brief | brief_pause | themes | classify | emotion | report | complete | error",
   "pct": 0,
   "message": "",
   "error": null
@@ -189,6 +212,20 @@ List Sessions newest first. Each item adds `campaignCount`.
 Return one Session. The response adds nested `campaigns` and `runs`. Every run uses `RunSnapshot`.
 
 Error: `404` when the Session does not exist.
+
+### `PATCH /sessions/{id}`
+
+Rename a Session.
+
+```json
+{ "name": "New name" }
+```
+
+The name is trimmed and validated like `POST /sessions`. One transaction updates the Session name, its campaign name (the two never diverge), and `updatedAt`. A running run keeps the name it started with.
+
+Response `200`: the `GET /sessions/{id}` shape.
+
+Errors: `404` Session not found; `422` empty or missing name, `field` is `name`.
 
 ---
 
@@ -286,6 +323,20 @@ Response `201`:
 ```
 
 Errors: `404` campaign not found; `422` invalid URL, duplicate URL, or invalid kind.
+
+### `PATCH /videos/{id}`
+
+Change a video's kind.
+
+```json
+{ "kind": "review" }
+```
+
+`kind` is `auto`, `brand_ad`, `review`, or `explainer`. The route also updates the owning Session's `updatedAt`. It has no running-run guard: a run reads kinds once at start, so a change during a run applies to the next run.
+
+Response `200`: video object, as returned by `POST /campaigns/{id}/videos`.
+
+Errors: `404` video not found; `422` invalid kind, `field` is `kind`.
 
 ### `DELETE /videos/{id}`
 
@@ -409,12 +460,12 @@ Request:
 }
 ```
 
-`id:null` creates a server UUID. Omitted existing rows are deleted. Submitted array order wins. An empty or all-excluded list can be saved; proceeding still requires one included row.
+`id:null` creates a server UUID. Omitted existing rows are deleted. Submitted array order wins. An empty or all-excluded list can be saved; proceeding still requires one included row. The request carries no `source`: a kept row keeps its stored `source` by id, and an `id:null` row gets `input`.
 
 Response `200`:
 
 ```json
-{ "messages": [ { "id": "...", "label": "...", "description": "...", "included": true, "order": 0 } ] }
+{ "messages": [ { "id": "...", "label": "...", "description": "...", "included": true, "order": 0, "source": "input" } ] }
 ```
 
 Errors: `404` run or campaign not found; `409` review is not open or already continued; `422` invalid, duplicate, unknown, or foreign ID.
@@ -442,11 +493,23 @@ Stages:
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
 | `brief_pause` | 40 | Wait for review and `/proceed`. |
-| `classify` | 42-65 | Discover Themes, classify all labels, optionally refine `Other`. |
+| `themes` | 42 | Discover Themes from a comment sample. |
+| `classify` | 50-65 | Classify all labels, optionally refine `Other`. |
 | `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |
 | `report` | 77-88 | Write Report JSON, PDF, and CSVs. |
 | `complete` | 100 | Run complete. |
 | `error` | 0 | Run failed; `detail` carries the exception string. |
+
+`detail` is a free-text string. When it carries counts it is `;`-joined `key=number` pairs, and clients parse it:
+
+| Stage | `detail` | Meaning |
+|---|---|---|
+| `collect` | `total=N` | Comments in the analysis base. |
+| `classify` | `N themes` | Themes discovered. |
+| `classify` | `labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
+| `classify` | `other_share=X.Y` | Percent left in `Other`. |
+
+Any other `detail` is prose and carries no counts.
 
 An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. A terminal run replays one terminal event and closes.
 
@@ -483,6 +546,9 @@ Exact top-level keys:
   "emotions": [
     { "metricId": "m-em-joy", "label": "joy", "count": 30, "percent": 36.1 }
   ],
+  "sentiment": [
+    { "metricId": "m-se-positive", "label": "positive", "count": 34, "percent": 41.0 }
+  ],
   "keyMessageSentiment": [
     {
       "id": "...",
@@ -503,17 +569,24 @@ Exact top-level keys:
           "text": "...",
           "likes": 123,
           "videoId": "...",
-          "sentiment": "positive"
+          "sentiment": "positive",
+          "emotion": "joy"
         }
       ]
     }
-  ]
+  ],
+  "title": "The Meme Outlived\nthe Message",
+  "interpretation": "...\n\n...",
+  "quote": { "text": "...", "attr": "comment · 47 likes" },
+  "caveat": "..."
 }
 ```
 
-`overallTransfer` is the share of eligible rows that mention at least one applicable included Key Message. `keyMessages`, `themes`, `emotions`, and `keyMessageSentiment` carry Python-counted values. Percentages use one decimal.
+`overallTransfer` is the share of eligible rows that mention at least one applicable included Key Message. `keyMessages`, `themes`, `emotions`, `sentiment`, and `keyMessageSentiment` carry Python-counted values. Percentages use one decimal. `emotions` and `sentiment` count over every row in the analysis base, matching `emotions.csv` and `sentiment.csv`; `keyMessageSentiment` counts over the rows that mention that Key Message and carry a recognized Sentiment.
 
-Each evidence group contains up to eight comments, ranked by likes and then text length. Key Message Sentiment evidence selects up to four positive and four negative rows, then backfills from the best remaining recognized Sentiment rows. Metric IDs remain unique when labels slugify to the same value.
+Each evidence group contains up to eight comments, ranked by likes and then text length. Groups run in metric order: Key Messages, Themes, Emotions, Sentiment, Key Message Sentiment. Key Message Sentiment evidence selects up to four positive and four negative rows, then backfills from the best remaining recognized Sentiment rows. A comment's `sentiment` or `emotion` is `null` when the label is missing or unrecognized. Metric IDs remain unique when labels slugify to the same value.
+
+`title`, `interpretation`, `quote`, and `caveat` are the written read the results screen renders. They are the only model-written fields in the response; every number above them is counted in Python. A run that completed before these fields existed omits them, and the screen drops the section they feed.
 
 ---
 

@@ -117,6 +117,26 @@ window.__demoFixture = {
         "percent": 0.6
       }
     ],
+    "sentiment": [
+      {
+        "metricId": "m-se-neutral",
+        "label": "neutral",
+        "count": 88,
+        "percent": 48.6
+      },
+      {
+        "metricId": "m-se-positive",
+        "label": "positive",
+        "count": 73,
+        "percent": 40.3
+      },
+      {
+        "metricId": "m-se-negative",
+        "label": "negative",
+        "count": 20,
+        "percent": 11.0
+      }
+    ],
     "keyMessageSentiment": [
       {
         "id": "pt-1",
@@ -998,6 +1018,189 @@ window.__demoFixture = {
             "videoId": "Rl-sPdzYlXc",
             "sentiment": "negative",
             "emotion": "fear"
+          }
+        ]
+      },
+      {
+        "metricId": "m-se-neutral",
+        "comments": [
+          {
+            "text": "indomie cabe ijo dari dulu masih ada kok cuma terbatas produksinya gak seluruh indonesia, jamab kopit aja gwa masih bisa beli 1 dus walau inden 3 hari dari selesnya, posisi di indramayu",
+            "likes": 67,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Iya sama juga indomie sambal rica juga",
+            "likes": 8,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Balik lagi gimana ya? Bukannya emang ada terus, tiap gw ke warung pasti ada di rak",
+            "likes": 7,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Gw dulu belum pernah makan Indomie cabe ijo, tapi pas baru pertama kali nyoba malah gak pedes sama sekali 🗿",
+            "likes": 5,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Jangan pakai kecapnya jadi mirip dulu",
+            "likes": 5,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Lah 2022-2023 gua sering beli ini diwarung😂",
+            "likes": 4,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "keknya 14 tahun yg lalu, soalnya Indomie Cabe Ijo pertama kali di Indonesia sejak 2012 pas ultah Indomie ke 40",
+            "likes": 3,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Terimaksih algoritma telah memberi berita baik💎💎",
+            "likes": 3,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "neutral",
+            "emotion": "other_neutral"
+          }
+        ]
+      },
+      {
+        "metricId": "m-se-positive",
+        "comments": [
+          {
+            "text": "Akhirnya, setelah 12 Tahun Indomie rasa cabe ijo gak ada di warung di supermarket dan minimarket kini  sudah kembali dengan adanya jumbo.",
+            "likes": 74,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "DIA KEMBALI WOOOOOOOOOOOOOO!!!!! MIE GORENG LEGEND",
+            "likes": 64,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Akhirnya kembali lagi!",
+            "likes": 38,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Kembalikan juga indomie sambal matah",
+            "likes": 34,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Baru saja kemarin sore makan indomie cabe ijo beli di warung madura wah enak pisan mantap gurih pedasnya bikin nagih 🫶🫶🫶#indomieseleraku",
+            "likes": 17,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Udh nyoba tadi pagi. Rasanya enak, gk terlalu asin seperti yg orang bilang, bau cabe ijonya tetap sama seperti dulu. Jujur lebih pedes sekarang, tapi pedesnya cuma numpang lewat doang.",
+            "likes": 13,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Indomie ayam geprek ath yg jumbo kali² makan mie ayam geprek 1 tuh suka pengen lagi di campur 2 terlalu kenyang😮",
+            "likes": 11,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "positive",
+            "emotion": "joy"
+          },
+          {
+            "text": "Akhirnya dan welcome to back indomie cabe ijo kembali lagi...👋👋👋\nSaya sangat suka makan mie indomie cabe ijo dari pada mie indomie mi goreng biasa 😅😅👏👏",
+            "likes": 10,
+            "videoId": "bvtSIAULS88",
+            "sentiment": "positive",
+            "emotion": "joy"
+          }
+        ]
+      },
+      {
+        "metricId": "m-se-negative",
+        "comments": [
+          {
+            "text": "Enakan yg dulu jujur",
+            "likes": 45,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Iya, yg skg lebih pedes kaya bumbu ayam geprek. Enakan jaman dulu ga gitu pedes, tapi lebih micin",
+            "likes": 8,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Ya sekarang agak kureng",
+            "likes": 7,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "Ayam geprek jangan musnah dulu plis udah 3 tahun belum makan lagi masih takut tipes lagi",
+            "likes": 2,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "fear"
+          },
+          {
+            "text": "Indomie salted egg minn😢",
+            "likes": 2,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "AKHIRNYA MIE LEGEND CABE IJO COMEBACK GUYS....... kangen banget sumpah mie favorit 😢❤",
+            "likes": 1,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "sadness"
+          },
+          {
+            "text": "Resep lama di colong plankton, makanya sekarang jadi gak seenak dulu",
+            "likes": 1,
+            "videoId": "Rl-sPdzYlXc",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
+          },
+          {
+            "text": "bau bumbu nya aneh sih menurutku, tapi mienya rasanya enak",
+            "likes": 1,
+            "videoId": "bvtSIAULS88",
+            "sentiment": "negative",
+            "emotion": "other_neutral"
           }
         ]
       },

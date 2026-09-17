@@ -108,9 +108,17 @@ const liveApi = {
     return { session, campaign };
   },
 
-  async addVideo(campaignId, url) {
+  async addVideo(campaignId, url, kind = "auto") {
     return apiJson("/api/campaigns/" + campaignId + "/videos",
-      json({ url, kind: "auto" }));
+      json({ url, kind }));
+  },
+
+  async updateVideo(videoId, kind) {
+    return apiJson("/api/videos/" + videoId, patch({ kind }));
+  },
+
+  async renameSession(sessionId, name) {
+    return apiJson("/api/sessions/" + sessionId, patch({ name }));
   },
 
   async removeVideo(videoId) {
@@ -260,20 +268,27 @@ const liveApi = {
           metricId: metric.metricId,
           text: c.text,
           likes: c.likes,
-          emotion: null,
+          sentiment: c.sentiment || null,
+          emotion: c.emotion || null,
         });
       }
     }
     const themeCount = themes.length;
+    // The written read (title/interpretation/quote/caveat) rides through the
+    // spread. A run completed before the pipeline wrote prose has none, so
+    // each field falls back and the renderer drops the section it feeds.
     return {
       ...raw,
-      title: "Results",
+      title: raw.title || "Results",
+      interpretation: raw.interpretation || "",
+      quote: raw.quote || { text: "", attr: "" },
+      caveat: raw.caveat || "",
       subtitle: `${keyMessages.length} Key Messages · ${themeCount} ${themeCount === 1 ? "theme" : "themes"}`,
       transfers: keyMessages.map((m) => ({
-        id: m.metricId, label: m.label, value: m.percent,
+        id: m.metricId, label: m.label, value: m.percent, evidenceCount: m.count,
       })),
       themes: themes.map((m) => ({
-        id: m.metricId, label: m.label, value: m.percent,
+        id: m.metricId, label: m.label, value: m.percent, evidenceCount: m.count,
       })),
       evidence: flatEvidence,
     };
@@ -340,7 +355,7 @@ const liveApi = {
       // Assets from campaigns.
       for (const camp of (full.campaigns || [])) {
         for (const asset of (camp.assets || [])) {
-          files.push({ ...asset, _file: "asset", campaignName: camp.name });
+          files.push({ ...asset, _file: "asset", campaignName: camp.name, sessionName: sess.name });
         }
       }
       // Artifacts from complete runs.
@@ -350,7 +365,8 @@ const liveApi = {
         for (const art of filterPublicArtifacts(run.artifacts)) {
           files.push({
             ...art, _file: "artifact",
-            campaignId: campaignId, campaignName,
+            campaignId: campaignId, campaignName, sessionName: sess.name,
+            size: art.size != null ? art.size : null,
           });
         }
       }

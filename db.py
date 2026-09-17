@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- pause still happens when reconciliation leaves zero included
     -- messages, so this is a request, not a guarantee.
     skip_pause  INTEGER NOT NULL DEFAULT 0,
+    -- Analysis-base comment count, set once collect finishes (adapter.py
+    -- _set_run_total). NULL before then. Persisted so GET /runs/{id} can
+    -- paint it after a reopen with no SSE connection to replay from.
+    total_comments INTEGER,
     started_at  TEXT,
     finished_at TEXT,
     error       TEXT
@@ -79,7 +83,11 @@ CREATE TABLE IF NOT EXISTS brief_points (
     approved    INTEGER NOT NULL DEFAULT 0,
     edited      INTEGER NOT NULL DEFAULT 0,
     included    INTEGER NOT NULL DEFAULT 1,
-    sort_order  INTEGER NOT NULL DEFAULT 0
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    -- Where the point came from: input (User Inputs or the review screen),
+    -- sharpened (an input point whose description a transcript refreshed),
+    -- or transcript (derived from transcripts alone). See brief.reconcile().
+    source      TEXT NOT NULL DEFAULT 'input'
 );
 
 CREATE TABLE IF NOT EXISTS run_artifacts (
@@ -121,6 +129,12 @@ def init() -> None:
         if "skip_pause" not in cols:
             conn.execute(
                 "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
+        if "total_comments" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
+        bp_cols = {row[1] for row in conn.execute("PRAGMA table_info(brief_points)")}
+        if "source" not in bp_cols:
+            conn.execute(
+                "ALTER TABLE brief_points ADD COLUMN source TEXT NOT NULL DEFAULT 'input'")
         conn.commit()
     finally:
         conn.close()

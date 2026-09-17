@@ -43,7 +43,7 @@ Four stages run in `run.py` for the CLI and `adapter.py` for the web product:
 1. **collect** fetches YouTube metadata, transcripts, and comments, then cleans and filters comments.
 2. **brief** drafts grounded Key Messages from transcripts and User Inputs.
 3. **analyze** discovers Themes, classifies every eligible comment, and counts Theme, Key Message, Sentiment, and Emotion labels.
-4. **report** writes `report.pdf`, five public CSVs, and the internal `report.json`.
+4. **report** writes `report.pdf`, five public CSVs, and the internal `report.json`. `report.json` carries the counted blocks plus one written read (title, interpretation, quote, caveat) produced by a single structured model call; the counting code stays model-free, and a failed call falls back to deterministic prose rather than failing the run.
 
 Data passes between stages in memory. Debug files are write-only audit output. No pipeline stage reads them back.
 
