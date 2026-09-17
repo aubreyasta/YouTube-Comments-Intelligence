@@ -19,4 +19,7 @@ jobs:
             exit 1
           fi
 
-          curl -fsS -X POST "$WEBHOOK_URL"
+          curl -fsS -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -d "{\"ref\":\"${{ github.ref }}\",\"repository\":{\"full_name\":\"${{ github.repository }}\"}}"
