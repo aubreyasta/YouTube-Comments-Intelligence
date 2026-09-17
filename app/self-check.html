@@ -24,6 +24,8 @@
   <div id="overlay-root"></div>
   <a class="sb-item" id="sb-sessions" href="#/sessions"></a>
   <a class="sb-item" id="sb-files" href="#/files"></a>
+  <a class="sb-item" id="sb-users" href="#/users" hidden></a>
+  <button class="sb-item" id="sb-signout" type="button" hidden><span class="sr-only">Sign out</span></button>
 </div>
 <script>
   // Deterministic boot: force the mode probe's fetch to fail before app.js
@@ -83,6 +85,19 @@
   window.fetch = window.__origFetchForSelfCheck || fetch;
   const api = window.demoApi;
   check("boot resolved to demo mode", api.mode === "demo");
+
+  // --- Account controls: live only ---
+  check("demo mode keeps the Users item and Sign out hidden",
+    document.getElementById("sb-users").hidden && document.getElementById("sb-signout").hidden);
+  check("__liveApi has account and user methods",
+    ["me", "signOut", "listUsers", "setUserBlocked", "eraseUser"].every((m) => typeof window.__liveApi[m] === "function"));
+  const usersRefused = () => /Only admins can manage users/.test(document.getElementById("view").textContent);
+  location.hash = "#/users";
+  let refused = false;
+  try { await until(usersRefused, 2000, "users route refused in demo"); refused = true; } catch { /* reported below */ }
+  check("demo mode refuses the Users screen", refused);
+  location.hash = "#/home";
+  try { await until(() => !usersRefused(), 2000, "back home"); } catch { /* the next checks report it */ }
 
   // --- Validation before mutation ---
   await rejects("blank session name", api.createSession({ name: "  ", campaignName: "C", videoUrls: ["https://youtu.be/abc1234"] }), "validation");

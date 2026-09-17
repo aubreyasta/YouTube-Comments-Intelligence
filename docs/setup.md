@@ -8,7 +8,7 @@ Related: [Deployment](deployment.md), [Architecture](architecture.md), [API refe
 
 ## Prerequisites
 
-The server runs wherever Python 3.10 or newer runs. LM Studio must answer on a loopback port of the server's machine: either directly, or through a local relay (see [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio)). The shell commands below target macOS and Linux. On Windows, use `python` and `.venv\Scripts\activate`.
+The server runs wherever Python 3.10 or newer runs. LM Studio runs on the same machine or on another machine the server can reach (see [Using a remote LM Studio](#using-a-remote-lm-studio)). The shell commands below target macOS and Linux. On Windows, use `python` and `.venv\Scripts\activate`.
 
 Install:
 
@@ -65,7 +65,7 @@ curl -s http://127.0.0.1:1234/api/v1/models
 
 Record the exact model key returned by LM Studio. Set that key as `LLM_MODEL`.
 
-Load the model with a 32,768-token context. Disable thinking in the model settings because the pipeline requires direct schema-only responses. Keep the server on its default loopback bind.
+Load the model with a 32,768-token context. Disable thinking in the model settings because the pipeline requires direct schema-only responses. When LM Studio runs on the server's machine, keep the server on its default loopback bind.
 
 Verify the bind:
 
@@ -73,9 +73,22 @@ Verify the bind:
 lsof -nP -iTCP:1234 -sTCP:LISTEN
 ```
 
-The listener must be `127.0.0.1:1234` or `localhost:1234`. Do not enable **Serve on Local Network**.
+For a same-machine setup, the listener must be `127.0.0.1:1234` or `localhost:1234`. Enable **Serve on Local Network** only for a remote setup, and only with an API token (see [Using a remote LM Studio](#using-a-remote-lm-studio)).
 
 See [Deployment](deployment.md) for model smoke tests and real-device acceptance.
+
+---
+
+## Create the Google sign-in client
+
+Users sign in with their Google Workspace account. Create one OAuth client per deployment URL:
+
+1. In Google Cloud Console, open **APIs & Services > OAuth consent screen**. Choose **Internal** so only accounts in your Workspace organization can use it.
+2. Open **APIs & Services > Credentials > Create credentials > OAuth client ID**. Choose **Web application**.
+3. Under **Authorized redirect URIs**, add `<APP_BASE_URL>/auth/callback`. For local development, add `http://localhost:8000/auth/callback`.
+4. Copy the client ID and client secret into `.env` (next section).
+
+The redirect URI must match `APP_BASE_URL` exactly, including scheme and port. A URL that changes on restart, such as a Cloudflare quick tunnel, breaks sign-in.
 
 ---
 
@@ -85,7 +98,11 @@ Create `.env` in the repository root:
 
 ```text
 YOUTUBE_API_KEY=<YouTube Data API v3 key>
-APP_PASSWORD=<long unique shared password>
+GOOGLE_CLIENT_ID=<OAuth client ID>
+GOOGLE_CLIENT_SECRET=<OAuth client secret>
+APP_BASE_URL=http://localhost:8000
+AUTH_ALLOWED_DOMAINS=<company.com>
+ADMIN_EMAILS=<admin@company.com>
 LLM_BASE_URL=http://127.0.0.1:1234
 LLM_MODEL=<exact model key returned by LM Studio>
 LLM_CONTEXT_LENGTH=32768
@@ -94,13 +111,18 @@ CLASSIFY_BATCH_SIZE=16
 ```
 
 - `YOUTUBE_API_KEY` stays on the server. The browser never receives it.
-- `APP_PASSWORD` protects the frontend, API, downloads, and SSE stream. The server refuses to start when it is empty.
-- `LLM_BASE_URL` must be a loopback HTTP origin without a path, credentials, query, or fragment.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_BASE_URL`, and `AUTH_ALLOWED_DOMAINS` are required. The server refuses to start when one is empty. Sign-in protects the frontend, API, downloads, and SSE stream.
+- `APP_BASE_URL` is the URL users open, with no trailing path. Use `https` for any deployment reached over the internet; the session cookie is `Secure` only then.
+- `AUTH_ALLOWED_DOMAINS` is a comma-separated list of Google Workspace domains. Personal Google accounts cannot sign in.
+- `ADMIN_EMAILS` (optional) is a comma-separated list of admin emails. Admins see the Users screen and can block or erase users. Restart FastAPI after a change.
+- `LLM_BASE_URL` is an `http` or `https` URL with any host and an optional path prefix. It must not contain credentials, a query, or a fragment.
+- `LLM_HEADERS` (optional) is a JSON object of headers sent on every model request, for example `{"Authorization": "Bearer <LM Studio API token>"}`. Values must be single-line strings. Error messages never include them.
+- `LLM_ALLOW_INSECURE=true` (optional) skips TLS certificate verification for an `https` `LLM_BASE_URL`. Use it only for a self-signed endpoint on a network you control.
 - `LLM_MODEL` must exactly match the LM Studio model inventory.
 - `CLASSIFY_BATCH_SIZE=16` is validated for `qwen/qwen3.8-27b`: a 574-comment run labelled every comment with no validation failure in 32 minutes, against 2h27m at batch 4. The code default is `8`, so set `16` explicitly.
 - `LLM_CONTEXT_LENGTH` is a starting value. Change it only after a real run shows memory pressure.
 - `.env`, `config.py`, and `data/` are gitignored. Never commit them.
-- The application has no LM Studio API-token setting. Keep LM Studio on loopback. Do not publish port 1234 or replace `LLM_BASE_URL` with a remote URL.
+- Never publish LM Studio to the internet. A remote LM Studio belongs on a private network and requires an API token.
 
 Check the exclusions:
 
@@ -123,35 +145,27 @@ python server.py
 
 The backend binds `127.0.0.1:8000`. It serves the frontend and API from one origin.
 
-Check the authentication boundary from a second terminal:
+Check the sign-in boundary from a second terminal:
 
 ```bash
 curl -i http://127.0.0.1:8000/
-curl -i -u office:wrong-password http://127.0.0.1:8000/api/sessions
-curl -i -u office:<the-password> http://127.0.0.1:8000/api/sessions
+curl -i http://127.0.0.1:8000/api/sessions
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 ```
 
 Require these results:
 
-- Missing or wrong credentials return `401`.
-- Every `401` includes `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"`.
-- Correct credentials return `200`.
+- `/` returns `302` to `/auth/login`.
+- `/api/sessions` returns `401` with `"error": "UNAUTHENTICATED"`.
 - FastAPI listens only on `127.0.0.1:8000`.
 
-Open <http://127.0.0.1:8000>, authenticate, and create a Session.
+Open the `APP_BASE_URL` (for local development, <http://localhost:8000>, not `127.0.0.1`, so the redirect URI matches). Sign in with a Workspace account and create a Session.
 
 ---
 
 ## Publish the application
 
-Start a free Cloudflare quick tunnel:
-
-```bash
-cloudflared tunnel --url http://127.0.0.1:8000
-```
-
-Share the generated `https://<random>.trycloudflare.com` URL and the password through separate trusted channels. The URL changes whenever `cloudflared` restarts.
+Publish port 8000 at a stable `https` hostname, such as a Cloudflare named tunnel or a reverse proxy with a domain. Set `APP_BASE_URL` to that hostname and add `<APP_BASE_URL>/auth/callback` to the OAuth client. A quick tunnel's random `trycloudflare.com` hostname does not work, because it changes on every restart.
 
 Publish only port 8000. Never publish LM Studio on port 1234.
 
@@ -159,21 +173,26 @@ See [Deployment](deployment.md) for external security checks, automatic login st
 
 ---
 
-## Developing against a remote LM Studio
+## Using a remote LM Studio
 
-`LLM_BASE_URL` must stay a loopback URL. `pipeline/llm.py`'s `_validated_base_url()` rejects any other host, and the application has no LM Studio API-token setting. This holds even when the person developing works on a different machine than the one running LM Studio.
+The server can call LM Studio on another machine, for example over a private mesh network such as Tailscale, or from a container that has no host network.
 
-Run a local relay instead of changing that boundary. The relay is a small process on the developer's own machine:
+On the LM Studio machine:
 
-- It listens on `http://127.0.0.1:<port>`.
-- It forwards every request to the remote LM Studio endpoint, using whatever network path and credentials that endpoint requires (a private mesh network and an API token, for example).
-- It returns the response unchanged.
+1. Enable **Serve on Local Network**.
+2. Enable API token authentication and create a token.
+3. Keep port 1234 off the public internet.
 
-Set `LLM_BASE_URL=http://127.0.0.1:<port>` to the relay's own port, not LM Studio's. `pipeline/llm.py` then sees a plain loopback URL and needs no other change.
+In the server's `.env`:
 
-The relay is a personal development tool, not part of the application. Keep its script and any token it holds out of the repository. Never commit them.
+```text
+LLM_BASE_URL=http://<lm-studio-host>:1234
+LLM_HEADERS={"Authorization": "Bearer <LM Studio API token>"}
+```
 
-With the relay running, follow the rest of this file as written: create `.env`, start `python server.py`, and use the application at `http://127.0.0.1:8000` like any other local run. Every model call now reaches the remote LM Studio; everything else stays local.
+A reverse proxy in front of LM Studio also works. Include its path prefix in `LLM_BASE_URL` and its credentials in `LLM_HEADERS`.
+
+Then follow the rest of this file as written. Every model call reaches the remote LM Studio; everything else stays local. A wrong token fails preflight with `LM Studio request failed (HTTP 401).`
 
 A code change needs only a restart of `python server.py` to test. No redeploy is required. The remote machine's only requirement is that LM Studio and the configured model stay loaded and running.
 
@@ -203,7 +222,7 @@ node --check app/app.js
 node --check app/live.js
 ```
 
-The accepted baseline (2026-09-11) is 19 scripts and 173 assertions, including `tests/e2e_product_flow.py` 20/20.
+The accepted baseline (2026-09-17) is 22 scripts, including `tests/e2e_product_flow.py` 23/23.
 
 Open `app/self-check.html` for the frontend state-machine checks.
 
@@ -215,9 +234,15 @@ After a provider or model change, run one real Session through the web app again
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `RuntimeError: APP_PASSWORD must be set before the server can start.` | `.env` is missing or `APP_PASSWORD` is empty | Create `.env` in the repository root and restart FastAPI. |
+| `RuntimeError: GOOGLE_CLIENT_ID must be set before the server can start.` (or another sign-in variable) | `.env` is missing or the variable is empty | Set every variable in [Configure the backend](#configure-the-backend) and restart FastAPI. `APP_PASSWORD` is no longer used. |
+| Pages load, but every save or create fails with `Request from another site refused.` (`403 CROSS_ORIGIN`) | The browser opened the app at a different address than `APP_BASE_URL`, such as `127.0.0.1` instead of `localhost` | Open the app at `APP_BASE_URL` exactly. Behind a proxy or tunnel, set `APP_BASE_URL` to the public address. |
+| Google shows `Error 400: redirect_uri_mismatch` | The OAuth client does not list `<APP_BASE_URL>/auth/callback`, or the browser opened a different host | Add the exact redirect URI to the OAuth client, and open the app at `APP_BASE_URL`. |
+| "This Google account can't sign in" | The account is personal, outside `AUTH_ALLOWED_DOMAINS`, or blocked | Sign in with a Workspace account in an allowed domain. An admin can unblock the account on the Users screen. |
+| Users screen is missing | The signed-in email is not in `ADMIN_EMAILS` | Add the email to `ADMIN_EMAILS` and restart FastAPI. |
 | LM Studio connection failure | The daemon or API server is stopped | Run `lms daemon up`, then `lms server start --port 1234`. |
-| `LLM_BASE_URL host must be loopback` | `LLM_BASE_URL` points at another machine | Run a local relay and point `LLM_BASE_URL` at it. See [Developing against a remote LM Studio](#developing-against-a-remote-lm-studio). |
+| `LM Studio request failed (HTTP 401).` | LM Studio requires a token and `LLM_HEADERS` is missing or wrong | Set `LLM_HEADERS` to the current token. See [Using a remote LM Studio](#using-a-remote-lm-studio). |
+| `LLM_HEADERS must be a JSON object of string values` | `LLM_HEADERS` is not valid JSON | Quote the header name and value with double quotes, as in the example. |
+| LM Studio connection failure over `https` with a certificate error | The endpoint uses a self-signed certificate | Install a trusted certificate, or set `LLM_ALLOW_INSECURE=true` on a network you control. |
 | Model not found | `LLM_MODEL` does not exactly match LM Studio's model key | Read `curl -s http://127.0.0.1:1234/api/v1/models` and copy the exact key. |
 | Vision preflight failure | The downloaded build does not expose vision support | Download a vision-capable `Qwen3.8-27B` 4-bit MLX build. |
 | Structured response fails validation | Thinking is enabled or the local runtime did not enforce the schema | Disable thinking, confirm the selected model, and run the structured-output smoke test. |

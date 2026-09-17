@@ -56,7 +56,7 @@ import db
 import storage
 from pipeline import collect, brief, analyze, report as pipeline_report
 from pipeline import llm as pipeline_llm
-from pipeline.config_types import PipelineConfig
+from pipeline.config_types import PipelineConfig, llm_env
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,8 @@ def _push(run_id: str, stage: str, message: str, pct: int,
     # /runs/{id} can report brief_pause after a tab reopens with no SSE
     # connection to replay from - the queue is per-process and empties
     # once drained, but this column survives.
-    _set_run_stage(run_id, stage)
+    _set_run_stage(run_id, stage,
+                   detail if stage == "classify" and detail else None)
     if stage in ("complete", "error"):
         with _lock:
             _terminal[run_id] = True
@@ -173,13 +174,19 @@ def _set_run_state(run_id: str, state: str, **extra_cols) -> None:
         conn.close()
 
 
-def _set_run_stage(run_id: str, stage: str) -> None:
-    """Persist the fine-grained SSE stage onto the run row. Best-effort:
-    a run that vanished mid-flight (deleted by a later overwrite) is not
-    an error worth surfacing from inside a progress callback."""
+def _set_run_stage(run_id: str, stage: str,
+                   progress_detail: str | None = None) -> None:
+    """Persist the fine-grained SSE stage onto the run row, plus the latest
+    classify progress detail when given (an earlier one is kept otherwise).
+    Best-effort: a run that vanished mid-flight (deleted by a later
+    overwrite) is not an error worth surfacing from inside a progress
+    callback."""
     conn = db.get_conn()
     try:
-        conn.execute("UPDATE runs SET stage = ? WHERE id = ?", (stage, run_id))
+        conn.execute(
+            "UPDATE runs SET stage = ?, "
+            "progress_detail = COALESCE(?, progress_detail) WHERE id = ?",
+            (stage, progress_detail, run_id))
         conn.commit()
     finally:
         conn.close()
@@ -343,10 +350,7 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
     """
     return PipelineConfig(
         YOUTUBE_API_KEY=os.environ.get("YOUTUBE_API_KEY", ""),
-        LLM_BASE_URL=os.environ.get("LLM_BASE_URL", "http://127.0.0.1:1234"),
-        LLM_MODEL=os.environ.get("LLM_MODEL", "youtube-intelligence"),
-        LLM_CONTEXT_LENGTH=int(os.environ.get("LLM_CONTEXT_LENGTH", "32768")),
-        LLM_TIMEOUT_SECONDS=int(os.environ.get("LLM_TIMEOUT_SECONDS", "600")),
+        **llm_env(os.environ),
         VIDEOS=[
             {"url": v["url"], "group": campaign["name"],
              "kind": v.get("kind", "auto")}
@@ -1159,13 +1163,15 @@ def _execute(run_id: str) -> None:
         themes = analyze.build(base_df, summary_str, cfg)
         _push(run_id, "classify",
               f"Classifying {len(base_df)} comments", 50,
-              detail=f"{len(themes)} themes")
+              detail=f"themes={len(themes)};labelled=0;total={len(base_df)}")
+        # Every classify detail repeats the theme count: _push persists only
+        # the latest detail, and a reopened run page repaints from that one.
         def classify_progress(completed, total, labelled):
             pct = 50 + int(completed / max(total, 1) * 9)
             _push(run_id, "classify",
                   f"Classified batch {completed} of {total}", pct,
-                  detail=(f"labelled={labelled};total={len(base_df)};"
-                          f"batch={completed};batches={total}"))
+                  detail=(f"themes={len(themes)};labelled={labelled};"
+                          f"total={len(base_df)};batch={completed};batches={total}"))
 
         base_df, columns = analyze.classify(
             base_df, themes, classifier_points, cfg,
@@ -1176,7 +1182,8 @@ def _execute(run_id: str) -> None:
         theme_table, transfer_table = analyze.summarise(base_df, columns)
         _push(run_id, "classify",
               f"Classification complete - {other_share:.0f}% Other", 65,
-              detail=f"other_share={other_share:.1f}")
+              detail=(f"themes={len(themes)};labelled={len(base_df)};"
+                      f"total={len(base_df)};other_share={other_share:.1f}"))
 
         # --- 10. Emotion and sentiment ---------------------------------------
         _push(run_id, "emotion", "Running emotion and sentiment analysis", 67)

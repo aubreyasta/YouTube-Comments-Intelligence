@@ -81,7 +81,7 @@ python server.py
 # http://localhost:8000
 ```
 
-The server binds loopback and protects every route with one shared HTTP Basic Auth password. A free Cloudflare quick tunnel publishes the service without exposing a local port directly.
+The server binds loopback. Users sign in with their Google Workspace account, and admins can block or erase users. A Cloudflare named tunnel publishes the service at a stable HTTPS hostname without exposing a local port directly.
 
 There is also a CLI (`python run.py`, configured through `config.py`). It is for debugging the pipeline without the web layer. It is not the product and it is not maintained to the same standard.
 
@@ -95,7 +95,7 @@ The tool runs a multimodal `Qwen3.8-27B` build through LM Studio (API key `qwen/
 
 Python validates every label and counts every percentage. The model never emits report statistics directly.
 
-The server reaches LM Studio only through a loopback URL. Local inference has no per-run API cost and keeps client material on machines you control. Throughput depends on the model build, context, batch size, and corpus. With `CLASSIFY_BATCH_SIZE=16`, a 574-comment run finished in 32 minutes.
+The server reaches LM Studio on the same machine or on a private-network host through `LLM_BASE_URL`, with an optional API token in `LLM_HEADERS`. Local inference has no per-run API cost and keeps client material on machines you control. Throughput depends on the model build, context, batch size, and corpus. With `CLASSIFY_BATCH_SIZE=16`, a 574-comment run finished in 32 minutes.
 
 ---
 
@@ -110,7 +110,7 @@ The server reaches LM Studio only through a loopback URL. Local inference has no
 
 ## Status
 
-**Finished (2026-09-11).** The pipeline, backend, frontend, Basic Auth, six public artifacts, merged classification pass, and LM Studio `LLM_*` provider boundary are shipped.
+**Finished (2026-09-11).** The pipeline, backend, frontend, six public artifacts, merged classification pass, and LM Studio `LLM_*` provider boundary are shipped.
 
 End-to-end acceptance passed on 2026-09-11:
 

@@ -1139,9 +1139,29 @@ function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
 }
 
 function setSidebarActive(which) {
-  for (const id of ["sb-sessions", "sb-files"]) {
-    document.getElementById(id).classList.toggle("active", id === "sb-" + which);
+  for (const id of ["sb-sessions", "sb-files", "sb-users"]) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("active", id === "sb-" + which);
   }
+}
+
+/* Signed-in account from GET /api/me. Null in demo mode. */
+let currentUser = null;
+
+async function loadAccount() {
+  try { currentUser = await window.__liveApi.me(); } catch { return; }
+  const usersLink = document.getElementById("sb-users");
+  const signOut = document.getElementById("sb-signout");
+  if (usersLink) usersLink.hidden = !currentUser.isAdmin;
+  if (!signOut) return;
+  signOut.title = "Sign out " + currentUser.email;
+  signOut.querySelector(".sr-only").textContent = "Sign out " + currentUser.email;
+  signOut.hidden = false;
+  signOut.addEventListener("click", async () => {
+    signOut.disabled = true;
+    try { await window.__liveApi.signOut(); } catch { /* the sign-in page still follows */ }
+    location.assign("/auth/login");
+  });
 }
 
 /* ============================== Screens ============================== */
@@ -2267,15 +2287,12 @@ const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 1, brief
    parser covers every _push that carries counts:
      "total=N"                                    -> { total: N }
      "other_share=X.Y"                            -> { otherShare: X.Y }
-     "labelled=N;total=M;batch=B;batches=T"       -> all four
+     "themes=K;labelled=N;total=M;batch=B;batches=T" -> all five
    Keys arrive snake_case and are camelCased to match the demo detail
-   objects the same painters read. "N themes" is the one prose exception.
-   Anything else (error strings, artifact paths, caveats) returns null and
-   callers show "-". */
+   objects the same painters read. Anything else (error strings, artifact
+   paths, caveats) returns null and callers show "-". */
 function parseDetailStr(detail) {
   if (!detail || typeof detail !== "string") return null;
-  const themes = detail.match(/^(\d+)\s+themes?$/i);
-  if (themes) return { themes: parseInt(themes[1], 10) };
   const out = {};
   for (const part of detail.split(";")) {
     const kv = part.match(/^\s*([a-z_]+)=(\d+(?:\.\d+)?)\s*$/i);
@@ -2302,7 +2319,10 @@ async function renderRun(runId) {
     : run.stage === "error" ? "error"
     : run.stage;
   let state = {
-    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
+    // Live: seed from the persisted classify detail so a reopened page
+    // repaints labelling progress without waiting for the next batch event.
+    stage: initialStage, pct: run.pct || 0,
+    detail: (live && parseDetailStr(run.progressDetail)) || {}, disconnected: false,
     failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
     completed: initialStage === "complete",
   };
@@ -2354,7 +2374,7 @@ async function renderRun(runId) {
       <div class="rail-card">
         <div class="rail-kicker">LIVE COUNTS</div>
         <div style="display:flex;flex-direction:column;gap:13px">
-          <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">0</span></div>
+          <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">${live ? "—" : "0"}</span></div>
           <div class="count-row"><span class="k">Themes in play</span><span class="v" id="cnt-themes">\u2014</span></div>
           <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
         </div>
@@ -2433,6 +2453,17 @@ async function renderRun(runId) {
   function totalComments() {
     const d = state.detail || {};
     return d.total != null ? d.total : (run.totalComments != null ? run.totalComments : null);
+  }
+  function paintCounts() {
+    const d = state.detail;
+    if (d.labelled != null) cntLabelled.textContent = fmtNum(d.labelled);
+    else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
+    else if (live) cntLabelled.textContent = "—";
+    if (d.themes != null) cntThemes.textContent = String(d.themes);
+    else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
+    if (d.otherShare != null) cntOther.textContent = d.otherShare.toFixed(1) + "%";
+    else if (d.other != null) cntOther.textContent = d.other + "%";
+    else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
   }
   function paintReliability() {
     const total = totalComments();
@@ -2721,16 +2752,7 @@ async function renderRun(runId) {
     if (stepIdx >= 0) currentStep = Math.max(currentStep, stepIdx);
     if (e.stage === "complete") currentStep = 6;
 
-    if (state.detail) {
-      if (state.detail.labelled != null) cntLabelled.textContent = fmtNum(state.detail.labelled);
-      else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
-      else if (live) cntLabelled.textContent = "—";
-      if (state.detail.themes != null) cntThemes.textContent = String(state.detail.themes);
-      else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
-      if (state.detail.otherShare != null) cntOther.textContent = state.detail.otherShare.toFixed(1) + "%";
-      else if (state.detail.other != null) cntOther.textContent = state.detail.other + "%";
-      else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
-    }
+    paintCounts();
 
     if (e.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
@@ -2779,6 +2801,7 @@ async function renderRun(runId) {
   // with no SSE replay required.
   paintHeader();
   paintSteps();
+  paintCounts();
   if (initialStage === "brief_pause") {
     briefRendered = true;
     renderBriefReviewFresh().catch(() => {});
@@ -3334,6 +3357,84 @@ async function renderFiles() {
   });
 }
 
+/* ============================== Users (admin) ============================== */
+
+async function renderUsers() {
+  setSidebarActive("users");
+  setTopbar('<div class="topbar-left"><span class="topbar-title">Users</span></div><div class="topbar-right"></div>');
+  if (demoApi.mode !== "live" || !currentUser || !currentUser.isAdmin) {
+    throw new Error("Only admins can manage users.");
+  }
+  view.innerHTML = `<div class="view-pad"><span class="spinner" role="status" aria-label="Loading users"></span></div>`;
+  const users = await window.__liveApi.listUsers();
+
+  const cols = "1.6fr 1fr .9fr .9fr 190px";
+  const rows = users.map((u) => {
+    const self = u.email === currentUser.email;
+    const actions = self
+      ? '<span class="trow-dim">You</span>'
+      : `<button class="btn secondary" type="button" data-block="${esc(u.id)}" data-blocked="${u.blocked}">${u.blocked ? "Unblock" : "Block"}</button>
+         <button class="btn danger" type="button" data-erase="${esc(u.id)}">Erase</button>`;
+    return `
+    <div class="trow" style="grid-template-columns:${cols}">
+      <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.email)}">${esc(u.email)}</div>
+      <div class="trow-dim">${esc(u.name || "-")}</div>
+      <div class="trow-dim">${u.lastLoginAt ? fmtAgo(u.lastLoginAt) : "Never"}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${u.blocked ? '<span class="badge">Blocked</span>' : '<span class="badge outline">Active</span>'}
+        ${u.isAdmin ? '<span class="badge neutral">Admin</span>' : ""}
+      </div>
+      <div style="display:flex;gap:8px">${actions}</div>
+    </div>`;
+  });
+
+  view.innerHTML = `
+  <div class="view-pad" style="gap:20px">
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <h2 class="greeting">Users</h2>
+      <div class="greeting-sub">Everyone who has signed in. Block an account to sign it out and keep it out.</div>
+    </div>
+    <p class="field-error" id="users-err" role="alert" style="margin:0" hidden></p>
+    ${users.length === 0 ? `
+    <div class="empty-block">
+      <h3>No users yet</h3>
+      <p>People appear here after their first sign-in.</p>
+    </div>` : `
+    <div class="table-scroll">
+    <div class="table" style="min-width:820px">
+      <div class="thead" style="grid-template-columns:${cols}">
+        <div>EMAIL</div><div>NAME</div><div>LAST SIGN-IN</div><div>STATUS</div><div></div>
+      </div>
+      ${rows.join("")}
+    </div>
+    </div>`}
+  </div>`;
+
+  const errEl = document.getElementById("users-err");
+  const runUserAction = async (btn, fn) => {
+    btn.disabled = true;
+    try {
+      await fn();
+      await renderUsers();
+    } catch (err) {
+      btn.disabled = false;
+      errEl.hidden = false;
+      errEl.textContent = err.message || "That change failed. Try again.";
+    }
+  };
+  view.querySelectorAll("[data-block]").forEach((b) => {
+    b.addEventListener("click", () => runUserAction(b, () =>
+      window.__liveApi.setUserBlocked(b.dataset.block, b.dataset.blocked !== "true")));
+  });
+  view.querySelectorAll("[data-erase]").forEach((b) => {
+    const user = users.find((u) => u.id === b.dataset.erase);
+    b.addEventListener("click", () => openConfirm(
+      `Erase ${user.email}? This deletes the account and signs it out. Sessions it created stay. The person can sign in again unless you block the account instead.`,
+      () => runUserAction(b, () => window.__liveApi.eraseUser(user.id)),
+      { title: "Erase user", confirmLabel: "Erase" }));
+  });
+}
+
 /* ============================== Router ============================== */
 
 let currentRouteHash = null; // last hash the router actually committed to
@@ -3387,6 +3488,7 @@ async function route() {
     else if (parts[0] === "runs" && parts.length === 2) await renderRun(parts[1]);
     else if (parts[0] === "runs" && parts[2] === "results") await renderResults(parts[1]);
     else if (parts[0] === "files") await renderFiles();
+    else if (parts[0] === "users") await renderUsers();
     else await renderHome();
   } catch (err) {
     setTopbar('<div class="topbar-left"><span class="topbar-title">Resonance</span></div><div class="topbar-right"></div>');
@@ -3436,9 +3538,11 @@ if (view && topbar && overlayRoot) {
           const tid = setTimeout(() => ctrl.abort(), 1200);
           const resp = await fetch("/api/sessions", { signal: ctrl.signal });
           clearTimeout(tid);
+          if (resp.status === 401) { location.assign("/auth/login"); return; }
           if (resp.ok) demoApi.mode = "live";
         } catch { /* network error or timeout: stay demo */ }
       }
+      if (demoApi.mode === "live") await loadAccount();
       route();
     })();
   }

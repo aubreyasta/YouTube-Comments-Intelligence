@@ -41,15 +41,13 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-# server refuses to start without APP_PASSWORD, and its Basic Auth
-# middleware guards every route. Set before import so the startup hook sees it.
-os.environ.setdefault("APP_PASSWORD", "test-password")
+from auth_helper import login  # sets the sign-in env the startup hook requires
 
 import server
 import adapter
 
 db.init()  # server's startup hook only fires inside TestClient's `with` block
-client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})
+client = login(TestClient(server.app))
 
 _RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
               "emotion", "report", "complete", "error"}
@@ -57,6 +55,7 @@ _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order", "source"
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause", "totalComments",
+    "progressDetail",
 }
 
 

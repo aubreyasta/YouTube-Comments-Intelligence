@@ -33,9 +33,7 @@ import uvicorn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("YOUTUBE_API_KEY", "e2e-test-key")
-# server refuses to start without APP_PASSWORD, and its Basic Auth
-# middleware guards every route. Set before import so the startup hook sees it.
-os.environ["APP_PASSWORD"] = "test-password"
+from auth_helper import SESSION_COOKIE, create_login  # sets the sign-in env; import before server
 
 # db._DB_PATH and storage._ROOT are module globals dereferenced per
 # call (not read once at import time), so reassigning them here before
@@ -259,6 +257,8 @@ def _start_server():
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
+    # The browser's Origin must match APP_BASE_URL or every write gets 403.
+    os.environ["APP_BASE_URL"] = f"http://127.0.0.1:{port}"
 
     cfg = uvicorn.Config(server.app, host="127.0.0.1", port=port,
                          log_level="warning", access_log=False)
@@ -792,6 +792,16 @@ def classify_progress_paints(page, base):
         _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
         # The batch events must not erase the theme count an earlier event set.
         _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+
+        # Issue #20: a refresh while classify is parked must repaint the same
+        # progress from the run snapshot, not blank it or show "0" labelled.
+        page.reload()
+        _wait_text(page, f"{step} .step-detail", "2 of 3 labelled",
+                   timeout_ms=10000)
+        _expect(page.locator(f"{step} .progressbar").count() == 1,
+                "no progress bar on the Classify step after a refresh")
+        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
+        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
     finally:
         _CLASSIFY_GATE.set()
 
@@ -983,11 +993,18 @@ def aria_and_keyboard(page, base):
 
     # Key Message rows are compact: the label/description inputs and the
     # reorder controls exist only while a row is expanded. Open the first two
-    # before reading or reordering them.
-    page.click('[data-km-toggle="0"]')
-    page.wait_for_selector("#km-label-0")
-    page.click('[data-km-toggle="1"]')
-    page.wait_for_selector("#km-label-1")
+    # by keyboard before reading or reordering them.
+    for i in (0, 1):
+        toggle = f'.km-row-toggle[data-km-toggle="{i}"]'
+        _expect(page.get_attribute(toggle, "aria-expanded") == "false",
+                f"Key Message row {i} toggle was not aria-expanded='false' on load")
+        _expect(page.get_attribute(toggle, "aria-controls") == f"km-edit-{i}",
+                f"Key Message row {i} toggle aria-controls was not 'km-edit-{i}'")
+        page.focus(toggle)
+        page.keyboard.press("Enter")
+        page.wait_for_selector(f"#km-edit-{i} #km-label-{i}")
+        _expect(page.get_attribute(toggle, "aria-expanded") == "true",
+                f"Key Message row {i} toggle was not aria-expanded='true' after Enter")
     page.wait_for_selector('[data-km-up="1"]')
 
     label0_before = page.input_value("#km-label-0")
@@ -1212,6 +1229,44 @@ def skip_pause_checked_zero_included_still_pauses(page, base):
         FAKES["reconcile_all_excluded"] = False
 
 
+def account_controls_and_admin_users(page, base):
+    """Office user: Sign out visible, Users hidden. Admin: blocks one account
+    (its next request gets 401) and erases another through the confirm dialog."""
+    page.goto(base + "/#/home")
+    page.wait_for_selector("#sb-signout:not([hidden])")
+    _expect(page.locator("#sb-users").is_hidden(), "non-admin sees the Users item")
+    _expect("office@example.com" in (page.get_attribute("#sb-signout", "title") or ""),
+            "Sign out control does not name the signed-in account")
+
+    browser = page.context.browser
+    target = browser.new_context()
+    target.add_cookies([{"name": SESSION_COOKIE, "value": create_login("target@example.com"), "url": base}])
+    create_login("erase@example.com")
+    _expect(target.request.get(base + "/api/me").status == 200, "target user cannot sign in")
+
+    admin = browser.new_context()
+    admin.add_cookies([{"name": SESSION_COOKIE, "value": create_login("admin@example.com"), "url": base}])
+    apage = admin.new_page()
+    try:
+        apage.goto(base + "/#/users")
+        apage.wait_for_selector("#sb-users:not([hidden])")
+        apage.wait_for_selector(".trow:has-text('target@example.com')")
+        _expect(apage.locator(".trow:has-text('admin@example.com') button").count() == 0,
+                "admin row offers actions on the admin's own account")
+
+        apage.click(".trow:has-text('target@example.com') button:has-text('Block')")
+        apage.wait_for_selector(".trow:has-text('target@example.com') .badge:has-text('Blocked')")
+        _expect(target.request.get(base + "/api/me").status == 401,
+                "blocked user's login session still works")
+
+        apage.click(".trow:has-text('erase@example.com') button:has-text('Erase')")
+        apage.click("[data-confirm-continue]")
+        apage.wait_for_selector(".trow:has-text('erase@example.com')", state="detached")
+    finally:
+        admin.close()
+        target.close()
+
+
 def no_console_errors(page, base):
     _expect(_CONSOLE_ERRORS == [], f"console errors: {_CONSOLE_ERRORS}")
     _expect(_PAGE_ERRORS == [], f"page errors: {_PAGE_ERRORS}")
@@ -1237,11 +1292,10 @@ def main():
 
         pw = sync_playwright().start()
         browser = pw.chromium.launch(headless=True)
-        # http_credentials answers the Basic challenge for navigations,
-        # fetch/XHR, EventSource, and downloads from one place.
-        context = browser.new_context(
-            http_credentials={"username": "office", "password": "test-password"}
-        )
+        # One login session cookie covers navigations, fetch/XHR,
+        # EventSource, and downloads. The startup hook has run db.init().
+        context = browser.new_context()
+        context.add_cookies([{"name": SESSION_COOKIE, "value": create_login(), "url": base}])
         page = context.new_page()
         _register_network_capture(page)
         page.on("console", lambda msg: _CONSOLE_ERRORS.append(msg.text)
@@ -1272,6 +1326,7 @@ def main():
             ("skip_pause_unchecked_sends_false_and_pauses", skip_pause_unchecked_sends_false_and_pauses),
             ("skip_pause_checked_runs_straight_through", skip_pause_checked_runs_straight_through),
             ("skip_pause_checked_zero_included_still_pauses", skip_pause_checked_zero_included_still_pauses),
+            ("account_controls_and_admin_users", account_controls_and_admin_users),
             ("no_console_errors", no_console_errors),
         ]
 
