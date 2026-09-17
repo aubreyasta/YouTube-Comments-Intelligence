@@ -253,6 +253,10 @@ def test_expired_session_is_rejected_and_deleted():
     print("  ok  an expired session gets 401 and its row is deleted")
 
 
+def _users_by_email(admin):
+    return {u["email"]: u for u in admin.get("/api/users").json()}
+
+
 def test_admin_user_management():
     admin = login(_client(), "admin@example.com")
     member = login(_client(), "member@example.com")
@@ -266,10 +270,9 @@ def test_admin_user_management():
         assert resp.status_code == 403, resp.status_code
         assert resp.json()["error"] == "FORBIDDEN"
 
-    users = admin.get("/api/users").json()
-    by_email = {u["email"]: u for u in users}
+    by_email = _users_by_email(admin)
     assert set(by_email["member@example.com"]) == {
-        "id", "email", "name", "blocked", "isAdmin", "createdAt", "lastLoginAt"}
+        "id", "email", "name", "blocked", "isAdmin", "lastLoginAt"}
     assert by_email["admin@example.com"]["isAdmin"] is True
 
     assert admin.patch(f"/api/users/{admin_id}", json={"blocked": True}).status_code == 422
@@ -277,15 +280,16 @@ def test_admin_user_management():
     assert admin.patch("/api/users/missing", json={"blocked": True}).status_code == 404
     assert admin.delete("/api/users/missing").status_code == 404
 
-    resp = admin.patch(f"/api/users/{member_id}", json={"blocked": True})
-    assert resp.status_code == 200 and resp.json()["blocked"] is True
+    assert admin.patch(f"/api/users/{member_id}", json={"blocked": True}).status_code == 204
+    assert _users_by_email(admin)["member@example.com"]["blocked"] is True
     assert member.get("/api/sessions").status_code == 401, "a blocked user's open session still works"
     assert _session_rows("member@example.com") == []
 
     _, resp, _ = _callback({"email": "member@example.com"})
     assert resp.status_code == 403, "a blocked user signed in again"
 
-    assert admin.patch(f"/api/users/{member_id}", json={"blocked": False}).json()["blocked"] is False
+    assert admin.patch(f"/api/users/{member_id}", json={"blocked": False}).status_code == 204
+    assert _users_by_email(admin)["member@example.com"]["blocked"] is False
     _, resp, _ = _callback({"email": "member@example.com"})
     assert resp.status_code == 302, "an unblocked user cannot sign in"
 

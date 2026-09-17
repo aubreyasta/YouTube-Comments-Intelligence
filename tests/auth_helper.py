@@ -25,12 +25,12 @@ SESSION_COOKIE = "yi_session"
 
 def create_login(email="office@example.com"):
     """Create (or reuse) the user and a fresh 7-day login session. Returns the token."""
-    import hashlib
     import secrets
     import uuid
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     import db
+    import server
 
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
@@ -42,8 +42,8 @@ def create_login(email="office@example.com"):
         user_id = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()["id"]
         conn.execute(
             "INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-            (hashlib.sha256(token.encode()).hexdigest(), user_id, now.isoformat(),
-             (now + timedelta(days=7)).isoformat()))
+            (server._token_hash(token), user_id, now.isoformat(),
+             (now + server._SESSION_TTL).isoformat()))
         conn.commit()
     finally:
         conn.close()

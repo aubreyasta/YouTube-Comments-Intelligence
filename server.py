@@ -113,6 +113,15 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _is_admin(email: str) -> bool:
+    return email in _env_set("ADMIN_EMAILS")
+
+
+def _delete_login_session(conn, token_hash: str) -> None:
+    conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+    conn.commit()
+
+
 def _session_user(token: str | None) -> dict | None:
     """The signed-in user for a session cookie, or None.
 
@@ -131,11 +140,10 @@ def _session_user(token: str | None) -> dict | None:
         if row is None:
             return None
         if row["blocked"] or row["expires_at"] <= _now():
-            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
-            conn.commit()
+            _delete_login_session(conn, token_hash)
             return None
         return {"id": row["id"], "email": row["email"], "name": row["name"],
-                "isAdmin": row["email"] in _env_set("ADMIN_EMAILS")}
+                "isAdmin": _is_admin(row["email"])}
     finally:
         conn.close()
 
@@ -160,6 +168,9 @@ async def _require_session(request: Request, call_next):
     return await call_next(request)
 
 
+# Self-contained on purpose: the middleware keeps style.css from a signed-out
+# browser, so this page repeats the DESIGN.md ink, border, and pink tokens
+# inline. Update it when those tokens change.
 _SIGNIN_DENIED_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -277,24 +288,25 @@ def auth_callback(request: Request, code: str = "", state: str = ""):
     name = claims.get("name") if isinstance(claims.get("name"), str) else None
 
     token = secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc)
+    now = _now()
+    expires_at = (datetime.now(timezone.utc) + _SESSION_TTL).isoformat()
     conn = db.get_conn()
     try:
         conn.execute(
             "INSERT INTO users (id, email, name, created_at) VALUES (?,?,?,?) "
             "ON CONFLICT(email) DO NOTHING",
-            (str(uuid.uuid4()), email, name, now.isoformat()))
+            (str(uuid.uuid4()), email, name, now))
         user = conn.execute("SELECT id, blocked FROM users WHERE email = ?", (email,)).fetchone()
         if user["blocked"]:
             conn.commit()
             logger.warning("Google sign-in rejected: user is blocked")
             return _signin_denied()
         conn.execute("UPDATE users SET name = COALESCE(?, name), last_login_at = ? WHERE id = ?",
-                     (name, now.isoformat(), user["id"]))
-        conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now.isoformat(),))
+                     (name, now, user["id"]))
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now,))
         conn.execute(
             "INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-            (_token_hash(token), user["id"], now.isoformat(), (now + _SESSION_TTL).isoformat()))
+            (_token_hash(token), user["id"], now, expires_at))
         conn.commit()
     finally:
         conn.close()
@@ -312,8 +324,7 @@ def auth_logout(request: Request):
     if token:
         conn = db.get_conn()
         try:
-            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (_token_hash(token),))
-            conn.commit()
+            _delete_login_session(conn, _token_hash(token))
         finally:
             conn.close()
     resp = Response(status_code=204)
@@ -793,8 +804,7 @@ def _ser_user(row) -> dict:
         "email": row["email"],
         "name": row["name"],
         "blocked": bool(row["blocked"]),
-        "isAdmin": row["email"] in _env_set("ADMIN_EMAILS"),
-        "createdAt": row["created_at"],
+        "isAdmin": _is_admin(row["email"]),
         "lastLoginAt": row["last_login_at"],
     }
 
@@ -818,7 +828,7 @@ def list_users(request: Request):
         conn.close()
 
 
-@app.patch("/api/users/{user_id}")
+@app.patch("/api/users/{user_id}", status_code=204)
 def set_user_blocked(user_id: str, body: UserBlockBody, request: Request):
     """Block or unblock a user. Blocking also ends every login session they
     hold, so an open tab loses access on its next request."""
@@ -832,7 +842,6 @@ def set_user_blocked(user_id: str, body: UserBlockBody, request: Request):
         if body.blocked:
             conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
         conn.commit()
-        return _ser_user(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
     finally:
         conn.close()
 

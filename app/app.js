@@ -3411,7 +3411,7 @@ async function renderUsers() {
   </div>`;
 
   const errEl = document.getElementById("users-err");
-  const act = async (btn, fn) => {
+  const runUserAction = async (btn, fn) => {
     btn.disabled = true;
     try {
       await fn();
@@ -3423,14 +3423,14 @@ async function renderUsers() {
     }
   };
   view.querySelectorAll("[data-block]").forEach((b) => {
-    b.addEventListener("click", () => act(b, () =>
+    b.addEventListener("click", () => runUserAction(b, () =>
       window.__liveApi.setUserBlocked(b.dataset.block, b.dataset.blocked !== "true")));
   });
   view.querySelectorAll("[data-erase]").forEach((b) => {
     const user = users.find((u) => u.id === b.dataset.erase);
     b.addEventListener("click", () => openConfirm(
       `Erase ${user.email}? This deletes the account and signs it out. Sessions it created stay. The person can sign in again unless you block the account instead.`,
-      () => act(b, () => window.__liveApi.eraseUser(user.id)),
+      () => runUserAction(b, () => window.__liveApi.eraseUser(user.id)),
       { title: "Erase user", confirmLabel: "Erase" }));
   });
 }

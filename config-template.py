@@ -50,19 +50,20 @@ SESSION_NAME = ""
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 # ---------------------------------------------------------------- LM Studio
-# Load the vision-capable Qwen3.8-27B 4-bit MLX model first. Use the exact
-# API identifier from LM Studio, or the deployment alias below.
-# LLM_BASE_URL may point at another machine or a reverse proxy (http or
-# https, optional path prefix). A remote LM Studio should require its API
-# token. Put the headers in .env as JSON, never hardcoded here:
-#   LLM_HEADERS={"Authorization": "Bearer your-token"}
-LLM_BASE_URL = "http://127.0.0.1:1234"
-LLM_MODEL = "youtube-intelligence"
-LLM_CONTEXT_LENGTH = 32768
-LLM_TIMEOUT_SECONDS = 600
-LLM_HEADERS = llm_env(os.environ)["LLM_HEADERS"]
-# True skips TLS certificate checks (self-signed https endpoints only).
-LLM_ALLOW_INSECURE = False
+# Load the vision-capable Qwen3.8-27B 4-bit MLX model first. The CLI reads
+# the same LLM_* variables from .env as the web server, with the same
+# defaults (pipeline.config_types.llm_env). See docs/setup.md for each one:
+#   LLM_BASE_URL=http://127.0.0.1:1234     (http or https, any host, optional path prefix)
+#   LLM_MODEL=<exact API identifier from LM Studio>
+#   LLM_HEADERS={"Authorization": "Bearer your-token"}   (never hardcode it here)
+#   LLM_ALLOW_INSECURE=true                (self-signed https endpoints only)
+_llm = llm_env(os.environ)
+LLM_BASE_URL = _llm["LLM_BASE_URL"]
+LLM_MODEL = _llm["LLM_MODEL"]
+LLM_CONTEXT_LENGTH = _llm["LLM_CONTEXT_LENGTH"]
+LLM_TIMEOUT_SECONDS = _llm["LLM_TIMEOUT_SECONDS"]
+LLM_HEADERS = _llm["LLM_HEADERS"]
+LLM_ALLOW_INSECURE = _llm["LLM_ALLOW_INSECURE"]
 
 # ---------------------------------------------------------------- filters
 # Languages to keep. Add codes as needed: id=Indonesian, ms=Malay,

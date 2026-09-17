@@ -296,13 +296,18 @@ def _call(cfg: PipelineConfig, method: str, path: str, payload: dict | None = No
     headers = dict(cfg.LLM_HEADERS)
     if data is not None:
         headers["Content-Type"] = "application/json"
-    tls = {"context": ssl._create_unverified_context()} if cfg.LLM_ALLOW_INSECURE else {}
+    urlopen_tls = {}
+    if cfg.LLM_ALLOW_INSECURE:
+        insecure = ssl.create_default_context()
+        insecure.check_hostname = False
+        insecure.verify_mode = ssl.CERT_NONE
+        urlopen_tls = {"context": insecure}
     retry_statuses = {429, 500, 502, 503, 504}
     last = ""
     for attempt in range(3):
         try:
             req = request.Request(base_url + path, data=data, headers=headers, method=method)
-            with request.urlopen(req, timeout=cfg.LLM_TIMEOUT_SECONDS, **tls) as response:
+            with request.urlopen(req, timeout=cfg.LLM_TIMEOUT_SECONDS, **urlopen_tls) as response:
                 raw = response.read()
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):

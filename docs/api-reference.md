@@ -50,7 +50,7 @@ Common status codes:
 | `200` | Success. |
 | `201` | Resource created. |
 | `202` | Run accepted and started in a background thread. |
-| `204` | Deletion complete. Delete routes are idempotent. |
+| `204` | Deletion, sign-out, or user block change complete. Session content delete routes are idempotent; `DELETE /users/{id}` returns `404` for an unknown user. |
 | `401` | No login session, or the session expired, or the user is blocked. |
 | `403` | The signed-in user is not an admin (`FORBIDDEN`). |
 | `404` | Resource not found. |
@@ -192,7 +192,6 @@ type User = {
   name: string | null;
   blocked: boolean;
   isAdmin: boolean;
-  createdAt: string;
   lastLoginAt: string | null;
 };
 ```
@@ -209,7 +208,7 @@ Admin only. Block or unblock a user. Blocking deletes the user's login sessions,
 { "blocked": true }
 ```
 
-Response `200`: `User`.
+Response `204`.
 
 Errors: `404` when the user does not exist; `422` when an admin blocks their own account.
 

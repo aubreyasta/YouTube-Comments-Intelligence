@@ -408,7 +408,7 @@ const liveApi = {
   },
 
   async setUserBlocked(userId, blocked) {
-    return apiJson("/api/users/" + userId, patch({ blocked }));
+    await apiFetch("/api/users/" + userId, patch({ blocked }));
   },
 
   async eraseUser(userId) {
