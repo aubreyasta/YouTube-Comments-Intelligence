@@ -5,7 +5,8 @@ Covers: startup refuses to start without the sign-in env; every path type
 (static, API, artifact download, SSE) is refused without a valid login
 session; the OAuth callback rejects a bad state and every disallowed ID
 token claim, and signs a valid user in; expired and blocked sessions stop
-working; logout ends the session; admin-only user management, including
+working; logout ends the session; a write from another origin is refused;
+admin-only user management, including
 the self-block and self-erase guards; Sessions record their creator; no
 token appears in a response body.
 
@@ -305,6 +306,25 @@ def test_admin_user_management():
     print("  ok  admin-only list/block/unblock/erase; block revokes sessions and sign-in; self-guard; createdBy")
 
 
+def test_cross_origin_writes_are_refused():
+    client = login(_client())
+    for method, path, kwargs in (("post", "/api/sessions", {"json": {"name": "CSRF"}}),
+                                 ("patch", "/api/users/missing", {"json": {"blocked": True}}),
+                                 ("delete", "/api/users/missing", {}),
+                                 ("post", "/auth/logout", {})):
+        for origin in ("https://evil.example", "http://testserver.evil.example", "null"):
+            resp = getattr(client, method)(path, headers={"Origin": origin}, **kwargs)
+            assert resp.status_code == 403, (method, path, origin, resp.status_code)
+            assert resp.json()["error"] == "CROSS_ORIGIN", resp.text
+    assert client.get("/api/me", headers={"Origin": "https://evil.example"}).status_code == 200, \
+        "a read must not be refused by the origin check"
+    assert client.post("/api/sessions", json={"name": "Same origin"},
+                       headers={"Origin": "http://testserver"}).status_code == 201
+    assert client.post("/api/sessions", json={"name": "No origin"}).status_code == 201, \
+        "a non-browser client sends no Origin and must still work"
+    print("  ok  POST, PATCH, and DELETE from another origin get 403; same origin and no Origin pass")
+
+
 def test_authenticated_sse_streams():
     client = login(_client())
     with patch.object(server, "_SSE_HEARTBEAT_SECONDS", 0.2):
@@ -341,6 +361,7 @@ if __name__ == "__main__":
         test_callback_signs_in_and_logout_ends_session,
         test_expired_session_is_rejected_and_deleted,
         test_admin_user_management,
+        test_cross_origin_writes_are_refused,
         test_authenticated_sse_streams,
     ]
     failed = 0

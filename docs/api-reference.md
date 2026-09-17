@@ -43,6 +43,8 @@ A request without a valid login session gets:
 - `401` with `{"error": "UNAUTHENTICATED", "message": "Sign in required.", "field": null}` on `/api/*`.
 - `302` to `/auth/login` on any other path, including the frontend and static files.
 
+A `POST`, `PATCH`, or `DELETE` whose `Origin` header is not the origin of `APP_BASE_URL` gets `403` with `{"error": "CROSS_ORIGIN", "message": "Request from another site refused.", "field": null}` on every path, before the session check. A request without an `Origin` header, such as from `curl`, is not checked.
+
 Common status codes:
 
 | Status | Meaning |
@@ -52,7 +54,7 @@ Common status codes:
 | `202` | Run accepted and started in a background thread. |
 | `204` | Deletion, sign-out, or user block change complete. Session content delete routes are idempotent; `DELETE /users/{id}` returns `404` for an unknown user. |
 | `401` | No login session, or the session expired, or the user is blocked. |
-| `403` | The signed-in user is not an admin (`FORBIDDEN`). |
+| `403` | The signed-in user is not an admin (`FORBIDDEN`), or a write came from another origin (`CROSS_ORIGIN`). |
 | `404` | Resource not found. |
 | `409` | Current state prevents the operation. |
 | `413` | Upload exceeds 10 MB. |

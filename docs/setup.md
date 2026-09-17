@@ -235,6 +235,7 @@ After a provider or model change, run one real Session through the web app again
 | Symptom | Cause | Fix |
 |---|---|---|
 | `RuntimeError: GOOGLE_CLIENT_ID must be set before the server can start.` (or another sign-in variable) | `.env` is missing or the variable is empty | Set every variable in [Configure the backend](#configure-the-backend) and restart FastAPI. `APP_PASSWORD` is no longer used. |
+| Pages load, but every save or create fails with `Request from another site refused.` (`403 CROSS_ORIGIN`) | The browser opened the app at a different address than `APP_BASE_URL`, such as `127.0.0.1` instead of `localhost` | Open the app at `APP_BASE_URL` exactly. Behind a proxy or tunnel, set `APP_BASE_URL` to the public address. |
 | Google shows `Error 400: redirect_uri_mismatch` | The OAuth client does not list `<APP_BASE_URL>/auth/callback`, or the browser opened a different host | Add the exact redirect URI to the OAuth client, and open the app at `APP_BASE_URL`. |
 | "This Google account can't sign in" | The account is personal, outside `AUTH_ALLOWED_DOMAINS`, or blocked | Sign in with a Workspace account in an allowed domain. An admin can unblock the account on the Users screen. |
 | Users screen is missing | The signed-in email is not in `ADMIN_EMAILS` | Add the email to `ADMIN_EMAILS` and restart FastAPI. |

@@ -257,6 +257,8 @@ def _start_server():
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
+    # The browser's Origin must match APP_BASE_URL or every write gets 403.
+    os.environ["APP_BASE_URL"] = f"http://127.0.0.1:{port}"
 
     cfg = uvicorn.Config(server.app, host="127.0.0.1", port=port,
                          log_level="warning", access_log=False)

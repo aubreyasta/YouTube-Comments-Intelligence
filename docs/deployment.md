@@ -491,6 +491,8 @@ An `.env` or code change requires a FastAPI restart. A FastAPI or `cloudflared` 
 
 **Google shows `redirect_uri_mismatch`.** Add `<APP_BASE_URL>/auth/callback` to the OAuth client exactly, and open the app at `APP_BASE_URL`.
 
+**Every save or create fails with `403 CROSS_ORIGIN`.** The browser address differs from `APP_BASE_URL`. Set `APP_BASE_URL` to the public address users open, then restart FastAPI.
+
 **LM Studio does not answer on port 1234.** Run `lms daemon up`, `lms server start --port 1234`, and `lms server status`.
 
 **Preflight reports a missing model.** Compare `LLM_MODEL` with the exact identifier returned by `curl -s http://127.0.0.1:1234/api/v1/models`.

@@ -65,6 +65,7 @@ _OAUTH_TTL_SECONDS = 600
 # Reachable without a login session. Logout is public so a client with an
 # already-expired cookie can still clear it.
 _PUBLIC_PATHS = {"/auth/login", "/auth/callback", "/auth/logout"}
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def _env(name: str) -> str:
@@ -77,6 +78,12 @@ def _env_set(name: str) -> set[str]:
 
 def _secure_cookies() -> bool:
     return _env("APP_BASE_URL").lower().startswith("https://")
+
+
+def _app_origin() -> str:
+    """APP_BASE_URL as a browser writes it in the Origin header."""
+    url = urlsplit(_env("APP_BASE_URL"))
+    return f"{url.scheme.lower()}://{url.netloc.lower()}"
 
 
 @app.on_event("startup")
@@ -154,8 +161,15 @@ async def _require_session(request: Request, call_next):
     mount, artifact downloads, and the SSE stream.
 
     The cookie is SameSite=Lax, so a cross-site form or fetch cannot carry
-    it on a POST, PATCH, or DELETE.
+    it on a POST, PATCH, or DELETE. The Origin check also refuses a write from
+    a same-site origin, such as another app on a sibling subdomain. Browsers
+    send Origin on every write; a request without it is not from a browser,
+    so it carries no ambient cookie to forge with.
     """
+    origin = request.headers.get("origin")
+    if request.method not in _SAFE_METHODS and origin is not None and origin != _app_origin():
+        return JSONResponse(status_code=403, content={
+            "error": "CROSS_ORIGIN", "message": "Request from another site refused.", "field": None})
     if request.url.path in _PUBLIC_PATHS:
         return await call_next(request)
     user = await run_in_threadpool(_session_user, request.cookies.get(_SESSION_COOKIE))
