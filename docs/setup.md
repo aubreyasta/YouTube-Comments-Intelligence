@@ -79,13 +79,30 @@ See [Deployment](deployment.md) for model smoke tests and real-device acceptance
 
 ---
 
+## Create the Google sign-in client
+
+Users sign in with their Google Workspace account. Create one OAuth client per deployment URL:
+
+1. In Google Cloud Console, open **APIs & Services > OAuth consent screen**. Choose **Internal** so only accounts in your Workspace organization can use it.
+2. Open **APIs & Services > Credentials > Create credentials > OAuth client ID**. Choose **Web application**.
+3. Under **Authorized redirect URIs**, add `<APP_BASE_URL>/auth/callback`. For local development, add `http://localhost:8000/auth/callback`.
+4. Copy the client ID and client secret into `.env` (next section).
+
+The redirect URI must match `APP_BASE_URL` exactly, including scheme and port. A URL that changes on restart, such as a Cloudflare quick tunnel, breaks sign-in.
+
+---
+
 ## Configure the backend
 
 Create `.env` in the repository root:
 
 ```text
 YOUTUBE_API_KEY=<YouTube Data API v3 key>
-APP_PASSWORD=<long unique shared password>
+GOOGLE_CLIENT_ID=<OAuth client ID>
+GOOGLE_CLIENT_SECRET=<OAuth client secret>
+APP_BASE_URL=http://localhost:8000
+AUTH_ALLOWED_DOMAINS=<company.com>
+ADMIN_EMAILS=<admin@company.com>
 LLM_BASE_URL=http://127.0.0.1:1234
 LLM_MODEL=<exact model key returned by LM Studio>
 LLM_CONTEXT_LENGTH=32768
@@ -94,7 +111,10 @@ CLASSIFY_BATCH_SIZE=16
 ```
 
 - `YOUTUBE_API_KEY` stays on the server. The browser never receives it.
-- `APP_PASSWORD` protects the frontend, API, downloads, and SSE stream. The server refuses to start when it is empty.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_BASE_URL`, and `AUTH_ALLOWED_DOMAINS` are required. The server refuses to start when one is empty. Sign-in protects the frontend, API, downloads, and SSE stream.
+- `APP_BASE_URL` is the URL users open, with no trailing path. Use `https` for any deployment reached over the internet; the session cookie is `Secure` only then.
+- `AUTH_ALLOWED_DOMAINS` is a comma-separated list of Google Workspace domains. Personal Google accounts cannot sign in.
+- `ADMIN_EMAILS` (optional) is a comma-separated list of admin emails. Admins see the Users screen and can block or erase users. Restart FastAPI after a change.
 - `LLM_BASE_URL` is an `http` or `https` URL with any host and an optional path prefix. It must not contain credentials, a query, or a fragment.
 - `LLM_HEADERS` (optional) is a JSON object of headers sent on every model request, for example `{"Authorization": "Bearer <LM Studio API token>"}`. Values must be single-line strings. Error messages never include them.
 - `LLM_ALLOW_INSECURE=true` (optional) skips TLS certificate verification for an `https` `LLM_BASE_URL`. Use it only for a self-signed endpoint on a network you control.
@@ -125,35 +145,27 @@ python server.py
 
 The backend binds `127.0.0.1:8000`. It serves the frontend and API from one origin.
 
-Check the authentication boundary from a second terminal:
+Check the sign-in boundary from a second terminal:
 
 ```bash
 curl -i http://127.0.0.1:8000/
-curl -i -u office:wrong-password http://127.0.0.1:8000/api/sessions
-curl -i -u office:<the-password> http://127.0.0.1:8000/api/sessions
+curl -i http://127.0.0.1:8000/api/sessions
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 ```
 
 Require these results:
 
-- Missing or wrong credentials return `401`.
-- Every `401` includes `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"`.
-- Correct credentials return `200`.
+- `/` returns `302` to `/auth/login`.
+- `/api/sessions` returns `401` with `"error": "UNAUTHENTICATED"`.
 - FastAPI listens only on `127.0.0.1:8000`.
 
-Open <http://127.0.0.1:8000>, authenticate, and create a Session.
+Open the `APP_BASE_URL` (for local development, <http://localhost:8000>, not `127.0.0.1`, so the redirect URI matches). Sign in with a Workspace account and create a Session.
 
 ---
 
 ## Publish the application
 
-Start a free Cloudflare quick tunnel:
-
-```bash
-cloudflared tunnel --url http://127.0.0.1:8000
-```
-
-Share the generated `https://<random>.trycloudflare.com` URL and the password through separate trusted channels. The URL changes whenever `cloudflared` restarts.
+Publish port 8000 at a stable `https` hostname, such as a Cloudflare named tunnel or a reverse proxy with a domain. Set `APP_BASE_URL` to that hostname and add `<APP_BASE_URL>/auth/callback` to the OAuth client. A quick tunnel's random `trycloudflare.com` hostname does not work, because it changes on every restart.
 
 Publish only port 8000. Never publish LM Studio on port 1234.
 
@@ -210,7 +222,7 @@ node --check app/app.js
 node --check app/live.js
 ```
 
-The accepted baseline (2026-09-11) is 19 scripts and 173 assertions, including `tests/e2e_product_flow.py` 20/20.
+The accepted baseline (2026-09-17) is 22 scripts, including `tests/e2e_product_flow.py` 23/23.
 
 Open `app/self-check.html` for the frontend state-machine checks.
 
@@ -222,7 +234,10 @@ After a provider or model change, run one real Session through the web app again
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `RuntimeError: APP_PASSWORD must be set before the server can start.` | `.env` is missing or `APP_PASSWORD` is empty | Create `.env` in the repository root and restart FastAPI. |
+| `RuntimeError: GOOGLE_CLIENT_ID must be set before the server can start.` (or another sign-in variable) | `.env` is missing or the variable is empty | Set every variable in [Configure the backend](#configure-the-backend) and restart FastAPI. `APP_PASSWORD` is no longer used. |
+| Google shows `Error 400: redirect_uri_mismatch` | The OAuth client does not list `<APP_BASE_URL>/auth/callback`, or the browser opened a different host | Add the exact redirect URI to the OAuth client, and open the app at `APP_BASE_URL`. |
+| "This Google account can't sign in" | The account is personal, outside `AUTH_ALLOWED_DOMAINS`, or blocked | Sign in with a Workspace account in an allowed domain. An admin can unblock the account on the Users screen. |
+| Users screen is missing | The signed-in email is not in `ADMIN_EMAILS` | Add the email to `ADMIN_EMAILS` and restart FastAPI. |
 | LM Studio connection failure | The daemon or API server is stopped | Run `lms daemon up`, then `lms server start --port 1234`. |
 | `LM Studio request failed (HTTP 401).` | LM Studio requires a token and `LLM_HEADERS` is missing or wrong | Set `LLM_HEADERS` to the current token. See [Using a remote LM Studio](#using-a-remote-lm-studio). |
 | `LLM_HEADERS must be a JSON object of string values` | `LLM_HEADERS` is not valid JSON | Quote the header name and value with double quotes, as in the example. |

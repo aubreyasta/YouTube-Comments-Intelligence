@@ -9,7 +9,7 @@ Related: [Setup](setup.md), [Architecture](architecture.md), [Product](../README
 ## Conventions
 
 - FastAPI binds `127.0.0.1:8000`. The public Cloudflare URL forwards to that origin.
-- Fail-closed HTTP Basic Auth protects every request before routing. Any non-empty username works with the shared `APP_PASSWORD`.
+- A login session protects every request before routing, except `/auth/login`, `/auth/callback`, and `/auth/logout`. Users sign in with Google. See [Authentication](#authentication).
 - JSON responses use `camelCase`. SSE progress events use `snake_case` because they carry `adapter.py` dictionaries directly.
 - IDs are UUID v4. Timestamps are ISO 8601 with a timezone.
 - Uploads use `multipart/form-data`. SSE uses `text/event-stream`. Downloads return their recorded MIME type.
@@ -38,11 +38,10 @@ Example:
 
 FastAPI `HTTPException` and request-validation handlers both return this flat object. Clients never receive a `detail` envelope.
 
-Authentication failures return `401` and include:
+A request without a valid login session gets:
 
-```text
-WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"
-```
+- `401` with `{"error": "UNAUTHENTICATED", "message": "Sign in required.", "field": null}` on `/api/*`.
+- `302` to `/auth/login` on any other path, including the frontend and static files.
 
 Common status codes:
 
@@ -52,7 +51,8 @@ Common status codes:
 | `201` | Resource created. |
 | `202` | Run accepted and started in a background thread. |
 | `204` | Deletion complete. Delete routes are idempotent. |
-| `401` | Missing, malformed, or wrong Basic Auth credentials. |
+| `401` | No login session, or the session expired, or the user is blocked. |
+| `403` | The signed-in user is not an admin (`FORBIDDEN`). |
 | `404` | Resource not found. |
 | `409` | Current state prevents the operation. |
 | `413` | Upload exceeds 10 MB. |
@@ -154,6 +154,73 @@ type Artifact = {
 
 ---
 
+## Authentication
+
+Google OAuth (authorization code flow with PKCE) signs users in. The `/auth/*` routes sit at the origin root, outside `/api`.
+
+### `GET /auth/login`
+
+Redirect `302` to Google's account picker. Sets the short-lived `yi_oauth` cookie (state, nonce, PKCE verifier; path `/auth`, 10 minutes).
+
+### `GET /auth/callback`
+
+Google redirects here. The server exchanges the code, then requires a matching state and nonce, `email_verified`, and an `hd` claim in `AUTH_ALLOWED_DOMAINS`. A personal Google account has no `hd` claim and fails.
+
+- Success: creates the user on first sign-in, sets the `yi_session` cookie (HttpOnly, SameSite=Lax, `Secure` when `APP_BASE_URL` is `https`, 7 days), and redirects `302` to `/`.
+- Failure: `403` HTML page "This Google account can't sign in". The page is the same for every cause, including a blocked user.
+
+The database stores only the SHA-256 hash of the session token.
+
+### `POST /auth/logout`
+
+Delete the login session and clear the cookie. Response `204`.
+
+### `GET /me`
+
+```json
+{ "email": "person@example.com", "name": "Person", "isAdmin": false }
+```
+
+`isAdmin` is true when the email is in `ADMIN_EMAILS`. The server reads the list on every request.
+
+### User object
+
+```ts
+type User = {
+  id: string;
+  email: string;
+  name: string | null;
+  blocked: boolean;
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+```
+
+### `GET /users`
+
+Admin only. List users, most recent sign-in first. Users who never signed in come last.
+
+### `PATCH /users/{id}`
+
+Admin only. Block or unblock a user. Blocking deletes the user's login sessions, so the next request from that user gets `401`.
+
+```json
+{ "blocked": true }
+```
+
+Response `200`: `User`.
+
+Errors: `404` when the user does not exist; `422` when an admin blocks their own account.
+
+### `DELETE /users/{id}`
+
+Admin only. Erase a user and their login sessions. Sessions they created stay, with `createdBy` set to `null`. An erased user in an allowed domain can sign in again; block the user to keep them out.
+
+Response `204`. Errors: `404` when the user does not exist; `422` when an admin erases their own account.
+
+---
+
 ## Sessions
 
 ### `POST /sessions`
@@ -177,6 +244,7 @@ Response `201`:
   "status": "ready",
   "updatedAt": "...",
   "createdAt": "...",
+  "createdBy": "person@example.com",
   "latestRun": null,
   "keyMessages": {
     "status": "empty",
@@ -186,6 +254,8 @@ Response `201`:
   }
 }
 ```
+
+`createdBy` is the creator's email. It is `null` for Sessions created before sign-in existed or by an erased user. Every signed-in user can read and change every Session.
 
 Error: `422` when `name` is empty.
 
@@ -623,4 +693,4 @@ All five CSVs use UTF-8, comma separators, a header row, `\n` line endings, one-
 
 ## Static frontend
 
-FastAPI serves `app/` after all `/api` routes. `/` serves `index.html`; assets such as `/app.js` and `/style.css` use the same authenticated origin. No CORS configuration or second frontend server is required.
+FastAPI serves `app/` after all `/api` routes. `/` serves `index.html`; assets such as `/app.js` and `/style.css` use the same signed-in origin. No CORS configuration or second frontend server is required.

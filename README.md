@@ -81,7 +81,7 @@ python server.py
 # http://localhost:8000
 ```
 
-The server binds loopback and protects every route with one shared HTTP Basic Auth password. A free Cloudflare quick tunnel publishes the service without exposing a local port directly.
+The server binds loopback. Users sign in with their Google Workspace account, and admins can block or erase users. A Cloudflare named tunnel publishes the service at a stable HTTPS hostname without exposing a local port directly.
 
 There is also a CLI (`python run.py`, configured through `config.py`). It is for debugging the pipeline without the web layer. It is not the product and it is not maintained to the same standard.
 
@@ -110,7 +110,7 @@ The server reaches LM Studio on the same machine or on a private-network host th
 
 ## Status
 
-**Finished (2026-09-11).** The pipeline, backend, frontend, Basic Auth, six public artifacts, merged classification pass, and LM Studio `LLM_*` provider boundary are shipped.
+**Finished (2026-09-11).** The pipeline, backend, frontend, six public artifacts, merged classification pass, and LM Studio `LLM_*` provider boundary are shipped.
 
 End-to-end acceptance passed on 2026-09-11:
 

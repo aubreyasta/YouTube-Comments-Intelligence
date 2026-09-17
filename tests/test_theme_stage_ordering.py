@@ -36,7 +36,7 @@ import storage
 _ORIG_STORAGE_ROOT = storage._ROOT
 storage._ROOT = tempfile.mkdtemp()
 
-os.environ.setdefault("APP_PASSWORD", "test-password")
+from auth_helper import login  # sets the sign-in env the startup hook requires
 
 from starlette.testclient import TestClient
 
@@ -44,7 +44,7 @@ import server
 import adapter
 
 db.init()
-client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3QtcGFzc3dvcmQ="})
+client = login(TestClient(server.app))
 
 BUILD_SECONDS = 0.3
 

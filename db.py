@@ -4,11 +4,34 @@ from pathlib import Path
 _DB_PATH = Path("data/app.db")
 
 _SCHEMA = """
+-- People who have signed in with Google. Admin rights are not stored: they
+-- come from ADMIN_EMAILS on every request (server._session_user).
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    name          TEXT,
+    blocked       INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    last_login_at TEXT
+);
+
+-- Login sessions. The cookie holds a random token; only its SHA-256 is
+-- stored, so a copy of this file cannot be replayed as a cookie.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id                   TEXT PRIMARY KEY,
     name                 TEXT NOT NULL,
     created_at           TEXT NOT NULL,
     updated_at           TEXT NOT NULL,
+    -- The user who created the Session. NULL for Sessions created before
+    -- sign-in existed, or after that user was erased.
+    created_by           TEXT REFERENCES users(id) ON DELETE SET NULL,
     -- Session-level Key Messages draft state. One draft per session; the
     -- messages themselves live in key_messages below. status matches the
     -- KeyMessageDraft contract (empty|drafting|ready|stale|failed).
@@ -137,6 +160,11 @@ def init() -> None:
             conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
         if "progress_detail" not in cols:
             conn.execute("ALTER TABLE runs ADD COLUMN progress_detail TEXT")
+        session_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        if "created_by" not in session_cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN created_by TEXT "
+                "REFERENCES users(id) ON DELETE SET NULL")
         bp_cols = {row[1] for row in conn.execute("PRAGMA table_info(brief_points)")}
         if "source" not in bp_cols:
             conn.execute(

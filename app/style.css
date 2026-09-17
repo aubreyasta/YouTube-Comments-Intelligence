@@ -97,7 +97,9 @@ a:hover { color: var(--pink-deep); text-decoration: underline; }
   border: 1px solid transparent; background: none; padding: 0; cursor: pointer;
 }
 a.sb-item { text-decoration: none; }
-a.sb-item:hover { color: var(--pink); background: var(--pink-tint); }
+a.sb-item:hover, button.sb-item:hover { color: var(--pink); background: var(--pink-tint); }
+.sb-item[hidden] { display: none; }
+.sb-foot { margin-top: auto; }
 .sb-item.active {
   background: var(--pink-tint); border-color: var(--pink-border); color: var(--pink);
 }

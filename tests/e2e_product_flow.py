@@ -33,9 +33,7 @@ import uvicorn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("YOUTUBE_API_KEY", "e2e-test-key")
-# server refuses to start without APP_PASSWORD, and its Basic Auth
-# middleware guards every route. Set before import so the startup hook sees it.
-os.environ["APP_PASSWORD"] = "test-password"
+from auth_helper import SESSION_COOKIE, create_login  # sets the sign-in env; import before server
 
 # db._DB_PATH and storage._ROOT are module globals dereferenced per
 # call (not read once at import time), so reassigning them here before
@@ -1229,6 +1227,44 @@ def skip_pause_checked_zero_included_still_pauses(page, base):
         FAKES["reconcile_all_excluded"] = False
 
 
+def account_controls_and_admin_users(page, base):
+    """Office user: Sign out visible, Users hidden. Admin: blocks one account
+    (its next request gets 401) and erases another through the confirm dialog."""
+    page.goto(base + "/#/home")
+    page.wait_for_selector("#sb-signout:not([hidden])")
+    _expect(page.locator("#sb-users").is_hidden(), "non-admin sees the Users item")
+    _expect("office@example.com" in (page.get_attribute("#sb-signout", "title") or ""),
+            "Sign out control does not name the signed-in account")
+
+    browser = page.context.browser
+    target = browser.new_context()
+    target.add_cookies([{"name": SESSION_COOKIE, "value": create_login("target@example.com"), "url": base}])
+    create_login("erase@example.com")
+    _expect(target.request.get(base + "/api/me").status == 200, "target user cannot sign in")
+
+    admin = browser.new_context()
+    admin.add_cookies([{"name": SESSION_COOKIE, "value": create_login("admin@example.com"), "url": base}])
+    apage = admin.new_page()
+    try:
+        apage.goto(base + "/#/users")
+        apage.wait_for_selector("#sb-users:not([hidden])")
+        apage.wait_for_selector(".trow:has-text('target@example.com')")
+        _expect(apage.locator(".trow:has-text('admin@example.com') button").count() == 0,
+                "admin row offers actions on the admin's own account")
+
+        apage.click(".trow:has-text('target@example.com') button:has-text('Block')")
+        apage.wait_for_selector(".trow:has-text('target@example.com') .badge:has-text('Blocked')")
+        _expect(target.request.get(base + "/api/me").status == 401,
+                "blocked user's login session still works")
+
+        apage.click(".trow:has-text('erase@example.com') button:has-text('Erase')")
+        apage.click("[data-confirm-continue]")
+        apage.wait_for_selector(".trow:has-text('erase@example.com')", state="detached")
+    finally:
+        admin.close()
+        target.close()
+
+
 def no_console_errors(page, base):
     _expect(_CONSOLE_ERRORS == [], f"console errors: {_CONSOLE_ERRORS}")
     _expect(_PAGE_ERRORS == [], f"page errors: {_PAGE_ERRORS}")
@@ -1254,11 +1290,10 @@ def main():
 
         pw = sync_playwright().start()
         browser = pw.chromium.launch(headless=True)
-        # http_credentials answers the Basic challenge for navigations,
-        # fetch/XHR, EventSource, and downloads from one place.
-        context = browser.new_context(
-            http_credentials={"username": "office", "password": "test-password"}
-        )
+        # One login session cookie covers navigations, fetch/XHR,
+        # EventSource, and downloads. The startup hook has run db.init().
+        context = browser.new_context()
+        context.add_cookies([{"name": SESSION_COOKIE, "value": create_login(), "url": base}])
         page = context.new_page()
         _register_network_capture(page)
         page.on("console", lambda msg: _CONSOLE_ERRORS.append(msg.text)
@@ -1289,6 +1324,7 @@ def main():
             ("skip_pause_unchecked_sends_false_and_pauses", skip_pause_unchecked_sends_false_and_pauses),
             ("skip_pause_checked_runs_straight_through", skip_pause_checked_runs_straight_through),
             ("skip_pause_checked_zero_included_still_pauses", skip_pause_checked_zero_included_still_pauses),
+            ("account_controls_and_admin_users", account_controls_and_admin_users),
             ("no_console_errors", no_console_errors),
         ]
 

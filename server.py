@@ -1,13 +1,12 @@
-# Binds 127.0.0.1:8000. Reached from the public internet through a cloudflared
-# quick tunnel whose only target is that loopback address, so this process is
-# the security boundary: HTTP Basic Auth below guards every path, including
-# static files, downloads, and SSE. Authentication is the whole model - every
-# authenticated client shares one workspace and there is no authorization.
+# Reached from the public internet through a tunnel or reverse proxy, so this
+# process is the security boundary: Google sign-in below guards every path,
+# including static files, downloads, and SSE. Every signed-in user shares one
+# workspace. The only authorization is admin-only user management.
 
 import asyncio
 import base64
-import binascii
 import csv
+import hashlib
 import json
 import logging
 import mimetypes
@@ -15,9 +14,11 @@ import os
 import re
 import secrets
 import threading
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit
 
 # Load .env before anything else touches environment variables.
 try:
@@ -26,10 +27,13 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import assets
 import db
@@ -45,25 +49,46 @@ app = FastAPI(title="YouTube Comment Intelligence")
 
 
 # ---------------------------------------------------------------------------
-# HTTP Basic Auth - the only gate, applied before routing
+# Google sign-in - the only gate, applied before routing
 # ---------------------------------------------------------------------------
 
-_AUTH_CHALLENGE = {
-    "WWW-Authenticate": 'Basic realm="YouTube Intelligence", charset="UTF-8"'
-}
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+_REQUIRED_AUTH_ENV = ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "APP_BASE_URL",
+                      "AUTH_ALLOWED_DOMAINS")
+_SESSION_COOKIE = "yi_session"
+_SESSION_TTL = timedelta(days=7)
+# state.nonce.verifier for one sign-in attempt, scoped to /auth.
+_OAUTH_COOKIE = "yi_oauth"
+_OAUTH_TTL_SECONDS = 600
+# Reachable without a login session. Logout is public so a client with an
+# already-expired cookie can still clear it.
+_PUBLIC_PATHS = {"/auth/login", "/auth/callback", "/auth/logout"}
 
 
-def _app_password() -> str:
-    """The configured shared password. Empty means unconfigured."""
-    return (os.environ.get("APP_PASSWORD") or "").strip()
+def _env(name: str) -> str:
+    return (os.environ.get(name) or "").strip()
+
+
+def _env_set(name: str) -> set[str]:
+    return {item.strip().lower() for item in _env(name).split(",") if item.strip()}
+
+
+def _secure_cookies() -> bool:
+    return _env("APP_BASE_URL").lower().startswith("https://")
 
 
 @app.on_event("startup")
 def _startup():
-    # Fail closed. A server that starts without a password is a server that
-    # publishes every Session to whoever finds the tunnel URL.
-    if not _app_password():
-        raise RuntimeError("APP_PASSWORD must be set before the server can start.")
+    # Fail closed. A server that starts without sign-in configured is a server
+    # that publishes every Session to whoever finds the URL.
+    for name in _REQUIRED_AUTH_ENV:
+        if not _env(name):
+            raise RuntimeError(f"{name} must be set before the server can start.")
+    base_url = urlsplit(_env("APP_BASE_URL"))
+    if base_url.scheme not in ("http", "https") or not base_url.netloc:
+        raise RuntimeError("APP_BASE_URL must be an http or https URL, e.g. https://yt.example.com")
     # A malformed LLM_HEADERS fails here, not minutes into the first run.
     llm_env(os.environ)
     db.init()
@@ -84,57 +109,216 @@ def _startup():
             logger.warning("%s is not set - runs will fail without it", key)
 
 
-def _basic_password(header: str):
-    """Extract the password from an Authorization header, or None.
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    None covers every malformed case: wrong scheme, bad Base64, non-UTF-8
-    bytes, no colon, empty username. The caller treats them all the same.
+
+def _session_user(token: str | None) -> dict | None:
+    """The signed-in user for a session cookie, or None.
+
+    An expired session, or one whose user is blocked, is deleted on sight.
     """
-    if not header:
+    if not token:
         return None
-
-    scheme, _, encoded = header.partition(" ")
-    if scheme.lower() != "basic" or not encoded:
-        return None
-
+    token_hash = _token_hash(token)
+    conn = db.get_conn()
     try:
-        raw = base64.b64decode(encoded.strip(), validate=True)
-    except (binascii.Error, ValueError):
-        return None
-
-    try:
-        decoded = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-    username, sep, password = decoded.partition(":")
-    if not sep or not username:
-        return None
-
-    return password
+        row = conn.execute(
+            "SELECT u.id, u.email, u.name, u.blocked, s.expires_at "
+            "FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
+            (token_hash,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["blocked"] or row["expires_at"] <= _now():
+            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+            conn.commit()
+            return None
+        return {"id": row["id"], "email": row["email"], "name": row["name"],
+                "isAdmin": row["email"] in _env_set("ADMIN_EMAILS")}
+    finally:
+        conn.close()
 
 
 @app.middleware("http")
-async def _require_basic_auth(request: Request, call_next):
+async def _require_session(request: Request, call_next):
     """Guard every path. Runs before routing, so it also covers the static
-    mount, artifact downloads, and the SSE stream."""
-    expected = _app_password()
-    supplied = _basic_password(request.headers.get("authorization", ""))
+    mount, artifact downloads, and the SSE stream.
 
-    # Compare bytes, not str: secrets.compare_digest rejects a non-ASCII str
-    # with TypeError, which would turn a wrong password into a 500.
-    if supplied is None or not secrets.compare_digest(
-        supplied.encode("utf-8"), expected.encode("utf-8")
-    ):
-        # No credential detail in the body or the log: an error message that
-        # echoes a submitted password writes it into every access log.
-        return PlainTextResponse(
-            "Authentication required.",
-            status_code=401,
-            headers=_AUTH_CHALLENGE,
-        )
-
+    The cookie is SameSite=Lax, so a cross-site form or fetch cannot carry
+    it on a POST, PATCH, or DELETE.
+    """
+    if request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+    user = await run_in_threadpool(_session_user, request.cookies.get(_SESSION_COOKIE))
+    if user is None:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={
+                "error": "UNAUTHENTICATED", "message": "Sign in required.", "field": None})
+        return RedirectResponse("/auth/login", status_code=302)
+    request.state.user = user
     return await call_next(request)
+
+
+_SIGNIN_DENIED_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign-in not allowed</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#fff;color:#3D3C52;font:14px/1.5 "Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+main{max-width:420px;padding:32px;border:1px solid #E6E6EE;border-radius:12px;text-align:center}
+h1{margin:0 0 8px;font-size:22px;font-weight:800;color:#1A1A2E}
+a{display:inline-block;margin-top:18px;padding:9px 16px;border-radius:8px;background:#D6246E;color:#fff;font-weight:700;text-decoration:none}
+a:hover{background:#B01B5B}
+a:focus-visible{outline:2px solid #D6246E;outline-offset:2px}
+</style></head>
+<body><main>
+<h1>This Google account can't sign in</h1>
+<p>Sign in with your company Google account. If you already did, ask an admin to check your access.</p>
+<a href="/auth/login">Try another account</a>
+</main></body></html>"""
+
+
+def _signin_denied() -> HTMLResponse:
+    # Never echoes a token, code, or claim: the page is the same for every cause.
+    resp = HTMLResponse(_SIGNIN_DENIED_HTML, status_code=403)
+    resp.delete_cookie(_OAUTH_COOKIE, path="/auth")
+    return resp
+
+
+def _redirect_uri() -> str:
+    return _env("APP_BASE_URL").rstrip("/") + "/auth/callback"
+
+
+@app.get("/auth/login")
+def auth_login():
+    state, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    params = {
+        "client_id": _env("GOOGLE_CLIENT_ID"),
+        "redirect_uri": _redirect_uri(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "prompt": "select_account",
+    }
+    domains = _env_set("AUTH_ALLOWED_DOMAINS")
+    if len(domains) == 1:
+        # Only a hint for Google's account picker; the callback enforces it.
+        params["hd"] = next(iter(domains))
+    resp = RedirectResponse(_GOOGLE_AUTH_URL + "?" + urlencode(params), status_code=302)
+    # token_urlsafe never emits ".", so the three values split back cleanly.
+    resp.set_cookie(_OAUTH_COOKIE, f"{state}.{nonce}.{verifier}", max_age=_OAUTH_TTL_SECONDS,
+                    path="/auth", httponly=True, samesite="lax", secure=_secure_cookies())
+    return resp
+
+
+def _id_token_claims(id_token: str) -> dict:
+    """Decode an ID token payload without checking its signature.
+
+    Safe only because the token comes straight from Google's token endpoint
+    over TLS, in exchange for our client secret (OpenID Connect Core 3.1.3.7).
+    Never call this on a token that arrived from the browser.
+    """
+    payload = id_token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    if not isinstance(claims, dict):
+        raise ValueError("ID token payload is not an object")
+    return claims
+
+
+@app.get("/auth/callback")
+def auth_callback(request: Request, code: str = "", state: str = ""):
+    try:
+        expected_state, nonce, verifier = request.cookies.get(_OAUTH_COOKIE, "").split(".")
+    except ValueError:
+        return _signin_denied()
+    # Google redirects here with ?error=... and no code when the user cancels.
+    if not code or not secrets.compare_digest(state.encode("utf-8"), expected_state.encode("utf-8")):
+        return _signin_denied()
+
+    client_id = _env("GOOGLE_CLIENT_ID")
+    try:
+        token_resp = httpx.post(_GOOGLE_TOKEN_URL, timeout=15, data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": _env("GOOGLE_CLIENT_SECRET"),
+            "redirect_uri": _redirect_uri(),
+            "grant_type": "authorization_code",
+            "code_verifier": verifier,
+        })
+        token_resp.raise_for_status()
+        claims = _id_token_claims(token_resp.json()["id_token"])
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        logger.warning("Google sign-in failed at the token exchange")
+        return _signin_denied()
+
+    email = claims.get("email")
+    exp = claims.get("exp")
+    claim_nonce = claims.get("nonce")
+    if not (claims.get("iss") in _GOOGLE_ISSUERS
+            and claims.get("aud") == client_id
+            and isinstance(exp, (int, float)) and exp > time.time()
+            and isinstance(claim_nonce, str)
+            and secrets.compare_digest(claim_nonce.encode("utf-8"), nonce.encode("utf-8"))
+            and claims.get("email_verified") is True
+            and isinstance(email, str) and email
+            # hd is set only for Google Workspace accounts, so a personal
+            # account using a company address cannot pass this check.
+            and str(claims.get("hd", "")).lower() in _env_set("AUTH_ALLOWED_DOMAINS")):
+        logger.warning("Google sign-in rejected: ID token claims not allowed")
+        return _signin_denied()
+    email = email.lower()
+    name = claims.get("name") if isinstance(claims.get("name"), str) else None
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO users (id, email, name, created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(email) DO NOTHING",
+            (str(uuid.uuid4()), email, name, now.isoformat()))
+        user = conn.execute("SELECT id, blocked FROM users WHERE email = ?", (email,)).fetchone()
+        if user["blocked"]:
+            conn.commit()
+            logger.warning("Google sign-in rejected: user is blocked")
+            return _signin_denied()
+        conn.execute("UPDATE users SET name = COALESCE(?, name), last_login_at = ? WHERE id = ?",
+                     (name, now.isoformat(), user["id"]))
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now.isoformat(),))
+        conn.execute(
+            "INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (_token_hash(token), user["id"], now.isoformat(), (now + _SESSION_TTL).isoformat()))
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = RedirectResponse("/", status_code=302)
+    resp.set_cookie(_SESSION_COOKIE, token, max_age=int(_SESSION_TTL.total_seconds()),
+                    path="/", httponly=True, samesite="lax", secure=_secure_cookies())
+    resp.delete_cookie(_OAUTH_COOKIE, path="/auth")
+    return resp
+
+
+@app.post("/auth/logout", status_code=204)
+def auth_logout(request: Request):
+    token = request.cookies.get(_SESSION_COOKIE)
+    if token:
+        conn = db.get_conn()
+        try:
+            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (_token_hash(token),))
+            conn.commit()
+        finally:
+            conn.close()
+    resp = Response(status_code=204)
+    resp.delete_cookie(_SESSION_COOKIE, path="/")
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +355,6 @@ def _413(message):
 # covered, but routing-level 404/405 responses (unmatched path, wrong
 # method) are raised by Starlette itself as the base class and would
 # bypass a handler registered only on the FastAPI subclass.
-from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -324,9 +507,14 @@ def _ser_session(row, conn) -> dict:
     else:
         latest_run = None
 
+    creator = conn.execute(
+        "SELECT email FROM users WHERE id = ?", (row["created_by"],)
+    ).fetchone() if row["created_by"] else None
+
     return {
         "id": sid,
         "name": row["name"],
+        "createdBy": creator["email"] if creator else None,
         "campaignIds": campaign_ids,
         "commentCount": _session_comment_count(sid, conn),
         "status": _session_status(sid, conn),
@@ -585,6 +773,87 @@ class StartRunBody(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# /api/me and /api/users
+# ---------------------------------------------------------------------------
+
+class UserBlockBody(BaseModel):
+    blocked: bool
+
+
+def _require_admin(request: Request) -> dict:
+    user = request.state.user
+    if not user["isAdmin"]:
+        _err(403, "FORBIDDEN", "Only admins can manage users.")
+    return user
+
+
+def _ser_user(row) -> dict:
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "name": row["name"],
+        "blocked": bool(row["blocked"]),
+        "isAdmin": row["email"] in _env_set("ADMIN_EMAILS"),
+        "createdAt": row["created_at"],
+        "lastLoginAt": row["last_login_at"],
+    }
+
+
+@app.get("/api/me")
+def get_me(request: Request):
+    user = request.state.user
+    return {"email": user["email"], "name": user["name"], "isAdmin": user["isAdmin"]}
+
+
+@app.get("/api/users")
+def list_users(request: Request):
+    _require_admin(request)
+    conn = db.get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM users ORDER BY last_login_at IS NULL, last_login_at DESC, created_at DESC"
+        ).fetchall()
+        return [_ser_user(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.patch("/api/users/{user_id}")
+def set_user_blocked(user_id: str, body: UserBlockBody, request: Request):
+    """Block or unblock a user. Blocking also ends every login session they
+    hold, so an open tab loses access on its next request."""
+    if _require_admin(request)["id"] == user_id:
+        _422("You can't block your own account.", "blocked")
+    conn = db.get_conn()
+    try:
+        cur = conn.execute("UPDATE users SET blocked = ? WHERE id = ?", (int(body.blocked), user_id))
+        if cur.rowcount == 0:
+            _404("User not found.")
+        if body.blocked:
+            conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return _ser_user(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+@app.delete("/api/users/{user_id}", status_code=204)
+def erase_user(user_id: str, request: Request):
+    """Erase a user and their login sessions. Their Sessions stay, without a
+    creator. An erased user from an allowed domain can sign in again as a new
+    user; block them to keep them out."""
+    if _require_admin(request)["id"] == user_id:
+        _422("You can't erase your own account.")
+    conn = db.get_conn()
+    try:
+        if conn.execute("DELETE FROM users WHERE id = ?", (user_id,)).rowcount == 0:
+            _404("User not found.")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # /api/sessions
 # ---------------------------------------------------------------------------
 
@@ -596,15 +865,15 @@ def _session_name(raw) -> str:
 
 
 @app.post("/api/sessions", status_code=201)
-def create_session(body: SessionBody):
+def create_session(body: SessionBody, request: Request):
     name = _session_name(body.name)
     sid = str(uuid.uuid4())
     now = _now()
     conn = db.get_conn()
     try:
         conn.execute(
-            "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?,?,?,?)",
-            (sid, name, now, now)
+            "INSERT INTO sessions (id, name, created_at, updated_at, created_by) VALUES (?,?,?,?,?)",
+            (sid, name, now, now, request.state.user["id"])
         )
         conn.commit()
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()

@@ -8,7 +8,7 @@ Never record a password, API key, or `Authorization` header. Record `set/non-emp
 
 ## Current state (2026-09-11)
 
-The project is finished. Acceptance ran on a developer laptop against the real model through a local relay (see [Setup](setup.md#developing-against-a-remote-lm-studio)). No production deployment serves real users yet.
+The project is finished. Acceptance ran on a developer laptop against the real model through a local relay (see [Setup](setup.md#using-a-remote-lm-studio)). No production deployment serves real users yet.
 
 A Dokploy instance on a remote workstation keeps a test copy in sync with `main`:
 
@@ -19,7 +19,8 @@ A Dokploy instance on a remote workstation keeps a test copy in sync with `main`
 Open operational decisions:
 
 - **Model access.** Dokploy runs the app as a Docker Swarm service, which has no host-network mode, so the container cannot use a loopback `LLM_BASE_URL`. Since #29, `LLM_BASE_URL` accepts any host. Point it at the workstation's private address and set `LLM_HEADERS` to an LM Studio API token (see [Setup](setup.md#using-a-remote-lm-studio)). This configuration is not applied yet.
-- **Persistence.** The Dokploy service has no persistent volume for `data/`. A redeploy loses Sessions, uploads, and reports.
+- **Persistence.** The Dokploy service has no persistent volume for `data/`. A redeploy loses Sessions, uploads, reports, users, and login sessions.
+- **Sign-in URL.** Since #30, sign-in needs a stable `https` `APP_BASE_URL` registered as the Google OAuth redirect. The Dokploy service needs a domain and the sign-in variables from [Setup](setup.md#configure-the-backend). This configuration is not applied yet.
 
 ---
 
@@ -31,10 +32,10 @@ Target shape:
 
 ```text
 External browser
-  -> https://<random>.trycloudflare.com   Cloudflare HTTPS
+  -> https://<APP_BASE_URL host>          Cloudflare HTTPS, named tunnel
   -> cloudflared, outbound from the Mac
   -> http://127.0.0.1:8000                FastAPI, loopback only
-  -> HTTP Basic Auth middleware
+  -> Google sign-in session middleware
   -> static frontend or /api route
   -> http://127.0.0.1:1234                LM Studio, loopback only
   -> Qwen3.8-27B 4-bit MLX
@@ -217,7 +218,11 @@ Create `.env` in the repository root:
 
 ```text
 YOUTUBE_API_KEY=<YouTube Data API v3 key>
-APP_PASSWORD=<long unique shared password>
+GOOGLE_CLIENT_ID=<OAuth client ID>
+GOOGLE_CLIENT_SECRET=<OAuth client secret>
+APP_BASE_URL=https://<stable hostname>
+AUTH_ALLOWED_DOMAINS=<company.com>
+ADMIN_EMAILS=<admin@company.com>
 LLM_BASE_URL=http://127.0.0.1:1234
 LLM_MODEL=<exact LM Studio API identifier>
 LLM_CONTEXT_LENGTH=32768
@@ -225,7 +230,7 @@ LLM_TIMEOUT_SECONDS=600
 CLASSIFY_BATCH_SIZE=16
 ```
 
-Keep `APP_PASSWORD` long and unique. Anyone who has it can read every Session, upload, and report. There are no accounts or per-user permissions.
+Create the OAuth client first, with `<APP_BASE_URL>/auth/callback` as its redirect URI (see [Setup](setup.md#create-the-google-sign-in-client)). Every signed-in user can read every Session, upload, and report. Admins can block or erase users; there are no other per-user permissions.
 
 On this single-host procedure LM Studio stays on loopback, so `LLM_HEADERS` is not needed. If LM Studio moves to another host, follow [Setup](setup.md#using-a-remote-lm-studio).
 
@@ -234,7 +239,9 @@ On this single-host procedure LM Studio stays on loopback, so `LLM_HEADERS` is n
 | Item | Value | Recorded |
 |---|---|---|
 | `YOUTUBE_API_KEY` set/non-empty | | |
-| `APP_PASSWORD` set/non-empty | | |
+| `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` set/non-empty | | |
+| `APP_BASE_URL` exact | | |
+| `AUTH_ALLOWED_DOMAINS` and `ADMIN_EMAILS` exact | | |
 | `LLM_BASE_URL` exact | | |
 | `LLM_MODEL` matches inventory | | |
 | `LLM_CONTEXT_LENGTH` | | |
@@ -258,89 +265,89 @@ Leave it running. In a second terminal, check the gate:
 curl -i http://127.0.0.1:8000/
 curl -i http://127.0.0.1:8000/app.js
 curl -i http://127.0.0.1:8000/api/sessions
-curl -i -u office:wrong-password http://127.0.0.1:8000/api/sessions
-curl -i -u office:<the-password> http://127.0.0.1:8000/
-curl -i -u office:<the-password> http://127.0.0.1:8000/api/sessions
+curl -i --cookie yi_session=wrong http://127.0.0.1:8000/api/sessions
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 ```
 
 Require:
 
-- Missing and wrong credentials return `401`.
-- Every `401` includes `WWW-Authenticate: Basic realm="YouTube Intelligence", charset="UTF-8"`.
-- Correct credentials return `200`.
+- The frontend and static asset return `302` to `/auth/login`.
+- The API returns `401` with `"error": "UNAUTHENTICATED"`, with and without a wrong cookie.
 - Port 8000 listens only on loopback.
 
-Open <http://127.0.0.1:8000>, authenticate, create a Session, and reach setup. Stop before starting an analysis.
+Sign-in itself needs the public hostname, so it is checked in Step 6.
 
 ### Evidence
 
 | Check | Result | Recorded |
 |---|---|---|
-| Startup fails without `APP_PASSWORD` | | |
-| Unauthenticated frontend returns 401 | | |
-| Unauthenticated static asset returns 401 | | |
+| Startup fails without `GOOGLE_CLIENT_ID` | | |
+| Unauthenticated frontend returns 302 | | |
+| Unauthenticated static asset returns 302 | | |
 | Unauthenticated API returns 401 | | |
-| Wrong password returns 401 | | |
-| Correct password serves the UI | | |
+| Wrong session cookie returns 401 | | |
 | Port 8000 loopback-only | | |
-| Local Session reaches setup | | |
 
 ---
 
-## Step 6 - Publish through a Cloudflare quick tunnel
+## Step 6 - Publish through a Cloudflare named tunnel
 
-Install `cloudflared`:
+Sign-in needs a stable hostname, so a quick tunnel's random `trycloudflare.com` URL does not work. Use a Cloudflare named tunnel on a domain you control.
+
+Install `cloudflared` and create the tunnel:
 
 ```bash
 brew install cloudflared
 cloudflared --version
+cloudflared tunnel login
+cloudflared tunnel create youtube-intelligence
+cloudflared tunnel route dns youtube-intelligence <stable hostname>
 ```
 
 Start the tunnel with FastAPI already running:
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:8000
+cloudflared tunnel run --url http://127.0.0.1:8000 youtube-intelligence
 ```
 
-Record the generated `https://<random>.trycloudflare.com` URL. The hostname changes whenever `cloudflared` restarts.
-
-Do not create a named tunnel, DNS record, Access application, router port forward, or LAN bind.
+Do not add a router port forward or a LAN bind.
 
 From a phone on mobile data or another external network:
 
-1. Open the generated HTTPS URL.
-2. Confirm the credential prompt appears before content.
-3. Enter a wrong password and confirm rejection.
-4. Enter the correct password and confirm the UI loads without a mixed-content warning.
-5. Confirm ports 8000 and 1234 are not directly reachable externally.
-6. Add an article User Input with `http://127.0.0.1:1234/`.
-7. Require HTTP 422 and no new asset:
+1. Open `APP_BASE_URL`. Confirm it redirects to Google before any content loads.
+2. Sign in with a personal Google account. Confirm the "This Google account can't sign in" page.
+3. Sign in with a Workspace account in `AUTH_ALLOWED_DOMAINS`. Confirm the UI loads without a mixed-content warning.
+4. Confirm ports 8000 and 1234 are not directly reachable externally.
+5. Add an article User Input with `http://127.0.0.1:1234/`.
+6. Require HTTP 422 and no new asset:
 
 ```json
 {"error":"VALIDATION_ERROR","message":"That link points to a private address and cannot be fetched.","field":"url"}
 ```
 
-Stop if any content is reachable without credentials, either local port is externally exposed, TLS fails, or the tunnel points anywhere except `127.0.0.1:8000`.
+7. As an admin in `ADMIN_EMAILS`, open **Users**, block a second test account, and confirm that account's next request returns to sign-in and its sign-in is refused. Unblock it.
+
+Stop if any content is reachable without sign-in, either local port is externally exposed, TLS fails, or the tunnel points anywhere except `127.0.0.1:8000`.
 
 ### Evidence
 
 | Check | Result | Recorded |
 |---|---|---|
 | `cloudflared` version | | |
-| Generated hostname | | |
-| External credential prompt | | |
-| Wrong password rejected | | |
-| Correct password loads UI | | |
+| Tunnel name and hostname | | |
+| Redirect to Google before content | | |
+| Personal account refused | | |
+| Workspace account loads UI | | |
 | No mixed-content warning | | |
 | Ports 8000 and 1234 not externally reachable | | |
 | Private-address article returns 422 and creates no asset | | |
+| Admin block signs the user out and refuses sign-in | | |
 
 ---
 
 ## Step 7 - Run one real external Session
 
-Run this from an external browser through the quick-tunnel URL:
+Run this from an external browser through `APP_BASE_URL`:
 
 1. Create a Session.
 2. Add a valid YouTube video URL.
@@ -349,7 +356,7 @@ Run this from an external browser through the quick-tunnel URL:
 5. Start the analysis with skip-pause unchecked.
 6. At `brief_pause`, edit one Key Message, save it, and continue.
 7. Close the browser tab while processing continues.
-8. Reopen the URL, authenticate, and confirm the run restores.
+8. Reopen the URL and confirm the run restores without a second sign-in.
 9. Wait for completion.
 10. Download `report.pdf`, `comments.csv`, `key-messages.csv`, `themes.csv`, `sentiment.csv`, and `emotions.csv`.
 11. Confirm `report.json` is not offered as a download.
@@ -432,26 +439,24 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.youtube-intelligence
 launchctl kickstart -k gui/$(id -u)/com.youtube-intelligence.backend
 ```
 
-### Cloudflare quick tunnel
+### Cloudflare named tunnel
 
 Create a second user LaunchAgent for:
 
 ```text
-<absolute-path-to-cloudflared> tunnel --url http://127.0.0.1:8000
+<absolute-path-to-cloudflared> tunnel run --url http://127.0.0.1:8000 youtube-intelligence
 ```
 
-Set `RunAtLoad` and `KeepAlive` to `true`. Write stdout and stderr to files under the repository's gitignored `data/` directory. Read the active quick-tunnel URL from that log after login.
-
-Do not add code that emails, publishes, or scrapes the URL into another service. A stable URL requires a named tunnel and domain, which remain out of scope.
+Set `RunAtLoad` and `KeepAlive` to `true`. Write stdout and stderr to files under the repository's gitignored `data/` directory.
 
 Log out and back in. Require:
 
 1. LM Studio responds on `127.0.0.1:1234` with the configured model available.
-2. FastAPI responds on `127.0.0.1:8000` with a Basic Auth challenge.
-3. `cloudflared` records a current quick-tunnel URL.
-4. External authenticated access succeeds through that URL.
+2. FastAPI responds on `127.0.0.1:8000`: `/api/sessions` returns `401` without a login session.
+3. `cloudflared` reports the tunnel connected.
+4. External sign-in succeeds through `APP_BASE_URL`.
 
-A FastAPI restart requires no new public URL while `cloudflared` remains running. An `.env` or code change requires a FastAPI restart. A `cloudflared` restart creates a new public URL.
+An `.env` or code change requires a FastAPI restart. A FastAPI or `cloudflared` restart keeps the same public URL. Login sessions survive a FastAPI restart because they live in `data/app.db`.
 
 ### Evidence
 
@@ -463,19 +468,18 @@ A FastAPI restart requires no new public URL while `cloudflared` remains running
 | Log paths | | |
 | Stop and restart commands | | |
 | Local checks pass after login | | |
-| Current quick-tunnel URL recorded | | |
+| Tunnel connected after login | | |
 | External check passes after login | | |
 
 ---
 
 ## Accepted operational limits
 
-- One shared password protects one shared workspace.
+- Google Workspace sign-in protects one shared workspace. Every signed-in user sees every Session.
 - One analysis runs at a time. A second start request is rejected, not queued.
 - The Mac disk holds the only copy of `data/`.
 - The service is down when the Mac is off, asleep, or offline.
 - A FastAPI or Mac restart loses an active run. Closing a browser tab does not.
-- Restarting `cloudflared` changes the public URL.
 - The 27B model shares 32 GB unified memory with macOS and every other application.
 - Model throughput depends on the selected MLX build, context, corpus, and current memory pressure. There is no guaranteed duration.
 
@@ -483,7 +487,9 @@ A FastAPI restart requires no new public URL while `cloudflared` remains running
 
 ## Troubleshooting
 
-**FastAPI reports that `APP_PASSWORD` is missing.** Create `.env` in the repository root, set a non-empty value, and restart FastAPI.
+**FastAPI reports that a sign-in variable is missing.** Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_BASE_URL`, and `AUTH_ALLOWED_DOMAINS` in `.env`, then restart FastAPI. `APP_PASSWORD` is no longer used.
+
+**Google shows `redirect_uri_mismatch`.** Add `<APP_BASE_URL>/auth/callback` to the OAuth client exactly, and open the app at `APP_BASE_URL`.
 
 **LM Studio does not answer on port 1234.** Run `lms daemon up`, `lms server start --port 1234`, and `lms server status`.
 
@@ -497,6 +503,6 @@ A FastAPI restart requires no new public URL while `cloudflared` remains running
 
 **Memory Pressure turns yellow or red.** Close other memory-heavy applications. Record the run state and swap first. Lower `LLM_CONTEXT_LENGTH` only in a separate test. Keep the model at 4-bit. Lower `CLASSIFY_BATCH_SIZE` from 16 to 8 only if a real run on this Mac shows memory pressure.
 
-**The public URL stopped working.** Read the current `cloudflared` log. A restarted quick tunnel has a new hostname.
+**The public URL stopped working.** Read the `cloudflared` log and confirm the tunnel is connected.
 
 **The backend works locally but not after login.** Inspect the LaunchAgent error log. Confirm every executable and working-directory path in the plist is absolute.

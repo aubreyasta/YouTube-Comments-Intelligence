@@ -1139,9 +1139,29 @@ function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
 }
 
 function setSidebarActive(which) {
-  for (const id of ["sb-sessions", "sb-files"]) {
-    document.getElementById(id).classList.toggle("active", id === "sb-" + which);
+  for (const id of ["sb-sessions", "sb-files", "sb-users"]) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("active", id === "sb-" + which);
   }
+}
+
+/* Signed-in account from GET /api/me. Null in demo mode. */
+let currentUser = null;
+
+async function loadAccount() {
+  try { currentUser = await window.__liveApi.me(); } catch { return; }
+  const usersLink = document.getElementById("sb-users");
+  const signOut = document.getElementById("sb-signout");
+  if (usersLink) usersLink.hidden = !currentUser.isAdmin;
+  if (!signOut) return;
+  signOut.title = "Sign out " + currentUser.email;
+  signOut.querySelector(".sr-only").textContent = "Sign out " + currentUser.email;
+  signOut.hidden = false;
+  signOut.addEventListener("click", async () => {
+    signOut.disabled = true;
+    try { await window.__liveApi.signOut(); } catch { /* the sign-in page still follows */ }
+    location.assign("/auth/login");
+  });
 }
 
 /* ============================== Screens ============================== */
@@ -3337,6 +3357,84 @@ async function renderFiles() {
   });
 }
 
+/* ============================== Users (admin) ============================== */
+
+async function renderUsers() {
+  setSidebarActive("users");
+  setTopbar('<div class="topbar-left"><span class="topbar-title">Users</span></div><div class="topbar-right"></div>');
+  if (demoApi.mode !== "live" || !currentUser || !currentUser.isAdmin) {
+    throw new Error("Only admins can manage users.");
+  }
+  view.innerHTML = `<div class="view-pad"><span class="spinner" role="status" aria-label="Loading users"></span></div>`;
+  const users = await window.__liveApi.listUsers();
+
+  const cols = "1.6fr 1fr .9fr .9fr 190px";
+  const rows = users.map((u) => {
+    const self = u.email === currentUser.email;
+    const actions = self
+      ? '<span class="trow-dim">You</span>'
+      : `<button class="btn secondary" type="button" data-block="${esc(u.id)}" data-blocked="${u.blocked}">${u.blocked ? "Unblock" : "Block"}</button>
+         <button class="btn danger" type="button" data-erase="${esc(u.id)}">Erase</button>`;
+    return `
+    <div class="trow" style="grid-template-columns:${cols}">
+      <div style="font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.email)}">${esc(u.email)}</div>
+      <div class="trow-dim">${esc(u.name || "-")}</div>
+      <div class="trow-dim">${u.lastLoginAt ? fmtAgo(u.lastLoginAt) : "Never"}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${u.blocked ? '<span class="badge">Blocked</span>' : '<span class="badge outline">Active</span>'}
+        ${u.isAdmin ? '<span class="badge neutral">Admin</span>' : ""}
+      </div>
+      <div style="display:flex;gap:8px">${actions}</div>
+    </div>`;
+  });
+
+  view.innerHTML = `
+  <div class="view-pad" style="gap:20px">
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <h2 class="greeting">Users</h2>
+      <div class="greeting-sub">Everyone who has signed in. Block an account to sign it out and keep it out.</div>
+    </div>
+    <p class="field-error" id="users-err" role="alert" style="margin:0" hidden></p>
+    ${users.length === 0 ? `
+    <div class="empty-block">
+      <h3>No users yet</h3>
+      <p>People appear here after their first sign-in.</p>
+    </div>` : `
+    <div class="table-scroll">
+    <div class="table" style="min-width:820px">
+      <div class="thead" style="grid-template-columns:${cols}">
+        <div>EMAIL</div><div>NAME</div><div>LAST SIGN-IN</div><div>STATUS</div><div></div>
+      </div>
+      ${rows.join("")}
+    </div>
+    </div>`}
+  </div>`;
+
+  const errEl = document.getElementById("users-err");
+  const act = async (btn, fn) => {
+    btn.disabled = true;
+    try {
+      await fn();
+      await renderUsers();
+    } catch (err) {
+      btn.disabled = false;
+      errEl.hidden = false;
+      errEl.textContent = err.message || "That change failed. Try again.";
+    }
+  };
+  view.querySelectorAll("[data-block]").forEach((b) => {
+    b.addEventListener("click", () => act(b, () =>
+      window.__liveApi.setUserBlocked(b.dataset.block, b.dataset.blocked !== "true")));
+  });
+  view.querySelectorAll("[data-erase]").forEach((b) => {
+    const user = users.find((u) => u.id === b.dataset.erase);
+    b.addEventListener("click", () => openConfirm(
+      `Erase ${user.email}? This deletes the account and signs it out. Sessions it created stay. The person can sign in again unless you block the account instead.`,
+      () => act(b, () => window.__liveApi.eraseUser(user.id)),
+      { title: "Erase user", confirmLabel: "Erase" }));
+  });
+}
+
 /* ============================== Router ============================== */
 
 let currentRouteHash = null; // last hash the router actually committed to
@@ -3390,6 +3488,7 @@ async function route() {
     else if (parts[0] === "runs" && parts.length === 2) await renderRun(parts[1]);
     else if (parts[0] === "runs" && parts[2] === "results") await renderResults(parts[1]);
     else if (parts[0] === "files") await renderFiles();
+    else if (parts[0] === "users") await renderUsers();
     else await renderHome();
   } catch (err) {
     setTopbar('<div class="topbar-left"><span class="topbar-title">Resonance</span></div><div class="topbar-right"></div>');
@@ -3439,9 +3538,11 @@ if (view && topbar && overlayRoot) {
           const tid = setTimeout(() => ctrl.abort(), 1200);
           const resp = await fetch("/api/sessions", { signal: ctrl.signal });
           clearTimeout(tid);
+          if (resp.status === 401) { location.assign("/auth/login"); return; }
           if (resp.ok) demoApi.mode = "live";
         } catch { /* network error or timeout: stay demo */ }
       }
+      if (demoApi.mode === "live") await loadAccount();
       route();
     })();
   }

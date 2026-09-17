@@ -14,9 +14,9 @@ The reference deployment runs FastAPI and LM Studio on one host. [Deployment](de
 
 ```text
 external browser
-  -> Cloudflare quick tunnel
+  -> HTTPS at a stable APP_BASE_URL (named tunnel or reverse proxy)
   -> FastAPI 127.0.0.1:8000
-  -> Basic Auth middleware
+  -> login session middleware (Google sign-in)
   -> frontend or /api route
 
 FastAPI pipeline
@@ -109,17 +109,27 @@ Transient socket and SSL failures retry three times with a fresh client. YouTube
 
 ## Backend
 
-`server.py` serves FastAPI on `127.0.0.1:8000`. Fail-closed HTTP Basic Auth middleware runs before routing and protects static files, API routes, downloads, and SSE. `APP_PASSWORD` must be non-empty. Any non-empty username is accepted because the product has one shared workspace, not user accounts.
+`server.py` serves FastAPI on `127.0.0.1:8000`. The backend reads `.env` before reading configuration. It never sends `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_SECRET`, or model configuration to the browser.
 
-The backend reads `.env` before reading configuration. It never sends `YOUTUBE_API_KEY`, `APP_PASSWORD`, or model configuration to the browser.
+### Sign-in and users
+
+Users sign in with Google. `server.py` runs the OAuth authorization code flow with state, nonce, and PKCE through `httpx`; there is no auth library. The callback reads the ID token straight from Google's token endpoint over TLS, so it checks the claims without a signature check (OpenID Connect Core 3.1.3.7). Only a verified email with an `hd` (Google Workspace domain) claim in `AUTH_ALLOWED_DOMAINS` can sign in.
+
+A successful sign-in creates a login session: a random token in the HttpOnly `yi_session` cookie, stored as a SHA-256 hash in `auth_sessions` for 7 days. Middleware runs before routing and checks the session on every request except `/auth/*`. It protects static files, API routes, downloads, and SSE. `_startup` refuses to start when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_BASE_URL`, or `AUTH_ALLOWED_DOMAINS` is empty.
+
+Admins are the emails in `ADMIN_EMAILS`. The server computes admin status on every request and stores no role. Admins block, unblock, and erase users on the Users screen. Blocking deletes the user's login sessions and rejects later sign-ins. Erasing deletes the user row; an erased user in an allowed domain can sign in again.
+
+All signed-in users share one workspace. `sessions.created_by` records who created each Session, for display only; it grants no permission.
 
 ### Storage
 
-`data/app.db` uses stdlib SQLite in WAL mode. Eight tables hold the shared state:
+`data/app.db` uses stdlib SQLite in WAL mode. Ten tables hold the shared state:
 
 | Table | Purpose |
 |---|---|
-| `sessions` | Session identity, timestamps, and Key Message draft state. |
+| `users` | Google account email, name, blocked flag, and sign-in timestamps. |
+| `auth_sessions` | Login session token hashes and expiry. |
+| `sessions` | Session identity, creator, timestamps, and Key Message draft state. |
 | `campaigns` | One internal group row per Session. |
 | `videos` | YouTube URLs and kinds. |
 | `assets` | User Input metadata, extracted text, article snapshot, and upload path. |
@@ -191,7 +201,7 @@ A completed run stores seven artifacts in fixed order:
 
 ### Live and demo isolation
 
-A plain `/` probes `GET /api/sessions` through `window.__liveApi`. Success selects live mode. A failed or unavailable backend can fall back to the in-memory demo store.
+A plain `/` probes `GET /api/sessions` through `window.__liveApi`. Success selects live mode and loads `GET /api/me` for the sidebar's Sign out control and the admin-only Users item. A `401` from the probe or any later API call sends the browser to `/auth/login`. A failed or unavailable backend can fall back to the in-memory demo store.
 
 `?demo=1` explicitly enters the committed Indomie demo and stores that choice in `sessionStorage` for the current tab. Explicit demo mode skips the probe and never delegates to `window.__liveApi`, so demo actions cannot reach the live database. A second tab opened at plain `/` remains live.
 
@@ -222,8 +232,9 @@ Every number in the results view links to deterministic evidence rows. The drawe
 | Two users start together | SQLite `BEGIN IMMEDIATE` admits only one active analysis. |
 | Browser closes during a run | The backend thread continues; persisted state restores the view. |
 | FastAPI or host restarts during a run | The active run is lost. Recovery is out of scope. Startup marks it failed, so new runs are not blocked. |
-| Cloudflare quick tunnel restarts | The public URL changes. |
+| Public URL changes | Google rejects the sign-in redirect. `APP_BASE_URL` and the OAuth client's redirect URI must match a stable URL. |
+| A user leaves the company | An admin blocks the account. Google also stops that Workspace account from signing in. An existing login session lasts until it expires or an admin blocks the user. |
 | Model or schema output drifts | Strict JSON Schema plus Python validation rejects invalid labels or row coverage. |
 | Public article resolves privately | Resolution pinning and redirect revalidation reject the request before asset creation. |
 
-Future multi-user deployment would require identity and authorization, durable job execution, shared object storage, backups, and a server database. None is implemented now.
+Per-user ownership, roles beyond admin, durable job execution, shared object storage, backups, and a server database are not implemented.
