@@ -19,11 +19,14 @@
                     "dest": "requirements-server.txt"
                 },
                 "pip install -r requirements.txt -r requirements-server.txt",
-                "python -m playwright install --with-deps chromium"
+                "PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers python -m playwright install --with-deps chromium"
             ]
         }
     },
     "deploy": {
-        "startCommand": "python server.py"
+        "startCommand": "python server.py",
+        "variables": {
+            "PLAYWRIGHT_BROWSERS_PATH": "/app/.playwright-browsers"
+        }
     }
 }
