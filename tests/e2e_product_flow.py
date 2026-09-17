@@ -792,6 +792,16 @@ def classify_progress_paints(page, base):
         _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
         # The batch events must not erase the theme count an earlier event set.
         _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+
+        # Issue #20: a refresh while classify is parked must repaint the same
+        # progress from the run snapshot, not blank it or show "0" labelled.
+        page.reload()
+        _wait_text(page, f"{step} .step-detail", "2 of 3 labelled",
+                   timeout_ms=10000)
+        _expect(page.locator(f"{step} .progressbar").count() == 1,
+                "no progress bar on the Classify step after a refresh")
+        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
+        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
     finally:
         _CLASSIFY_GATE.set()
 
@@ -983,11 +993,18 @@ def aria_and_keyboard(page, base):
 
     # Key Message rows are compact: the label/description inputs and the
     # reorder controls exist only while a row is expanded. Open the first two
-    # before reading or reordering them.
-    page.click('[data-km-toggle="0"]')
-    page.wait_for_selector("#km-label-0")
-    page.click('[data-km-toggle="1"]')
-    page.wait_for_selector("#km-label-1")
+    # by keyboard before reading or reordering them.
+    for i in (0, 1):
+        toggle = f'.km-row-toggle[data-km-toggle="{i}"]'
+        _expect(page.get_attribute(toggle, "aria-expanded") == "false",
+                f"Key Message row {i} toggle was not aria-expanded='false' on load")
+        _expect(page.get_attribute(toggle, "aria-controls") == f"km-edit-{i}",
+                f"Key Message row {i} toggle aria-controls was not 'km-edit-{i}'")
+        page.focus(toggle)
+        page.keyboard.press("Enter")
+        page.wait_for_selector(f"#km-edit-{i} #km-label-{i}")
+        _expect(page.get_attribute(toggle, "aria-expanded") == "true",
+                f"Key Message row {i} toggle was not aria-expanded='true' after Enter")
     page.wait_for_selector('[data-km-up="1"]')
 
     label0_before = page.input_value("#km-label-0")

@@ -52,6 +52,7 @@ client = TestClient(server.app, headers={"Authorization": "Basic b2ZmaWNlOnRlc3Q
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause", "totalComments",
+    "progressDetail",
 }
 
 

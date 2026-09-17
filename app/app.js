@@ -2267,15 +2267,12 @@ const STAGE_TO_STEP = { connecting: -1, running: -1, collect: 0, brief: 1, brief
    parser covers every _push that carries counts:
      "total=N"                                    -> { total: N }
      "other_share=X.Y"                            -> { otherShare: X.Y }
-     "labelled=N;total=M;batch=B;batches=T"       -> all four
+     "themes=K;labelled=N;total=M;batch=B;batches=T" -> all five
    Keys arrive snake_case and are camelCased to match the demo detail
-   objects the same painters read. "N themes" is the one prose exception.
-   Anything else (error strings, artifact paths, caveats) returns null and
-   callers show "-". */
+   objects the same painters read. Anything else (error strings, artifact
+   paths, caveats) returns null and callers show "-". */
 function parseDetailStr(detail) {
   if (!detail || typeof detail !== "string") return null;
-  const themes = detail.match(/^(\d+)\s+themes?$/i);
-  if (themes) return { themes: parseInt(themes[1], 10) };
   const out = {};
   for (const part of detail.split(";")) {
     const kv = part.match(/^\s*([a-z_]+)=(\d+(?:\.\d+)?)\s*$/i);
@@ -2302,7 +2299,10 @@ async function renderRun(runId) {
     : run.stage === "error" ? "error"
     : run.stage;
   let state = {
-    stage: initialStage, pct: run.pct || 0, detail: {}, disconnected: false,
+    // Live: seed from the persisted classify detail so a reopened page
+    // repaints labelling progress without waiting for the next batch event.
+    stage: initialStage, pct: run.pct || 0,
+    detail: (live && parseDetailStr(run.progressDetail)) || {}, disconnected: false,
     failed: initialStage === "failed" || initialStage === "error" ? (run.error || "Run failed.") : null,
     completed: initialStage === "complete",
   };
@@ -2354,7 +2354,7 @@ async function renderRun(runId) {
       <div class="rail-card">
         <div class="rail-kicker">LIVE COUNTS</div>
         <div style="display:flex;flex-direction:column;gap:13px">
-          <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">0</span></div>
+          <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">${live ? "—" : "0"}</span></div>
           <div class="count-row"><span class="k">Themes in play</span><span class="v" id="cnt-themes">\u2014</span></div>
           <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
         </div>
@@ -2433,6 +2433,17 @@ async function renderRun(runId) {
   function totalComments() {
     const d = state.detail || {};
     return d.total != null ? d.total : (run.totalComments != null ? run.totalComments : null);
+  }
+  function paintCounts() {
+    const d = state.detail;
+    if (d.labelled != null) cntLabelled.textContent = fmtNum(d.labelled);
+    else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
+    else if (live) cntLabelled.textContent = "—";
+    if (d.themes != null) cntThemes.textContent = String(d.themes);
+    else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
+    if (d.otherShare != null) cntOther.textContent = d.otherShare.toFixed(1) + "%";
+    else if (d.other != null) cntOther.textContent = d.other + "%";
+    else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
   }
   function paintReliability() {
     const total = totalComments();
@@ -2721,16 +2732,7 @@ async function renderRun(runId) {
     if (stepIdx >= 0) currentStep = Math.max(currentStep, stepIdx);
     if (e.stage === "complete") currentStep = 6;
 
-    if (state.detail) {
-      if (state.detail.labelled != null) cntLabelled.textContent = fmtNum(state.detail.labelled);
-      else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
-      else if (live) cntLabelled.textContent = "—";
-      if (state.detail.themes != null) cntThemes.textContent = String(state.detail.themes);
-      else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
-      if (state.detail.otherShare != null) cntOther.textContent = state.detail.otherShare.toFixed(1) + "%";
-      else if (state.detail.other != null) cntOther.textContent = state.detail.other + "%";
-      else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
-    }
+    paintCounts();
 
     if (e.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
@@ -2779,6 +2781,7 @@ async function renderRun(runId) {
   // with no SSE replay required.
   paintHeader();
   paintSteps();
+  paintCounts();
   if (initialStage === "brief_pause") {
     briefRendered = true;
     renderBriefReviewFresh().catch(() => {});
