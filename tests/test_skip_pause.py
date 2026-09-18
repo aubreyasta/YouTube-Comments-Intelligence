@@ -10,7 +10,7 @@ data/artifacts write adapter.py makes), then drives the routes through
 FastAPI's TestClient. adapter._execute()'s pipeline edges (collect,
 brief.reconcile, analyze, affect, report, and every model-touching call)
 are mocked - no network, no model, no real PDF render -
-but the run still executes on adapter.start_run()'s real daemon thread,
+but the run still executes on adapter.start_next()'s real daemon thread,
 so the skip_pause branch and DB writes are exercised for real.
 
 Run: python tests/test_skip_pause.py
@@ -50,7 +50,7 @@ client = login(TestClient(server.app))
 
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "counts",
+    "error", "briefPoints", "artifacts", "skipPause", "counts", "queuePosition",
 }
 
 
@@ -178,11 +178,10 @@ def _stop(patches, run_id=None):
 
 
 def _terminate_stray_runs():
-    """The one-run guard in server.start_run() is global. A test that
-    fails before its run reaches a terminal state leaves that run in
-    `running` forever, and every later test then gets a 409 body with
-    no `id` key. Flipping strays to `failed` in teardown keeps one
-    failure to one test."""
+    """Runs share one global queue. A test that fails before its run
+    reaches a terminal state leaves that run in `running` forever, and
+    every later test's run then waits behind it. Flipping strays to
+    `failed` in teardown keeps one failure to one test."""
     conn = db.get_conn()
     try:
         conn.execute(
@@ -216,7 +215,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r1 = client.post(f"/api/sessions/{session_id}/runs")
         assert r1.status_code == 202, r1.text
         run_id_1 = r1.json()["id"]
@@ -224,7 +223,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r2 = client.post(f"/api/sessions/{session_id}/runs", json={})
         assert r2.status_code == 202, r2.text
         run_id_2 = r2.json()["id"]
@@ -232,7 +231,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r3 = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": False})
         assert r3.status_code == 202, r3.text
         run_id_3 = r3.json()["id"]
@@ -240,7 +239,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r4 = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": True})
         assert r4.status_code == 202, r4.text
         run_id_4 = r4.json()["id"]
@@ -264,7 +263,7 @@ def test_non_boolean_skip_pause_rejected_422_no_row_created():
     finally:
         conn.close()
 
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         resp = client.post(f"/api/sessions/{session_id}/runs",
                            json={"skipPause": "yes-please"})
     assert resp.status_code == 422, resp.text
@@ -328,7 +327,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
 
     # skipPause omitted -> False, distinguishable from int 0/1.
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         omitted_resp = client.post(f"/api/sessions/{session_id}/runs")
         assert omitted_resp.status_code == 202, omitted_resp.text
         _assert_snapshot_skip_pause_bool(omitted_resp.json(), False)
@@ -444,7 +443,7 @@ def test_restart_reopen_persists_skip_pause_true():
     _clear_runs()
     session_id, _ = _new_session_with_video()
 
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         resp = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": True})
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]

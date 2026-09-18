@@ -212,6 +212,11 @@ const liveApi = {
     return apiJson("/api/runs/" + runId + "/proceed", { method: "POST" });
   },
 
+  /* cancelRun: take a queued run out of the queue. 409 once it has started. */
+  async cancelRun(runId) {
+    await apiFetch("/api/runs/" + runId, { method: "DELETE" });
+  },
+
   /* subscribeRun: EventSource on /api/runs/{id}/events.
      Terminal (complete|error): deliver event then close.
      onopen fires on initial connect and on reconnect; track connected state. */

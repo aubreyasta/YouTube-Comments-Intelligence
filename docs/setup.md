@@ -247,6 +247,6 @@ After a provider or model change, run one real Session through the web app again
 | Vision preflight failure | The downloaded build does not expose vision support | Download a vision-capable `Qwen3.8-27B` 4-bit MLX build. |
 | Structured response fails validation | Thinking is enabled or the local runtime did not enforce the schema | Disable thinking, confirm the selected model, and run the structured-output smoke test. |
 | Run fails at the report stage | Playwright Chromium is missing | Run `python -m playwright install chromium`. |
-| `409` when starting a run | Another Session has a queued or running run | Wait for the active run to finish. |
+| `409` when starting a run | This Session already has a running run | Wait for it to finish. Runs from other Sessions queue instead of failing. |
 | Public URL stopped working | `cloudflared` restarted | Read and share the new quick-tunnel URL. |
 | Run is slower than expected | The model or KV cache is using too much unified memory | Close memory-heavy applications, inspect Activity Monitor and `lms ps`, then lower `LLM_CONTEXT_LENGTH` only if the real run requires it. |

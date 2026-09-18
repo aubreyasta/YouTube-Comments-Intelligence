@@ -107,7 +107,7 @@ def test_idle_run_sends_its_snapshot_then_heartbeats():
         buf = _read_stream(run_id)
     frames = _data_frames(buf)
     assert frames[0] == {"stage": "collect", "pct": 5, "message": "Collecting",
-                         "counts": {"total": 3}, "error": None}, frames[0]
+                         "counts": {"total": 3}, "error": None, "queuePosition": None}, frames[0]
     assert ": heartbeat\n\n" in buf, buf
     assert frames[-1]["stage"] == "complete", frames
     # Unchanged snapshots are not resent: only the first and the terminal one.

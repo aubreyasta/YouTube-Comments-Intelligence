@@ -12,7 +12,7 @@ never leaves anything under the repo's real data/ tree.
 adapter._execute()'s pipeline edges (collect, brief.reconcile, analyze,
 affect, report, and every model-touching call after brief_pause) are
 mocked - no network, no model, no real PDF render - but
-the run still executes on adapter.start_run()'s real daemon thread, so
+the run still executes on adapter.start_next()'s real daemon thread, so
 the brief_pause block and DB writes are exercised for real.
 
 Run: python tests/test_run_key_messages.py
@@ -54,7 +54,7 @@ _RUN_STAGES = set(progress.STAGES)
 _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order", "source"}
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "counts",
+    "error", "briefPoints", "artifacts", "skipPause", "counts", "queuePosition",
 }
 
 
@@ -116,11 +116,10 @@ def _fake_affect_result():
 
 
 def _terminate_stray_runs():
-    """The one-run guard in server.start_run() is global. A test that
-    fails before its run reaches proceed leaves that run in `running`
-    forever, and every later test then gets a 409 body with no `id` key.
-    Flipping strays to `failed` in teardown keeps one failure to one
-    test."""
+    """Runs share one global queue. A test that fails before its run
+    reaches proceed leaves that run in `running` forever, and every later
+    test's run then waits behind it. Flipping strays to `failed` in
+    teardown keeps one failure to one test."""
     conn = db.get_conn()
     try:
         conn.execute(

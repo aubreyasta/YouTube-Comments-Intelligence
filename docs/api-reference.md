@@ -133,6 +133,7 @@ type RunProgress = {
     otherShare?: number; // percent left in `Other`, set when `classify` ends
   };
   error: string | null;
+  queuePosition: number | null; // 1 = next to start; null once the run has started
 };
 
 type RunSnapshot = RunProgress & {
@@ -495,7 +496,7 @@ Error: `404` when the row, path, or file does not exist.
 
 ### `POST /sessions/{id}/runs`
 
-Start one analysis in a background thread.
+Queue one analysis. Runs start one at a time, in start order, across all Sessions.
 
 Request body is optional. Omitted means `skipPause:false`.
 
@@ -503,17 +504,16 @@ Request body is optional. Omitted means `skipPause:false`.
 { "skipPause": false }
 ```
 
-The server acquires an immediate SQLite write transaction and rejects a start while any Session has a `queued` or `running` run. It performs this guard before deleting the target Session's prior result.
+The server inserts a `queued` run and starts it at once if no run is `running`. Otherwise the run waits, and `queuePosition` gives its place in line. A new start replaces the Session's own queued run. A Session with a `running` run refuses a new start.
 
-After admission, the new run replaces that Session's prior run and files. There is no run history.
+When the new run starts, it deletes the Session's prior runs and files. There is no run history. Until then, the prior result stays readable.
 
-Response `202`: `RunSnapshot`.
+Response `202`: `RunSnapshot`. Its `status` is `queued` even when the run starts immediately.
 
 Errors:
 
 - `404` Session not found.
 - `409 RUN_IN_PROGRESS` with `"This session already has a run in progress."`
-- `409 RUN_IN_PROGRESS` with `"Another analysis is already running. Wait for it to finish."`
 
 `skipPause:true` bypasses `brief_pause` only when reconciliation leaves at least one included Key Message. Zero included rows always pause.
 
@@ -522,6 +522,14 @@ Errors:
 Return `RunSnapshot`.
 
 Error: `404` run not found.
+
+### `DELETE /runs/{id}`
+
+Remove a `queued` run from the queue. The running run and the Session's prior result are not changed.
+
+Response `204`, also for an unknown id.
+
+Error: `409 CONFLICT` with `"Only a queued run can be cancelled. This one has already started."`
 
 ### `PATCH /runs/{id}/brief_points`
 
@@ -575,7 +583,7 @@ Stages:
 
 | Stage | Typical percent | Meaning |
 |---|---:|---|
-| `queued` | 0 | Run admitted; the thread has not started. |
+| `queued` | 0 | Run waits in the queue; `queuePosition` gives its place. |
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
 | `brief_pause` | 40 | Wait for review and `/proceed`. |

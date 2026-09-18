@@ -11,7 +11,7 @@ db._DB_PATH holds at that time), then drives the real routes through
 FastAPI's TestClient. Both globals are restored on exit so this file
 never leaves anything under the repo's real data/ tree.
 
-adapter.start_run() (the real pipeline thread) is mocked to a no-op, so
+adapter.start_next() (the real pipeline thread) is mocked to a no-op, so
 POST /runs exercises the insert path without touching the network, a
 model, or the GPU.
 
@@ -68,7 +68,7 @@ def _seed_run(sid, state, started_at):
 def test_started_run_snapshot_carries_created_at():
     """POST /runs returns a createdAt a JS Date can parse."""
     sid = _new_session()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         snap = client.post(f"/api/sessions/{sid}/runs").json()
     assert "createdAt" in snap, "POST /runs snapshot has no createdAt"
     # The exact failure mode of issue #7: new Date(undefined) is Invalid Date.

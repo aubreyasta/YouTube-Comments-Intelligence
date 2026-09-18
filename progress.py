@@ -27,7 +27,7 @@ TERMINAL = ("complete", "error")
 _ACTIVE_STATES = ("queued", "running")
 
 # Wake-ups for runs blocked in await_review. The run thread and the server
-# share one process, and a restart fails every active run (fail_orphans), so
+# share one process, and a restart fails every running run (fail_orphans), so
 # an in-memory event never outlives the run it wakes.
 _review_events: dict[str, threading.Event] = {}
 _lock = threading.Lock()
@@ -55,9 +55,26 @@ def _write(run_id: str, sql: str, params: tuple) -> int:
         conn.close()
 
 
-def start(run_id: str) -> None:
-    _write(run_id, "UPDATE runs SET state = 'running', started_at = ? WHERE id = ?",
-           (_now(), run_id))
+def claim_next() -> str | None:
+    """Move the oldest queued run to running, unless a run is already
+    running. BEGIN IMMEDIATE takes the write lock before the check, so a new
+    start and a finishing run calling this at once never both claim: one GPU,
+    at most one running run. Returns the claimed run id, or None."""
+    conn = db.get_conn()
+    try:
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
+        row = None
+        if conn.execute("SELECT 1 FROM runs WHERE state = 'running'").fetchone() is None:
+            row = conn.execute("SELECT id FROM runs WHERE state = 'queued' "
+                               "ORDER BY started_at, id LIMIT 1").fetchone()
+            if row is not None:
+                conn.execute("UPDATE runs SET state = 'running', started_at = ? WHERE id = ?",
+                             (_now(), row["id"]))
+        conn.execute("COMMIT")
+        return row["id"] if row else None
+    finally:
+        conn.close()
 
 
 def publish(run_id: str, stage: str, message: str, pct: int, **counts) -> None:
@@ -124,33 +141,42 @@ def finish(run_id: str, error: str | None = None) -> None:
 
 
 def fail_orphans() -> None:
-    """Run threads die with the process, so an active row at startup has no
-    worker behind it and would block every new run forever."""
+    """Run threads die with the process, so a running row at startup has no
+    worker behind it and would hold the queue forever. Queued rows have no
+    worker yet either, so they survive and the next claim picks them up."""
     conn = db.get_conn()
     try:
         conn.execute(
             "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
-            "WHERE state IN ('queued', 'running')",
+            "WHERE state = 'running'",
             (_now(), "Interrupted: the server restarted before this run finished."))
         conn.commit()
     finally:
         conn.close()
 
 
-def read(row) -> dict:
+def read(row, conn) -> dict:
     """The snapshot for a runs row. The terminal state wins over the stored
-    stage, since a crash can leave a stale non-terminal stage behind."""
+    stage, since a crash can leave a stale non-terminal stage behind.
+    queuePosition is 1 for the next run to start, None once it has."""
     state = row["state"]
     stage = ("complete" if state == "complete"
              else "error" if state == "failed"
              else row["stage"] or "queued")
     stored = json.loads(row["progress"] or "{}")
+    position = None
+    if state == "queued":
+        # Same order as claim_next().
+        position = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE state = 'queued' AND (started_at, id) < (?, ?)",
+            (row["started_at"], row["id"])).fetchone()[0] + 1
     return {
         "stage": stage,
         "pct": 100 if state == "complete" else stored.get("pct", 0),
         "message": stored.get("message", ""),
         "counts": stored.get("counts", {}),
         "error": row["error"],
+        "queuePosition": position,
     }
 
 
@@ -158,7 +184,7 @@ def load(run_id: str) -> dict | None:
     conn = db.get_conn()
     try:
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-        return read(row) if row else None
+        return read(row, conn) if row else None
     finally:
         conn.close()
 
@@ -172,11 +198,14 @@ if __name__ == "__main__":
     db.init()
     c = db.get_conn()
     c.execute("INSERT INTO sessions (id, name, created_at, updated_at) VALUES ('s', 's', '', '')")
-    c.execute("INSERT INTO runs (id, session_id) VALUES ('r', 's')")
+    for rid, at in (("r", "1"), ("q2", "2"), ("q3", "3")):
+        c.execute("INSERT INTO runs (id, session_id, started_at) VALUES (?, 's', ?)", (rid, at))
     c.commit()
     c.close()
 
-    start("r")
+    assert [load(r)["queuePosition"] for r in ("r", "q2", "q3")] == [1, 2, 3]
+    assert claim_next() == "r" and claim_next() is None, "claimed a second running run"
+    assert load("r")["queuePosition"] is None and load("q3")["queuePosition"] == 2
     publish("r", "collect", "Collected", 20, total=3)
     publish("r", "classify", "Batch 1", 55, labelled=2, themes=2, other_share=1.5)
     snap = load("r")
@@ -200,4 +229,7 @@ if __name__ == "__main__":
     finish("r", "boom")
     snap = load("r")
     assert snap["stage"] == "error" and snap["error"] == "boom" and snap["counts"]["total"] == 3
+    assert claim_next() == "q2", "a finished run did not free the slot"
+    fail_orphans()
+    assert load("q2")["stage"] == "error" and load("q3")["queuePosition"] == 1
     print("progress self-check ok")

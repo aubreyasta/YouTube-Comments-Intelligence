@@ -101,6 +101,7 @@ def _startup():
     llm_env(os.environ)
     db.init()
     progress.fail_orphans()
+    adapter.start_next()  # queued runs survive a restart
     for key in ("YOUTUBE_API_KEY",):
         if not os.environ.get(key):
             logger.warning("%s is not set - runs will fail without it", key)
@@ -512,7 +513,7 @@ def _ser_session(row, conn) -> dict:
         latest_run = {
             "id": latest_run_row["id"],
             "status": latest_run_row["state"],
-            **progress.read(latest_run_row),
+            **progress.read(latest_run_row, conn),
         }
     else:
         latest_run = None
@@ -641,8 +642,8 @@ def _ser_run(row, conn) -> dict:
         # the results page dates the strategy note from one field in both modes.
         "createdAt": row["started_at"],
         "status": row["state"],
-        # stage, pct, message, counts, error: the same snapshot SSE sends.
-        **progress.read(row),
+        # stage, pct, message, counts, error, queuePosition: the same snapshot SSE sends.
+        **progress.read(row, conn),
         "skipPause": bool(row["skip_pause"]),
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
         "artifacts": [_ser_artifact(a) for a in public_arts],
@@ -1568,38 +1569,24 @@ def start_run(session_id: str, body: StartRunBody | None = None):
         if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
             _404("Session not found.")
 
-        # One GPU serves every run, so the guard is global, not per-Session
-        # (docs/architecture.md "Run admission and lifecycle"). BEGIN IMMEDIATE takes SQLite's write
-        # lock before the check, so the check and the INSERT are one
-        # transaction and two simultaneous requests cannot both pass it.
-        # Manual transaction control: get_conn() leaves pysqlite's implicit
-        # BEGIN in charge, which would open the transaction too late.
+        # Every start joins one queue across Sessions; adapter.start_next()
+        # runs them one at a time (docs/architecture.md "Run admission and
+        # lifecycle"). BEGIN IMMEDIATE makes the check below and the INSERT
+        # one transaction, so a claim cannot move this Session's queued run
+        # to running in between. Manual transaction control: get_conn()
+        # leaves pysqlite's implicit BEGIN in charge, which would open the
+        # transaction too late.
         conn.isolation_level = None
         conn.execute("BEGIN IMMEDIATE")
 
-        # Reject a second concurrent run BEFORE deleting anything: overwrite
-        # (below) is only safe once we know no run is currently in flight,
-        # otherwise this would nuke a running adapter thread's brief_points
-        # and artifacts out from under it.
-        active = conn.execute(
-            "SELECT id, session_id FROM runs WHERE state IN ('queued', 'running')"
-        ).fetchone()
-        if active:
-            if active["session_id"] == session_id:
-                _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
-            _409("Another analysis is already running. Wait for it to finish.",
-                 "RUN_IN_PROGRESS")
-
-        # Overwrite: clear prior runs for this session before inserting the new one.
-        # ponytail: hard overwrite, no run history; if history is wanted later, keep rows
-        # and add a `latest` flag instead of deleting.
-        # The client is expected to confirm the overwrite before calling (frontend concern, Phase 2).
-        old_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM runs WHERE session_id=?", (session_id,)
-        ).fetchall()]
-        for old_id in old_ids:
-            storage.clear_run(old_id)
-        conn.execute("DELETE FROM runs WHERE session_id=?", (session_id,))
+        # A running run is never overwritten. A queued one has nothing on
+        # disk yet, so the new request simply replaces it. The Session's
+        # finished runs stay until the new run starts (adapter._clear_prior_runs).
+        if conn.execute(
+            "SELECT 1 FROM runs WHERE session_id = ? AND state = 'running'", (session_id,)
+        ).fetchone():
+            _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
+        conn.execute("DELETE FROM runs WHERE session_id = ? AND state = 'queued'", (session_id,))
 
         rid = str(uuid.uuid4())
         now = _now()
@@ -1617,13 +1604,14 @@ def start_run(session_id: str, body: StartRunBody | None = None):
     finally:
         conn.close()
 
-    # Start the adapter thread AFTER the DB transaction commits.
-    adapter.start_run(rid)
+    # After the commit, so the claim can see the new row. The snapshot
+    # above still says queued even when this starts it at once.
+    adapter.start_next()
     return result
 
 
 # ---------------------------------------------------------------------------
-# /api/runs/{id}  GET
+# /api/runs/{id}  GET, DELETE
 # ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}")
@@ -1634,6 +1622,23 @@ def get_run(run_id: str):
         if row is None:
             _404("Run not found.")
         return _ser_run(row, conn)
+    finally:
+        conn.close()
+
+
+@app.delete("/api/runs/{run_id}", status_code=204)
+def leave_queue(run_id: str):
+    """Take a queued run out of the queue. A running run has no stop path,
+    so it is refused. The conditional DELETE is the check, so a run claimed
+    a moment earlier is never deleted from under its thread."""
+    conn = db.get_conn()
+    try:
+        deleted = conn.execute(
+            "DELETE FROM runs WHERE id = ? AND state = 'queued'", (run_id,)).rowcount
+        conn.commit()
+        if not deleted and conn.execute(
+                "SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone():
+            _409("Only a queued run can be cancelled. This one has already started.")
     finally:
         conn.close()
 

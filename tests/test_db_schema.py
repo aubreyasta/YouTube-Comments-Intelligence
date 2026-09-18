@@ -318,9 +318,9 @@ def test_init_migrates_pre_progress_database():
         assert "progress" in cols_after, cols_after
         assert not {"total_comments", "progress_detail"} & cols_after, cols_after
         rows = {r["id"]: r for r in conn.execute("SELECT * FROM runs")}
+        assert progress.read(rows[counted], conn)["counts"] == {"total": 574}, dict(rows[counted])
+        assert progress.read(rows[uncounted], conn)["counts"] == {}, dict(rows[uncounted])
         conn.close()
-        assert progress.read(rows[counted])["counts"] == {"total": 574}, dict(rows[counted])
-        assert progress.read(rows[uncounted])["counts"] == {}, dict(rows[uncounted])
     finally:
         db._DB_PATH = saved_path
     print("  ok  db.init() moves runs.total_comments into runs.progress and drops "

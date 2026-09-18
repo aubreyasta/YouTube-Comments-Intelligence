@@ -808,6 +808,12 @@ const demoApi = {
   },
 
   /** @param {string} runId @returns {Promise<object>} */
+  /** Demo runs never queue: startRun refuses while another run is active.
+   * @param {string} runId @returns {Promise<void>} */
+  async cancelRun(runId) {
+    throw demoError("conflict", "Only a queued run can be cancelled. This one has already started.");
+  },
+
   async proceedRun(runId) {
     const run = store.runs.get(runId);
     if (!run) throw demoError("not_found", "Run not found.");
@@ -937,7 +943,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
     "listSessions","getSession","createSession","getCampaign",
     "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
-    "proceedRun",
+    "proceedRun","cancelRun",
     "getReport","getAssetData",
     "simulateDisconnect","simulateFailure",
   ];
@@ -2302,6 +2308,8 @@ async function renderRun(runId) {
     state.counts = s.counts || {};
     state.failed = s.stage === "error" ? (s.error || s.message || "Run failed.") : null;
     state.completed = s.stage === "complete";
+    // Set only while the run waits behind another Session's run (live mode).
+    state.queuePosition = s.queuePosition != null ? s.queuePosition : null;
     if (STAGE_TO_STEP[s.stage] != null) currentStep = STAGE_TO_STEP[s.stage];
   }
   applySnapshot(run);
@@ -2309,11 +2317,15 @@ async function renderRun(runId) {
   function badgeText() {
     if (state.failed) return "Failed";
     if (state.completed) return "Complete";
+    if (state.queuePosition != null) return "Queued";
     if (state.stage === "brief_pause") return "Waiting for you";
     return "Running";
   }
   function topbarRightHtml() {
     if (state.completed || state.failed) return "";
+    if (state.queuePosition != null) {
+      return '<button class="btn secondary" type="button" id="btn-leave-queue">Leave the queue</button>';
+    }
     const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
     const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
     return btn + note;
@@ -2324,6 +2336,20 @@ async function renderRun(runId) {
       badgeHtml: `<span class="badge" id="run-badge">${esc(badgeText())}</span>`,
       rightHtml: topbarRightHtml(),
     });
+    const leave = document.getElementById("btn-leave-queue");
+    if (leave) leave.onclick = leaveQueue;
+  }
+  async function leaveQueue(e) {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await demoApi.cancelRun(runId);
+      location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
+    } catch (err) {
+      // A 409 means the run started a moment ago; the next snapshot repaints it.
+      btn.disabled = false;
+      bannerEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
+    }
   }
   paintTopbar();
 
@@ -2490,6 +2516,13 @@ async function renderRun(runId) {
           <span class="spinner sm" aria-hidden="true"></span>
           <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
         </div>`;
+    } else if (state.queuePosition != null) {
+      const n = state.queuePosition;
+      titleEl.textContent = "Waiting for another analysis to finish";
+      const ahead = n === 1 ? "This run is next in line."
+        : `${n - 1} other ${n === 2 ? "run is" : "runs are"} waiting ahead of this one.`;
+      subEl.textContent = ahead
+        + " It starts on its own - you can leave this page.";
     } else {
       const total = totalComments();
       const labelling = total != null ? `Labelling ${fmtNum(total)} comments` : "Labelling comments";
