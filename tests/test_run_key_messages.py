@@ -43,19 +43,18 @@ from starlette.testclient import TestClient
 
 from auth_helper import login  # sets the sign-in env the startup hook requires
 
+import progress
 import server
 import adapter
 
 db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = login(TestClient(server.app))
 
-_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "classify",
-              "emotion", "report", "complete", "error"}
+_RUN_STAGES = set(progress.STAGES)
 _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order", "source"}
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "totalComments",
-    "progressDetail",
+    "error", "briefPoints", "artifacts", "skipPause", "counts",
 }
 
 

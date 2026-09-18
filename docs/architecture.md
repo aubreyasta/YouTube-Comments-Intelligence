@@ -134,7 +134,7 @@ All signed-in users share one workspace. `sessions.created_by` records who creat
 | `videos` | YouTube URLs and kinds. |
 | `assets` | User Input metadata, extracted text, article snapshot, and upload path. |
 | `key_messages` | Editable Session-level Key Message draft. |
-| `runs` | Run state, persisted stage, skip-pause choice, timestamps, and error. |
+| `runs` | Run state, stage, progress JSON, skip-pause choice, timestamps, and error. |
 | `brief_points` | Immutable run copy of the reconciled Key Messages. |
 | `run_artifacts` | Stored output file records. |
 
@@ -161,13 +161,13 @@ The adapter thread then:
 7. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
 8. Marks the run complete. An exception marks it failed.
 
-Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. No thread survives a restart, so the startup hook marks every `queued` or `running` row failed with an interrupted error. The global guard then admits the next run.
+Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. No thread survives a restart, so the startup hook (`progress.fail_orphans`) marks every `queued` or `running` row failed with an interrupted error. The global guard then admits the next run.
 
 ### Progress
 
-SSE events carry `adapter._push()` dictionaries in `snake_case`. All other HTTP JSON uses `camelCase`. The stream emits comment heartbeats while idle and closes after a terminal event.
+`progress.py` owns the Run progress snapshot. The adapter thread writes it through `start`, `publish`, `await_review`, and `finish`. `publish` merges counts into `runs.progress`, so a later stage never erases an earlier count. `await_review` blocks the thread at `brief_pause` until `proceed` wakes it. `proceed` changes the stage with a conditional UPDATE, so two concurrent calls cannot both continue the run.
 
-The persisted run stage is authoritative when a fresh GET conflicts with an old buffered event. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
+`GET /runs/{id}` and SSE both read the snapshot through `progress.read`. A terminal state wins over a stale stage. The SSE route polls the row about once a second and sends the snapshot when it changes, so every tab on a run sees the same state. The stream emits comment heartbeats while idle and closes after a terminal snapshot. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
 
 ### Artifacts
 

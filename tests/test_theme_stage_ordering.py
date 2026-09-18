@@ -40,6 +40,7 @@ from auth_helper import login  # sets the sign-in env the startup hook requires
 
 from starlette.testclient import TestClient
 
+import progress
 import server
 import adapter
 
@@ -147,7 +148,10 @@ def _wait_for_run_thread(run_id, timeout=5.0):
 
 
 def _stop(patches, run_id):
-    adapter.get_proceed_event(run_id).set()
+    try:
+        progress.proceed(run_id)  # wake a run still parked at brief_pause
+    except progress.NotPaused:
+        pass
     _wait_for_run_thread(run_id)
     for p in patches:
         p.stop()

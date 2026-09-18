@@ -10,7 +10,7 @@ Related: [Setup](setup.md), [Architecture](architecture.md), [Product](../README
 
 - FastAPI binds `127.0.0.1:8000`. The public Cloudflare URL forwards to that origin.
 - A login session protects every request before routing, except `/auth/login`, `/auth/callback`, and `/auth/logout`. Users sign in with Google. See [Authentication](#authentication).
-- JSON responses use `camelCase`. SSE progress events use `snake_case` because they carry `adapter.py` dictionaries directly.
+- JSON responses and SSE progress events use `camelCase`.
 - IDs are UUID v4. Timestamps are ISO 8601 with a timezone.
 - Uploads use `multipart/form-data`. SSE uses `text/event-stream`. Downloads return their recorded MIME type.
 
@@ -120,24 +120,35 @@ type RunStage =
   | "complete"
   | "error";
 
-type RunSnapshot = {
+type RunProgress = {
+  stage: RunStage;
+  pct: number;
+  message: string;
+  counts: {
+    total?: number;      // comments in the analysis base, set after `collect`
+    themes?: number;     // Themes discovered, set when `classify` starts
+    labelled?: number;   // comments labelled so far
+    batch?: number;      // finished classify batches
+    batches?: number;    // total classify batches
+    otherShare?: number; // percent left in `Other`, set when `classify` ends
+  };
+  error: string | null;
+};
+
+type RunSnapshot = RunProgress & {
   id: string;
   sessionId: string;
   createdAt: string;
   status: "queued" | "running" | "complete" | "failed";
-  stage: RunStage;
-  pct: number;
-  message: string;
-  error: string | null;
   skipPause: boolean;
-  totalComments: number | null;
-  progressDetail: string | null;
   briefPoints: BriefPoint[];
   artifacts: Artifact[];
 };
 ```
 
-`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A fresh GET uses the persisted stage, so a paused run restores as `brief_pause` without SSE replay. `totalComments` is `null` until the `collect` stage finishes, then holds the analysis-base comment count (persisted the same way as `stage`), so a reopened run can paint it without SSE replay. `progressDetail` is `null` until `classify` starts, then holds the latest `classify` event `detail` (see [`GET /runs/{id}/events`](#get-runsidevents)), so a reopened run repaints its labelling progress and Theme count.
+`RunProgress` is the Run progress snapshot. The server persists it on the run row, so `GET /runs/{id}` and every SSE event carry the same value. A reopened or second tab repaints from it without replay.
+
+`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A later stage never removes an earlier count. A terminal `status` wins: `complete` reads stage `complete`, and `failed` reads stage `error`.
 
 ### Artifact
 
@@ -552,16 +563,19 @@ Errors: `404` run not found; `409` run is not waiting; `422` no Key Message is i
 
 ### `GET /runs/{id}/events`
 
-Open the SSE progress stream. Data events use `snake_case`:
+Open the SSE progress stream. Each data event is a `RunProgress` (see [Run snapshot](#run-snapshot)):
 
 ```text
-data: {"run_id":"...","stage":"classify","message":"Classifying comments","pct":60,"detail":null}\n\n
+data: {"stage":"classify","pct":60,"message":"Classifying comments","counts":{"total":574,"themes":7,"labelled":120,"batch":3,"batches":15},"error":null}\n\n
 ```
+
+The server reads the persisted snapshot about once a second and sends it when it changes. Every open stream on a run receives the same events.
 
 Stages:
 
 | Stage | Typical percent | Meaning |
 |---|---:|---|
+| `queued` | 0 | Run admitted; the thread has not started. |
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
 | `brief_pause` | 40 | Wait for review and `/proceed`. |
@@ -570,20 +584,11 @@ Stages:
 | `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |
 | `report` | 77-88 | Write Report JSON, PDF, and CSVs. |
 | `complete` | 100 | Run complete. |
-| `error` | 0 | Run failed; `detail` carries the exception string. |
+| `error` | - | Run failed; `error` carries the exception string. `pct` keeps its last value. |
 
-`detail` is a free-text string. When it carries counts it is `;`-joined `key=number` pairs, and clients parse it:
+`classify` updates `counts.labelled`, `counts.batch`, and `counts.batches` once per finished batch. `labelled` counts comments, not batches.
 
-| Stage | `detail` | Meaning |
-|---|---|---|
-| `collect` | `total=N` | Comments in the analysis base. |
-| `classify` | `themes=K;labelled=0;total=M` | Themes discovered; classification starts. |
-| `classify` | `themes=K;labelled=N;total=M;batch=B;batches=T` | One event per finished batch. `labelled` counts comments, not batches. |
-| `classify` | `themes=K;labelled=M;total=M;other_share=X.Y` | Classification done; percent left in `Other`. |
-
-Any other `detail` is prose and carries no counts.
-
-An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. A terminal run replays one terminal event and closes.
+An idle stream emits `: heartbeat\n\n` every 15 seconds. Comment frames do not trigger `EventSource.onmessage`. The stream sends the terminal snapshot and closes.
 
 Error: `404` before the stream opens.
 

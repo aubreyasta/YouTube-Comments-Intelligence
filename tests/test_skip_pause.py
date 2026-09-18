@@ -41,6 +41,7 @@ from starlette.testclient import TestClient
 
 from auth_helper import login  # sets the sign-in env the startup hook requires
 
+import progress
 import server
 import adapter
 
@@ -49,8 +50,7 @@ client = login(TestClient(server.app))
 
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "totalComments",
-    "progressDetail",
+    "error", "briefPoints", "artifacts", "skipPause", "counts",
 }
 
 
@@ -167,7 +167,10 @@ def _wait_for_run_thread(run_id, timeout=5.0):
 
 def _stop(patches, run_id=None):
     if run_id is not None:
-        adapter.get_proceed_event(run_id).set()
+        try:
+            progress.proceed(run_id)  # wake a run still parked at brief_pause
+        except progress.NotPaused:
+            pass
         _wait_for_run_thread(run_id)
     for p in patches:
         p.stop()
@@ -357,16 +360,12 @@ def test_skip_true_with_included_message_skips_brief_pause():
         current = client.get(f"/api/runs/{run_id}").json()["stage"]
         assert current != "brief_pause", current
 
-        assert adapter.get_proceed_event(run_id).is_set() is False, (
-            "skip_pause branch must never set the proceed event - nothing calls it")
-
         assert _wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
     print("  ok  skipPause:true with >=1 included brief point never enters "
-          "brief_pause, advances past brief with no /proceed call, and never "
-          "sets the proceed event")
+          "brief_pause and advances past brief with no /proceed call")
 
 
 def test_skip_true_with_zero_included_still_pauses():
