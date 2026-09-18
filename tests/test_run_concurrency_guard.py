@@ -5,7 +5,8 @@ adapter.start_next() claims through progress.claim_next().
 One GPU serves one model at a time, so at most one run is `running`
 across every Session. Every other start waits as `queued` and runs, in
 order, when the slot frees. A Session's own running run is never
-overwritten (409); its own queued run is replaced by the new request.
+overwritten (409); its own queued run is replaced by the new request,
+which keeps its place in line.
 The Session's finished runs survive until its new run starts, so leaving
 the queue keeps the old result.
 
@@ -19,6 +20,7 @@ Run: python tests/test_run_concurrency_guard.py
 
 import os
 import pathlib
+import sqlite3
 import sys
 import threading
 import tempfile
@@ -126,6 +128,7 @@ def test_second_session_queues_then_runs_on_its_own():
         second = client.post(f"/api/sessions/{_new_session()}/runs")
         assert (first.status_code, second.status_code) == (202, 202), second.text
         a, b = first.json()["id"], second.json()["id"]
+        assert (first.json()["status"], second.json()["status"]) == ("running", "queued")
 
         assert _wait_until(lambda: fake.started == [a]), fake.started
         assert _states() == {a: "running", b: "queued"}, _states()
@@ -159,13 +162,15 @@ def test_same_session_queued_run_is_replaced():
     session_id = _new_session()
     with patch.object(adapter, "start_next", return_value=None):
         first = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
+        client.post(f"/api/sessions/{_new_session()}/runs")
         resp = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": True})
     assert resp.status_code == 202, resp.text
     second = resp.json()["id"]
     states = _states()
     assert first not in states, "the Session's earlier queued run was not replaced"
     assert states[second] == "queued" and resp.json()["skipPause"] is True
-    print("  ok  a second start in the same Session replaces its queued run")
+    assert resp.json()["queuePosition"] == 1, resp.json()["queuePosition"]
+    print("  ok  a second start in the same Session replaces its queued run in place")
 
 
 def test_running_run_blocks_second_start_in_the_same_session():
@@ -296,6 +301,29 @@ def test_startup_fails_running_runs_and_resumes_the_queue():
     print("  ok  startup fails running runs, keeps and starts queued runs, leaves complete runs alone")
 
 
+def test_failed_claim_is_retried_not_raised():
+    _clear_runs()
+    fake = FakePipeline()
+    real_claim = progress.claim_next
+    failures = [sqlite3.OperationalError("database is locked")]
+
+    def flaky_claim():
+        if failures:
+            raise failures.pop()
+        return real_claim()
+
+    # The retry Timer runs at once instead of after 5 s.
+    now = lambda _delay, fn: threading.Thread(target=fn)
+    with patch.object(adapter, "_execute", fake),             patch.object(progress, "claim_next", flaky_claim),             patch.object(adapter.threading, "Timer", now):
+        resp = client.post(f"/api/sessions/{_new_session()}/runs")
+        assert resp.status_code == 202, resp.text
+        rid = resp.json()["id"]
+        assert _wait_until(lambda: fake.started == [rid]), fake.started
+        fake.release(rid)
+        assert _wait_until(lambda: _states()[rid] == "complete"), _states()
+    print("  ok  a failed claim is retried instead of stalling the queue")
+
+
 if __name__ == "__main__":
     tests = [
         test_second_session_queues_then_runs_on_its_own,
@@ -307,6 +335,7 @@ if __name__ == "__main__":
         test_prior_result_is_replaced_when_the_new_run_starts,
         test_leaving_the_queue_leaves_the_active_run_alone,
         test_startup_fails_running_runs_and_resumes_the_queue,
+        test_failed_claim_is_retried_not_raised,
     ]
     failed = 0
     for t in tests:

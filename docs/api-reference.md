@@ -149,7 +149,7 @@ type RunSnapshot = RunProgress & {
 
 `RunProgress` is the Run progress snapshot. The server persists it on the run row, so `GET /runs/{id}` and every SSE event carry the same value. A reopened or second tab repaints from it without replay.
 
-`createdAt` is the run's start time; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A later stage never removes an earlier count. A terminal `status` wins: `complete` reads stage `complete`, and `failed` reads stage `error`.
+`createdAt` is the time the run joined the queue while it is `queued`, and its start time once it runs; the results page dates the strategy note from it. `briefPoints` and `artifacts` are always present. They are empty until data exists. A later stage never removes an earlier count. A terminal `status` wins: `complete` reads stage `complete`, and `failed` reads stage `error`.
 
 ### Artifact
 
@@ -504,11 +504,11 @@ Request body is optional. Omitted means `skipPause:false`.
 { "skipPause": false }
 ```
 
-The server inserts a `queued` run and starts it at once if no run is `running`. Otherwise the run waits, and `queuePosition` gives its place in line. A new start replaces the Session's own queued run. A Session with a `running` run refuses a new start.
+The server inserts a `queued` run and starts it at once if no run is `running`. Otherwise the run waits, and `queuePosition` gives its place in line. A new start replaces the Session's own queued run and keeps its place in line. A Session with a `running` run refuses a new start.
 
 When the new run starts, it deletes the Session's prior runs and files. There is no run history. Until then, the prior result stays readable.
 
-Response `202`: `RunSnapshot`. Its `status` is `queued` even when the run starts immediately.
+Response `202`: `RunSnapshot`. When the run starts immediately, its `status` is already `running`.
 
 Errors:
 
@@ -529,7 +529,7 @@ Remove a `queued` run from the queue. The running run and the Session's prior re
 
 Response `204`, also for an unknown id.
 
-Error: `409 CONFLICT` with `"Only a queued run can be cancelled. This one has already started."`
+Error: `409 CONFLICT` with `"This run has already started, so it can no longer leave the queue."`
 
 ### `PATCH /runs/{id}/brief_points`
 

@@ -212,8 +212,8 @@ const liveApi = {
     return apiJson("/api/runs/" + runId + "/proceed", { method: "POST" });
   },
 
-  /* cancelRun: take a queued run out of the queue. 409 once it has started. */
-  async cancelRun(runId) {
+  /* leaveQueue: take a queued run out of the queue. 409 once it has started. */
+  async leaveQueue(runId) {
     await apiFetch("/api/runs/" + runId, { method: "DELETE" });
   },
 

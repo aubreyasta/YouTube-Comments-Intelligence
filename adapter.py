@@ -2,8 +2,8 @@
 adapter.py - run execution engine for the YouTube Comment Intelligence backend.
 
 start_next() claims the oldest queued run and runs the pipeline for it on a
-daemon thread, returning immediately. Progress, the brief_pause wait, and the terminal state all go
-through progress.py, which server.py reads.
+daemon thread, returning immediately. Progress, the brief_pause wait, and the
+terminal state all go through progress.py, which server.py reads.
 """
 
 import json
@@ -55,11 +55,26 @@ def _missing_required_artifacts(out_dir: str) -> list[str]:
 def start_next() -> None:
     """Start the oldest queued run on a daemon thread if no run is running.
     Called after a run is queued, when a run ends, and at startup; a call
-    with nothing to do is a no-op."""
-    run_id = progress.claim_next()
-    if run_id is not None:
+    with nothing to do is a no-op. A failed claim is retried, not raised:
+    raising here would leave queued runs waiting for the next start or a
+    restart."""
+    try:
+        run_id = progress.claim_next()
+    except Exception:
+        # ponytail: fixed 5 s retry until the claim succeeds; back off if a
+        # DB outage ever makes this noisy.
+        logger.exception("could not claim the next queued run; retrying in 5 s")
+        threading.Timer(5, start_next).start()
+        return
+    if run_id is None:
+        return
+    try:
         threading.Thread(target=_execute, args=(run_id,), daemon=True,
                          name=f"adapter-run-{run_id[:8]}").start()
+    except Exception as exc:
+        # The claim committed 'running'; fail the run so it frees the slot.
+        logger.exception("run %s: could not start its thread", run_id)
+        progress.finish(run_id, error=f"Could not start the run: {exc}")
 
 
 def _clear_prior_runs(session_id: str, run_id: str) -> None:
@@ -70,9 +85,8 @@ def _clear_prior_runs(session_id: str, run_id: str) -> None:
     flag if history is ever wanted."""
     conn = db.get_conn()
     try:
-        old_ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id))]
-        for old_id in old_ids:
+        for (old_id,) in conn.execute(
+                "SELECT id FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id)).fetchall():
             storage.clear_run(old_id)
         conn.execute("DELETE FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id))
         conn.commit()
@@ -900,10 +914,12 @@ def _execute(run_id: str) -> None:
     Full pipeline run on a daemon thread.
     All exceptions are caught; the run always ends in 'complete' or 'failed'.
     """
-    out_dir = storage.run_dir(run_id)
     cfg = None
 
     try:
+        # Inside the try, so a failure still ends the run and frees the slot.
+        out_dir = storage.run_dir(run_id)
+
         # --- 1. Replace the Session's prior result --------------------------
         run_row     = _load_run(run_id)
         _clear_prior_runs(run_row["session_id"], run_id)

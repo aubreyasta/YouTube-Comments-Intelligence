@@ -807,13 +807,13 @@ const demoApi = {
     return { messages: kept.map((p) => ({ ...p })) };
   },
 
-  /** @param {string} runId @returns {Promise<object>} */
   /** Demo runs never queue: startRun refuses while another run is active.
    * @param {string} runId @returns {Promise<void>} */
-  async cancelRun(runId) {
-    throw demoError("conflict", "Only a queued run can be cancelled. This one has already started.");
+  async leaveQueue(runId) {
+    throw demoError("conflict", "This run has already started, so it can no longer leave the queue.");
   },
 
+  /** @param {string} runId @returns {Promise<object>} */
   async proceedRun(runId) {
     const run = store.runs.get(runId);
     if (!run) throw demoError("not_found", "Run not found.");
@@ -943,7 +943,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
     "listSessions","getSession","createSession","getCampaign",
     "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
-    "proceedRun","cancelRun",
+    "proceedRun","leaveQueue",
     "getReport","getAssetData",
     "simulateDisconnect","simulateFailure",
   ];
@@ -2309,7 +2309,7 @@ async function renderRun(runId) {
     state.failed = s.stage === "error" ? (s.error || s.message || "Run failed.") : null;
     state.completed = s.stage === "complete";
     // Set only while the run waits behind another Session's run (live mode).
-    state.queuePosition = s.queuePosition != null ? s.queuePosition : null;
+    state.queuePosition = s.queuePosition ?? null;
     if (STAGE_TO_STEP[s.stage] != null) currentStep = STAGE_TO_STEP[s.stage];
   }
   applySnapshot(run);
@@ -2337,13 +2337,13 @@ async function renderRun(runId) {
       rightHtml: topbarRightHtml(),
     });
     const leave = document.getElementById("btn-leave-queue");
-    if (leave) leave.onclick = leaveQueue;
+    if (leave) leave.onclick = onLeaveQueue;
   }
-  async function leaveQueue(e) {
+  async function onLeaveQueue(e) {
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      await demoApi.cancelRun(runId);
+      await demoApi.leaveQueue(runId);
       location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
     } catch (err) {
       // A 409 means the run started a moment ago; the next snapshot repaints it.
@@ -2519,9 +2519,8 @@ async function renderRun(runId) {
     } else if (state.queuePosition != null) {
       const n = state.queuePosition;
       titleEl.textContent = "Waiting for another analysis to finish";
-      const ahead = n === 1 ? "This run is next in line."
-        : `${n - 1} other ${n === 2 ? "run is" : "runs are"} waiting ahead of this one.`;
-      subEl.textContent = ahead
+      subEl.textContent = (n === 1 ? "This run is next in line."
+        : `${n - 1} other ${n === 2 ? "run is" : "runs are"} waiting ahead of this one.`)
         + " It starts on its own - you can leave this page.";
     } else {
       const total = totalComments();

@@ -638,8 +638,9 @@ def _ser_run(row, conn) -> dict:
     return {
         "id": rid,
         "sessionId": row["session_id"],
-        # The run's start time, under the name the demo store already uses, so
-        # the results page dates the strategy note from one field in both modes.
+        # Queue time while queued, then start time (progress.claim_next), under
+        # the name the demo store already uses, so the results page dates the
+        # strategy note from one field in both modes.
         "createdAt": row["started_at"],
         "status": row["state"],
         # stage, pct, message, counts, error, queuePosition: the same snapshot SSE sends.
@@ -1580,34 +1581,38 @@ def start_run(session_id: str, body: StartRunBody | None = None):
         conn.execute("BEGIN IMMEDIATE")
 
         # A running run is never overwritten. A queued one has nothing on
-        # disk yet, so the new request simply replaces it. The Session's
-        # finished runs stay until the new run starts (adapter._clear_prior_runs).
+        # disk yet, so the new request simply replaces it and keeps its place
+        # in line. The Session's finished runs stay until the new run starts
+        # (adapter._clear_prior_runs).
         if conn.execute(
             "SELECT 1 FROM runs WHERE session_id = ? AND state = 'running'", (session_id,)
         ).fetchone():
             _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
+        prior = conn.execute(
+            "SELECT started_at FROM runs WHERE session_id = ? AND state = 'queued'", (session_id,)
+        ).fetchone()
         conn.execute("DELETE FROM runs WHERE session_id = ? AND state = 'queued'", (session_id,))
 
         rid = str(uuid.uuid4())
         now = _now()
+        # started_at holds the queue time until claim_next() sets the start
+        # time; the queue is ordered by it.
         conn.execute(
             "INSERT INTO runs (id, session_id, state, started_at, skip_pause) "
             "VALUES (?,?,?,?,?)",
-            (rid, session_id, "queued", now, skip_pause)
+            (rid, session_id, "queued", prior["started_at"] if prior else now, skip_pause)
         )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
         )
         conn.commit()
+        # After the commit, so the claim can see the new row, and before the
+        # snapshot, so a run that starts at once reads as running.
+        adapter.start_next()
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (rid,)).fetchone()
-        result = _ser_run(row, conn)
+        return _ser_run(row, conn)
     finally:
         conn.close()
-
-    # After the commit, so the claim can see the new row. The snapshot
-    # above still says queued even when this starts it at once.
-    adapter.start_next()
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1638,7 +1643,7 @@ def leave_queue(run_id: str):
         conn.commit()
         if not deleted and conn.execute(
                 "SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone():
-            _409("Only a queued run can be cancelled. This one has already started.")
+            _409("This run has already started, so it can no longer leave the queue.")
     finally:
         conn.close()
 
