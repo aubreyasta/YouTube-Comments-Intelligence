@@ -150,9 +150,9 @@ Draft generation reads the persisted User Inputs. A failed ordinary public artic
 
 One GPU serves one model, so at most one run is `running` across all Sessions. Every other run waits as `queued`.
 
-`POST /api/sessions/{id}/runs` inserts a `queued` run. In the same `BEGIN IMMEDIATE` transaction, it refuses a Session with a `running` run and replaces that Session's own `queued` run, keeping its place in line. It then calls `adapter.start_next()` before building the response, so a run that starts at once reads `running`.
+`POST /api/sessions/{id}/runs` checks the Session and inserts a `queued` run in one `BEGIN IMMEDIATE` transaction, then calls `adapter.start_next()`. The admission rules are in the [API reference](api-reference.md#post-sessionsidruns).
 
-`start_next()` calls `progress.claim_next()`. Inside `BEGIN IMMEDIATE`, `claim_next()` moves the oldest `queued` run to `running` only when no run is `running`. Two concurrent callers therefore cannot start two runs. The server calls `start_next()` after each start, at the end of each run, and at startup. A failed claim is retried every 5 seconds instead of raised, and a run whose thread cannot start is failed, so neither leaves the queue stuck until a restart. `DELETE /api/runs/{id}` removes a `queued` run with a conditional DELETE, so a run claimed a moment earlier is never removed.
+`start_next()` calls `progress.claim_next()`. Inside `BEGIN IMMEDIATE`, `claim_next()` moves the oldest `queued` run to `running` only when no run is `running`. Two concurrent callers therefore cannot start two runs. The server calls `start_next()` after each start, at the end of each run, and at startup. A failed claim is retried every 5 seconds instead of raised, and a run whose thread cannot start is failed, so neither leaves the queue stuck until a restart. `DELETE /api/runs/{id}` uses a conditional DELETE, so a run claimed a moment earlier is never removed.
 
 A run at `brief_pause` is `running` and holds the slot until the review completes.
 

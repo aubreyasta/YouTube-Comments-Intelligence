@@ -39,7 +39,7 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-from auth_helper import login  # sets the sign-in env the startup hook requires
+from auth_helper import login, wait_until  # sets the sign-in env the startup hook requires
 
 import progress
 import server
@@ -52,15 +52,6 @@ _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
     "error", "briefPoints", "artifacts", "skipPause", "counts", "queuePosition",
 }
-
-
-def _wait_until(pred, timeout=5.0, interval=0.02):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _new_session_with_video():
@@ -301,7 +292,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
         run_id = start_resp.json()["id"]
         _assert_snapshot_skip_pause_bool(start_resp.json(), True)
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "run never reached brief_pause"
         get_resp = client.get(f"/api/runs/{run_id}")
@@ -319,7 +310,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
         assert proceed_resp.status_code == 200, proceed_resp.text
         _assert_snapshot_skip_pause_bool(proceed_resp.json(), True)
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -351,7 +342,7 @@ def test_skip_true_with_included_message_skips_brief_pause():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"]
                     in ("classify", "emotion", "report", "complete")
         ), "run with skipPause and an included message never advanced past brief"
@@ -359,7 +350,7 @@ def test_skip_true_with_included_message_skips_brief_pause():
         current = client.get(f"/api/runs/{run_id}").json()["stage"]
         assert current != "brief_pause", current
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -380,7 +371,7 @@ def test_skip_true_with_zero_included_still_pauses():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "skipPause:true with zero included messages must still pause"
 
@@ -404,7 +395,7 @@ def test_skip_true_with_zero_included_still_pauses():
         proceed_resp = client.post(f"/api/runs/{run_id}/proceed")
         assert proceed_resp.status_code == 200, proceed_resp.text
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -426,12 +417,12 @@ def test_skip_false_behaves_as_before():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "skipPause omitted must still pause as before"
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)

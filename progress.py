@@ -24,7 +24,9 @@ import db
 STAGES = ("queued", "collect", "brief", "brief_pause", "themes", "classify",
           "emotion", "report", "complete", "error")
 TERMINAL = ("complete", "error")
-_ACTIVE_STATES = ("queued", "running")
+# Queue order: claim_next() starts the first run by it, and queuePosition
+# counts the runs ahead by it.
+_QUEUE_KEY = "started_at, id"
 
 # Wake-ups for runs blocked in await_review. The run thread and the server
 # share one process, and a restart fails every running run (fail_orphans), so
@@ -67,7 +69,7 @@ def claim_next() -> str | None:
         row = None
         if conn.execute("SELECT 1 FROM runs WHERE state = 'running'").fetchone() is None:
             row = conn.execute("SELECT id FROM runs WHERE state = 'queued' "
-                               "ORDER BY started_at, id LIMIT 1").fetchone()
+                               f"ORDER BY {_QUEUE_KEY} LIMIT 1").fetchone()
             if row is not None:
                 conn.execute("UPDATE runs SET state = 'running', started_at = ? WHERE id = ?",
                              (_now(), row["id"]))
@@ -126,7 +128,7 @@ def proceed(run_id: str) -> None:
 
 
 def is_paused(row) -> bool:
-    return row["state"] in _ACTIVE_STATES and row["stage"] == "brief_pause"
+    return row["state"] == "running" and row["stage"] == "brief_pause"
 
 
 def finish(run_id: str, error: str | None = None) -> None:
@@ -166,9 +168,8 @@ def read(row, conn) -> dict:
     stored = json.loads(row["progress"] or "{}")
     position = None
     if state == "queued":
-        # Same order as claim_next().
         position = conn.execute(
-            "SELECT COUNT(*) FROM runs WHERE state = 'queued' AND (started_at, id) < (?, ?)",
+            f"SELECT COUNT(*) FROM runs WHERE state = 'queued' AND ({_QUEUE_KEY}) < (?, ?)",
             (row["started_at"], row["id"])).fetchone()[0] + 1
     return {
         "stage": stage,
