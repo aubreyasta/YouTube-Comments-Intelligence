@@ -483,7 +483,7 @@ def test_idle_review_stops_the_run_only_when_another_is_queued():
 def test_review_activity_keeps_the_run_waiting():
     _clear_runs()
     patches = _patched_pipeline(_run_reconcile_of([("Idea", "d")])) + (
-        patch.object(progress, "REVIEW_IDLE_SECONDS", 0.6),)
+        patch.object(progress, "REVIEW_IDLE_SECONDS", 1.5),)
     for p in patches:
         p.start()
     run_id = None
@@ -492,7 +492,7 @@ def test_review_activity_keeps_the_run_waiting():
         assert wait_until(lambda: _stage(run_id) == "brief_pause"), "run never reached brief_pause"
         # A queued run makes an idle review expire; activity must hold it off.
         queued = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
-        for _ in range(8):  # 1.6 s of activity, well past the 0.6 s limit
+        for _ in range(15):  # 3 s of activity, twice the 1.5 s limit
             assert client.post(f"/api/runs/{run_id}/review_activity").status_code == 204
             time.sleep(0.2)
         assert _stage(run_id) == "brief_pause", _stage(run_id)
