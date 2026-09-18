@@ -465,13 +465,7 @@ def _session_status(session_id: str, conn) -> str:
     if row is None:
         return "ready"
     s = row["state"]
-    if s in ("queued", "running"):
-        return "running"
-    if s == "complete":
-        return "complete"
-    if s == "failed":
-        return "failed"
-    return "ready"
+    return s if s in ("queued", "running", "complete", "failed") else "ready"
 
 
 def _session_comment_count(session_id: str, conn) -> int:

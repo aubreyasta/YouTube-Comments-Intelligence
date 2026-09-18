@@ -276,7 +276,7 @@ Error: `422` when `name` is empty.
 
 List Sessions newest first. Each item adds `campaignCount`.
 
-`status` is `ready`, `running`, `complete`, or `failed`, derived from the latest run. `commentCount` counts CSV records in the latest complete run's readable `comments_csv`; otherwise it is `0`.
+`status` is `ready`, `queued`, `running`, `complete`, or `failed`, derived from the latest run. `queued` means the Session's run waits in the queue. `commentCount` counts CSV records in the latest complete run's readable `comments_csv`; otherwise it is `0`.
 
 `latestRun` is `null` or:
 

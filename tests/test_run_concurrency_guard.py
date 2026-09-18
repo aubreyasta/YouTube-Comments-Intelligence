@@ -38,7 +38,7 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-from auth_helper import login  # sets the sign-in env the startup hook requires
+from auth_helper import login, wait_until  # sets the sign-in env the startup hook requires
 
 import server
 import adapter
@@ -102,15 +102,6 @@ def _states():
         conn.close()
 
 
-def _wait_until(pred, timeout=5.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(0.02)
-    return False
-
-
 def _clear_runs():
     conn = db.get_conn()
     try:
@@ -130,17 +121,17 @@ def test_second_session_queues_then_runs_on_its_own():
         a, b = first.json()["id"], second.json()["id"]
         assert (first.json()["status"], second.json()["status"]) == ("running", "queued")
 
-        assert _wait_until(lambda: fake.started == [a]), fake.started
+        assert wait_until(lambda: fake.started == [a]), fake.started
         assert _states() == {a: "running", b: "queued"}, _states()
         snap = client.get(f"/api/runs/{b}").json()
         assert (snap["stage"], snap["queuePosition"]) == ("queued", 1), snap
         assert client.get(f"/api/runs/{a}").json()["queuePosition"] is None
 
         fake.release(a)
-        assert _wait_until(lambda: fake.started == [a, b]), fake.started
+        assert wait_until(lambda: fake.started == [a, b]), fake.started
         assert _states() == {a: "complete", b: "running"}, _states()
         fake.release(b)
-        assert _wait_until(lambda: _states()[b] == "complete"), _states()
+        assert wait_until(lambda: _states()[b] == "complete"), _states()
     print("  ok  a second Session's run queues, shows its position, and starts on its own")
 
 
@@ -154,6 +145,18 @@ def test_queue_positions_follow_start_order():
     assert positions == [1, 2, 3], positions
     assert _states()[running] == "running"
     print("  ok  queued runs are numbered 1, 2, 3 in start order")
+
+
+def test_waiting_session_reads_queued_not_running():
+    _clear_runs()
+    running_session, waiting_session = _new_session(), _new_session()
+    _seed_run(running_session, "running")
+    with patch.object(adapter, "start_next", return_value=None):
+        client.post(f"/api/sessions/{waiting_session}/runs")
+    status = {s["id"]: s["status"] for s in client.get("/api/sessions").json()}
+    assert (status[running_session], status[waiting_session]) == ("running", "queued"), status
+    assert client.get(f"/api/sessions/{waiting_session}").json()["status"] == "queued"
+    print("  ok  a Session waiting in the queue reads queued, not running")
 
 
 def test_same_session_queued_run_is_replaced():
@@ -212,13 +215,13 @@ def test_two_concurrent_starts_leave_exactly_one_running_run():
             t.join(timeout=10)
         assert not any(t.is_alive() for t in threads), "a start request hung"
         assert codes == [202, 202], codes
-        assert _wait_until(lambda: len(fake.started) == 1)
+        assert wait_until(lambda: len(fake.started) == 1)
         time.sleep(0.2)  # a second claim, if the guard were broken, lands here
         assert sorted(_states().values()) == ["queued", "running"], _states()
         assert len(fake.started) == 1, fake.started
         for rid in list(_states()):
             fake.release(rid)
-        assert _wait_until(lambda: set(_states().values()) == {"complete"}), _states()
+        assert wait_until(lambda: set(_states().values()) == {"complete"}), _states()
     print("  ok  two concurrent starts leave one running run and one queued run")
 
 
@@ -250,7 +253,7 @@ def test_prior_result_is_replaced_when_the_new_run_starts():
     other = _seed_run(_new_session(), "complete", "2026-01-01T00:00:00+00:00")
 
     new = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
-    assert _wait_until(lambda: _states().get(new) == "failed"), _states()
+    assert wait_until(lambda: _states().get(new) == "failed"), _states()
     assert done not in _states() and not sentinel.exists(), "the prior result was not replaced"
     assert other in _states(), "a start deleted another Session's run"
     print("  ok  the prior result is replaced when the new run starts, other Sessions untouched")
@@ -283,7 +286,7 @@ def test_startup_fails_running_runs_and_resumes_the_queue():
     fake = FakePipeline()
     with patch.object(adapter, "_execute", fake):
         server._startup()
-        assert _wait_until(lambda: fake.started == [queued_id]), fake.started
+        assert wait_until(lambda: fake.started == [queued_id]), fake.started
 
         conn = db.get_conn()
         try:
@@ -297,7 +300,7 @@ def test_startup_fails_running_runs_and_resumes_the_queue():
         assert rows[queued_id]["state"] == "running", dict(rows[queued_id])
         assert rows[complete_id]["state"] == "complete", "startup touched a complete run"
         fake.release(queued_id)
-        assert _wait_until(lambda: _states()[queued_id] == "complete")
+        assert wait_until(lambda: _states()[queued_id] == "complete")
     print("  ok  startup fails running runs, keeps and starts queued runs, leaves complete runs alone")
 
 
@@ -318,9 +321,9 @@ def test_failed_claim_is_retried_not_raised():
         resp = client.post(f"/api/sessions/{_new_session()}/runs")
         assert resp.status_code == 202, resp.text
         rid = resp.json()["id"]
-        assert _wait_until(lambda: fake.started == [rid]), fake.started
+        assert wait_until(lambda: fake.started == [rid]), fake.started
         fake.release(rid)
-        assert _wait_until(lambda: _states()[rid] == "complete"), _states()
+        assert wait_until(lambda: _states()[rid] == "complete"), _states()
     print("  ok  a failed claim is retried instead of stalling the queue")
 
 
@@ -328,6 +331,7 @@ if __name__ == "__main__":
     tests = [
         test_second_session_queues_then_runs_on_its_own,
         test_queue_positions_follow_start_order,
+        test_waiting_session_reads_queued_not_running,
         test_same_session_queued_run_is_replaced,
         test_running_run_blocks_second_start_in_the_same_session,
         test_two_concurrent_starts_leave_exactly_one_running_run,

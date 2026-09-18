@@ -1330,8 +1330,8 @@ async function renderHome() {
 }
 
 /* ---------- Sessions ---------- */
-const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", complete: "Complete", failed: "Failed" };
-let sessionsFilter = "all"; // "all" | "running" | "drafts"
+const STATUS_LABEL = { draft: "Draft", ready: "Ready", queued: "Queued", running: "Running", complete: "Complete", failed: "Failed" };
+let sessionsFilter = "all"; // "all" | "running" (queued too) | "drafts"
 let sessionsQuery = "";
 
 async function renderSessions() {
@@ -1366,12 +1366,12 @@ async function renderSessions() {
       .map((c, i) => ({ ...c, id: s.campaignIds[i] }));
     const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
     const isDraft = s.status === "ready" && videoCount === 0;
-    const runningRun = s.status === "running" ? await demoApi.getRunningRun(s.id) : null;
+    const runningRun = s.status === "running" || s.status === "queued" ? await demoApi.getRunningRun(s.id) : null;
     return { s, campaigns, videoCount, isDraft, runningRun };
   }));
 
   const shown = sessionData.filter((d) => {
-    if (sessionsFilter === "running") return d.s.status === "running";
+    if (sessionsFilter === "running") return d.s.status === "running" || d.s.status === "queued";
     if (sessionsFilter === "drafts") return d.isDraft;
     return true;
   });
@@ -1383,6 +1383,8 @@ async function renderSessions() {
       : "#/sessions";
     const statusCell = isDraft
       ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
+      : s.status === "queued" && runningRun?.queuePosition != null
+      ? `<span class="status queued"><span class="dot"></span>${runningRun.queuePosition === 1 ? "Queued - next in line" : `Queued - ${runningRun.queuePosition - 1} ahead`}</span>`
       : s.status === "running" && runningRun
       ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
@@ -1880,7 +1882,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
     sessionTopbar({ name: "New session" });
   } else {
     const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
-    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>`;
+    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${!runningRun ? "Run analysis" : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
     sessionTopbar({ name: session.name, badgeHtml, rightHtml });
   }
 
