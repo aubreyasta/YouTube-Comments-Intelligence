@@ -453,16 +453,20 @@ def _stage(run_id):
     return client.get(f"/api/runs/{run_id}").json()["stage"]
 
 
-def test_idle_review_stops_the_run_and_frees_the_queue():
+def test_idle_review_stops_the_run_only_when_another_is_queued():
     _clear_runs()
     patches = _patched_pipeline(_run_reconcile_of([("Idea", "d")])) + (
-        patch.object(progress, "REVIEW_IDLE_SECONDS", 0.5),)
+        patch.object(progress, "REVIEW_IDLE_SECONDS", 0.3),
+        patch.object(progress, "_QUEUE_POLL_SECONDS", 0.1))
     for p in patches:
         p.start()
     waiting = None
     try:
         idle = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
         assert wait_until(lambda: _stage(idle) == "brief_pause"), "run never reached brief_pause"
+        time.sleep(1.0)  # well past the idle limit, with nothing queued
+        assert _stage(idle) == "brief_pause", "an idle review stopped with no queue behind it"
+
         waiting = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
 
         assert wait_until(lambda: client.get(f"/api/runs/{idle}").json()["status"] == "failed")
@@ -473,7 +477,7 @@ def test_idle_review_stops_the_run_and_frees_the_queue():
             "the queued run did not start after the idle review stopped"
     finally:
         _stop(patches, waiting)
-    print("  ok  an idle Key Message review stops its run and the queued run starts")
+    print("  ok  an idle Key Message review waits with no queue, then stops once a run queues")
 
 
 def test_review_activity_keeps_the_run_waiting():
@@ -486,10 +490,13 @@ def test_review_activity_keeps_the_run_waiting():
     try:
         run_id = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
         assert wait_until(lambda: _stage(run_id) == "brief_pause"), "run never reached brief_pause"
+        # A queued run makes an idle review expire; activity must hold it off.
+        queued = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
         for _ in range(8):  # 1.6 s of activity, well past the 0.6 s limit
             assert client.post(f"/api/runs/{run_id}/review_activity").status_code == 204
             time.sleep(0.2)
         assert _stage(run_id) == "brief_pause", _stage(run_id)
+        assert client.delete(f"/api/runs/{queued}").status_code == 204
         assert client.post(f"/api/runs/{run_id}/proceed").status_code == 200
         assert wait_until(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "complete")
     finally:
@@ -506,7 +513,7 @@ if __name__ == "__main__":
         test_skip_true_with_zero_included_still_pauses,
         test_skip_false_behaves_as_before,
         test_restart_reopen_persists_skip_pause_true,
-        test_idle_review_stops_the_run_and_frees_the_queue,
+        test_idle_review_stops_the_run_only_when_another_is_queued,
         test_review_activity_keeps_the_run_waiting,
     ]
     failed = 0

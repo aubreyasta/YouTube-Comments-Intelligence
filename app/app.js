@@ -2554,7 +2554,7 @@ async function renderRun(runId) {
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
-          + (live ? " The run stops after 10 minutes with no activity here, so it doesn't hold up other analyses." : "")
+          + (live ? " If another analysis is waiting, the run stops after 10 minutes with no activity here." : "")
         : "You can leave this page - the Session list will show the same status when you're back.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }

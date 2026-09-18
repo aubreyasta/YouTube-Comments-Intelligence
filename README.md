@@ -35,7 +35,7 @@ These are the only words used in this repo's prose. Code identifiers still carry
 
 **Set up a Session.** Give it a name and paste YouTube links. Add User Inputs: PDF or DOCX or PPTX briefs, article URLs, campaign images. Each one is read as you add it, and the Key Messages appear on the page straight away, so you can see whether the tool understood the campaign before committing to a run.
 
-**Review the Key Messages.** The run pauses after collecting the transcripts, which can sharpen or add to the draft. Edit the wording, exclude the ones that are wrong, confirm. Nothing gets measured against a Key Message you did not approve. A review left alone for 10 minutes stops the run, so it does not hold up other analyses.
+**Review the Key Messages.** The run pauses after collecting the transcripts, which can sharpen or add to the draft. Edit the wording, exclude the ones that are wrong, confirm. Nothing gets measured against a Key Message you did not approve. If another analysis is waiting, a review left alone for 10 minutes stops the run so it does not hold that analysis up.
 
 **Run.** In order: scrape comments and transcripts, build the Theme book from a sample, then use one Qwen classification pass to label every comment with one Theme, zero or more Key Messages, one Sentiment, and one Emotion. Python validates the labels and counts the results.
 

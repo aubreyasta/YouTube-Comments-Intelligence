@@ -38,8 +38,10 @@ _review_activity: dict[str, float] = {}
 _lock = threading.Lock()
 
 # A run at brief_pause holds the only run slot, so a review left alone this
-# long stops the run and frees the queue.
+# long stops the run when another run is queued. With no queue it waits on,
+# rechecking every _QUEUE_POLL_SECONDS.
 REVIEW_IDLE_SECONDS = 600
+_QUEUE_POLL_SECONDS = 5
 
 
 class NotPaused(Exception):
@@ -48,7 +50,8 @@ class NotPaused(Exception):
 
 class ReviewExpired(Exception):
     """await_review() stopped the run: no review activity for
-    REVIEW_IDLE_SECONDS. The run is already marked failed."""
+    REVIEW_IDLE_SECONDS while another run was queued. The run is already
+    marked failed."""
 
 
 def _now() -> str:
@@ -108,7 +111,8 @@ def await_review(run_id: str, skip: bool) -> None:
     """Pause at brief_pause until proceed(), unless the user asked to skip.
     The event exists before the stage is written, so a proceed() that lands
     right after the write always finds something to wake.
-    Raises ReviewExpired after REVIEW_IDLE_SECONDS without touch_review()."""
+    Raises ReviewExpired after REVIEW_IDLE_SECONDS without touch_review(),
+    once another run is queued."""
     if skip:
         publish(run_id, "brief", "Brief ready - skipping review", 40)
         return
@@ -118,18 +122,21 @@ def await_review(run_id: str, skip: bool) -> None:
         _review_activity[run_id] = time.monotonic()
     publish(run_id, "brief_pause", "Brief ready for review. Waiting for approval.", 40)
     try:
-        while not event.wait(_idle_left(run_id)):
+        # Idle time left, or once idle, the queue recheck interval.
+        while not event.wait(_idle_left(run_id) or _QUEUE_POLL_SECONDS):
             if _idle_left(run_id) > 0:
                 continue  # touched while waiting
             # Conditional, like proceed(): exactly one of the two leaves
-            # brief_pause. If proceed() won, its event.set() is imminent.
+            # brief_pause. No change means proceed() won (its event.set()
+            # is imminent) or nothing is queued yet.
             if _write(run_id,
                       "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
-                      "WHERE id = ? AND state = 'running' AND stage = 'brief_pause'",
+                      "WHERE id = ? AND state = 'running' AND stage = 'brief_pause' "
+                      "AND EXISTS (SELECT 1 FROM runs WHERE state = 'queued')",
                       (_now(), f"Stopped: the Key Message review had no activity for "
-                               f"{REVIEW_IDLE_SECONDS // 60} minutes.", run_id)):
+                               f"{REVIEW_IDLE_SECONDS // 60} minutes while another analysis "
+                               f"was waiting.", run_id)):
                 raise ReviewExpired(run_id)
-            event.wait()
     finally:
         with _lock:
             _review_events.pop(run_id, None)

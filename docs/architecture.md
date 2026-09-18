@@ -154,7 +154,7 @@ One GPU serves one model, so at most one run is `running` across all Sessions. E
 
 `start_next()` calls `progress.claim_next()`. Inside `BEGIN IMMEDIATE`, `claim_next()` moves the oldest `queued` run to `running` only when no run is `running`. Two concurrent callers therefore cannot start two runs. The server calls `start_next()` after each start, at the end of each run, and at startup. A failed claim is retried every 5 seconds instead of raised, and a run whose thread cannot start is failed, so neither leaves the queue stuck until a restart. `DELETE /api/runs/{id}` uses a conditional DELETE, so a run claimed a moment earlier is never removed.
 
-A run at `brief_pause` is `running` and holds the slot until the review completes or goes idle. Review edits stay in the page until confirm, so the page reports activity through `POST /api/runs/{id}/review_activity`. `await_review` fails the run after `progress.REVIEW_IDLE_SECONDS` without activity. It leaves `brief_pause` with the same kind of conditional UPDATE as `proceed`, so an expiry and a confirm cannot both win.
+A run at `brief_pause` is `running` and holds the slot until the review completes or goes idle. Review edits stay in the page until confirm, so the page reports activity through `POST /api/runs/{id}/review_activity`. `await_review` fails the run after `progress.REVIEW_IDLE_SECONDS` without activity, but only while another run is `queued`. Once idle, it rechecks the queue every few seconds. It leaves `brief_pause` with the same kind of conditional UPDATE as `proceed`, so an expiry and a confirm cannot both win.
 
 The adapter thread then:
 
