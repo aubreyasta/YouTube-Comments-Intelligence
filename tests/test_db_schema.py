@@ -276,10 +276,9 @@ def test_init_idempotent_on_skip_pause_column():
           "exactly one runs.skip_pause column")
 
 
-def test_init_migrates_pre_total_comments_database():
-    """A database created before `runs.total_comments` existed must gain
-    that nullable column the next time db.init() opens it, without losing
-    existing rows (mirrors test_init_migrates_pre_skip_pause_database)."""
+def test_init_migrates_pre_progress_database():
+    """A database with the old `total_comments`/`progress_detail` columns must
+    gain `progress`, keep the total inside it, and drop both old columns."""
     tmp_dir = tempfile.mkdtemp()
     path = __import__("pathlib").Path(tmp_dir) / "app.db"
     saved_path = db._DB_PATH
@@ -293,35 +292,39 @@ def test_init_migrates_pre_total_comments_database():
         pre_conn.execute(
             "CREATE TABLE runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
             "state TEXT NOT NULL DEFAULT 'queued', stage TEXT NOT NULL DEFAULT 'queued', "
-            "skip_pause INTEGER NOT NULL DEFAULT 0, "
-            "started_at TEXT, finished_at TEXT, error TEXT)"
+            "skip_pause INTEGER NOT NULL DEFAULT 0, total_comments INTEGER, "
+            "progress_detail TEXT, started_at TEXT, finished_at TEXT, error TEXT)"
         )
         session_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
+        counted, uncounted = str(uuid.uuid4()), str(uuid.uuid4())
         pre_conn.execute(
             "INSERT INTO sessions (id, name, created_at, updated_at) "
-            "VALUES (?, 'pre-total-comments', 't', 't')", (session_id,))
+            "VALUES (?, 'pre-progress', 't', 't')", (session_id,))
         pre_conn.execute(
-            "INSERT INTO runs (id, session_id) VALUES (?, ?)", (run_id, session_id))
+            "INSERT INTO runs (id, session_id, state, total_comments, progress_detail) "
+            "VALUES (?, ?, 'complete', 574, 'themes=7;labelled=574;total=574')",
+            (counted, session_id))
+        pre_conn.execute(
+            "INSERT INTO runs (id, session_id) VALUES (?, ?)", (uncounted, session_id))
         pre_conn.commit()
         pre_conn.close()
 
-        cols_before = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(runs)")}
-        assert "total_comments" not in cols_before, "test setup already has a total_comments column"
-
         db.init()
+        db.init()  # idempotent
 
+        import progress
         conn = db.get_conn()
         cols_after = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
-        assert "total_comments" in cols_after, (
-            "db.init() did not add runs.total_comments to a pre-total_comments database")
-        row = conn.execute("SELECT total_comments FROM runs WHERE id = ?", (run_id,)).fetchone()
-        assert row["total_comments"] is None, row["total_comments"]
+        assert "progress" in cols_after, cols_after
+        assert not {"total_comments", "progress_detail"} & cols_after, cols_after
+        rows = {r["id"]: r for r in conn.execute("SELECT * FROM runs")}
         conn.close()
+        assert progress.read(rows[counted])["counts"] == {"total": 574}, dict(rows[counted])
+        assert progress.read(rows[uncounted])["counts"] == {}, dict(rows[uncounted])
     finally:
         db._DB_PATH = saved_path
-    print("  ok  db.init() migrates a pre-total_comments database by adding "
-          "runs.total_comments INTEGER, existing row reads NULL")
+    print("  ok  db.init() moves runs.total_comments into runs.progress and drops "
+          "the old progress columns")
 
 
 def test_init_migrates_pre_source_brief_points():
@@ -440,7 +443,7 @@ if __name__ == "__main__":
         test_fresh_db_runs_skip_pause_column_shape,
         test_init_migrates_pre_skip_pause_database,
         test_init_idempotent_on_skip_pause_column,
-        test_init_migrates_pre_total_comments_database,
+        test_init_migrates_pre_progress_database,
         test_init_migrates_pre_source_brief_points,
         test_init_migrates_pre_sign_in_database,
         test_key_messages_orphan_session_rejected,

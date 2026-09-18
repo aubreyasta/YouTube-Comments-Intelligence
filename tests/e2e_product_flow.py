@@ -56,7 +56,7 @@ from playwright.sync_api import sync_playwright
 
 # Mutable control switch read on every draft_from_inputs call, so
 # behavior can flip mid-run without stopping/restarting patches.
-FAKES = {"draft_fails": False, "reconcile_all_excluded": False}
+FAKES = {"draft_fails": False, "reconcile_all_excluded": False, "classify_fails": False}
 
 _FIXED_PROPOSALS = [
     ("Lower price", "Cheaper than before."),
@@ -216,6 +216,8 @@ def _fake_classify(df, themes, points, cfg=None, on_progress=None):
     if on_progress:
         on_progress(1, 2, 2)
     _CLASSIFY_GATE.wait(30.0)
+    if FAKES["classify_fails"]:
+        raise RuntimeError("Injected classify failure.")
     if on_progress:
         on_progress(2, 2, len(df))
     return df, {}
@@ -821,6 +823,8 @@ def run_completes(page, base):
     # Issue #4 (now covered differently): onEvent() replaced state.detail
     # wholesale on every SSE event; confirm every step still ends up marked
     # done, so a later stage's event never leaves an earlier one stuck mid-run.
+    # SSE polls the snapshot, so the page can trail the API by one poll.
+    _wait_text(page, "#run-badge", "Complete", 10000)
     done_count = page.locator("#stepper .step-dot.done").count()
     _expect(done_count == 6,
             f"expected all 6 steps marked done on completion, found {done_count}")
@@ -1229,6 +1233,22 @@ def skip_pause_checked_zero_included_still_pauses(page, base):
         FAKES["reconcile_all_excluded"] = False
 
 
+def run_failure_paints_live(page, base):
+    """A run that fails mid-classify must show as failed on the open run page,
+    without a reload. The page used to drop the error event because its stage
+    ranked below the stale-event floor."""
+    FAKES["classify_fails"] = True
+    try:
+        run_id = _start_run_from_campaign(page, base, checked=True)
+        page.wait_for_selector("#run-badge")
+        _poll_run_snapshot_for(
+            page, base, run_id, lambda s: s.get("status") == "failed", 60.0,
+            "a run with an injected classify failure never reached status failed")
+        _wait_text(page, "#run-badge", "Failed", timeout_ms=10000)
+    finally:
+        FAKES["classify_fails"] = False
+
+
 def account_controls_and_admin_users(page, base):
     """Office user: Sign out visible, Users hidden. Admin: blocks one account
     (its next request gets 401) and erases another through the confirm dialog."""
@@ -1326,6 +1346,7 @@ def main():
             ("skip_pause_unchecked_sends_false_and_pauses", skip_pause_unchecked_sends_false_and_pauses),
             ("skip_pause_checked_runs_straight_through", skip_pause_checked_runs_straight_through),
             ("skip_pause_checked_zero_included_still_pauses", skip_pause_checked_zero_included_still_pauses),
+            ("run_failure_paints_live", run_failure_paints_live),
             ("account_controls_and_admin_users", account_controls_and_admin_users),
             ("no_console_errors", no_console_errors),
         ]

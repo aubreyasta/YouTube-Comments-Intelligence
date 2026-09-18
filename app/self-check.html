@@ -164,7 +164,7 @@
   // --- Run lifecycle ---
   const run = await api.startRun(session.id);
   check("run starts queued/running", ["queued", "running"].includes(run.status));
-  check("totalComments null before collect finishes", run.totalComments === null);
+  check("no total before collect finishes", run.counts && run.counts.total === undefined);
   await rejects("second concurrent run", api.startRun(session.id), "conflict");
   await rejects("proceed before pause", api.proceedRun(run.id), "conflict");
 
@@ -178,13 +178,13 @@
 
   await until(() => seen.includes("brief_pause"), 15000, "brief_pause");
   check("reached brief_pause", true);
-  check("event shape is SSE-shaped",
-    !!lastEvent && typeof lastEvent.run_id === "string" && "stage" in lastEvent
-    && "message" in lastEvent && "pct" in lastEvent && typeof lastEvent.detail === "object");
+  check("event is a Run progress snapshot",
+    !!lastEvent && JSON.stringify(Object.keys(lastEvent).sort()) === JSON.stringify(["counts", "error", "message", "pct", "stage"])
+    && typeof lastEvent.counts === "object");
   const runAtPause = await api.getRun(run.id);
   check("paused at 30%", runAtPause.pct === 30 && runAtPause.stage === "brief_pause");
 
-  check("totalComments set once collect finishes", typeof runAtPause.totalComments === "number" && runAtPause.totalComments > 0);
+  check("total set once collect finishes", typeof runAtPause.counts.total === "number" && runAtPause.counts.total > 0);
   check("brief points seeded", runAtPause.briefPointIds.length >= 4);
   check("brief points carry a source", runAtPause.briefPoints.every((p) => ["input", "sharpened", "transcript"].includes(p.source)));
   check("getRun exposes ordered briefPoints", Array.isArray(runAtPause.briefPoints)
@@ -215,7 +215,7 @@
   await api.proceedRun(run.id);
   await until(() => seen.includes("complete"), 25000, "complete");
   check("run completed", true);
-  const seq = ["connecting", "collect", "brief", "brief_pause", "classify", "emotion", "report", "complete"];
+  const seq = ["queued", "collect", "brief", "brief_pause", "classify", "emotion", "report", "complete"];
   let last = -1, ordered = true;
   for (const s of seen) {
     const i = seq.indexOf(s);
@@ -253,10 +253,16 @@
   // Fresh run gets a fresh ID
   const run2 = await api.startRun(session.id);
   check("fresh run id", run2.id !== run.id);
+  const seen2 = [];
+  const unsub2 = api.subscribeRun(run2.id, {
+    onEvent: (e) => seen2.push(e), onDisconnect: () => {}, onReconnect: () => {},
+  });
   await api.simulateFailure(run2.id);
   await until(() => api.getRun(run2.id).then((r) => r.status === "failed"), 5000, "fail");
   const failedRun = await api.getRun(run2.id);
-  check("failure terminal with error", failedRun.status === "failed" && !!failedRun.error);
+  check("failure terminal with error", failedRun.status === "failed" && failedRun.stage === "error" && !!failedRun.error);
+  check("subscriber receives the error snapshot", seen2.some((e) => e.stage === "error" && e.error === failedRun.error));
+  unsub2();
 
   // --- Key Messages: demo/live method parity ---
   check("demoApi has Key Message methods",
@@ -1158,62 +1164,7 @@
     return e;
   }
 
-  // ---- 7. Stale SSE cannot regress an authoritative persisted brief_pause ----
-  {
-    const origGetRun = api.getRun;
-    const origSubscribe = api.subscribeRun;
-    const seeded = [bp("r7a", "Kept", true, 0)];
-    const pausedRun = makePausedRun(seeded);
-    let capturedHandlers = null;
-    api.getRun = async function (id) { return id === pausedRun.id ? { ...pausedRun } : origGetRun.call(api, id); };
-    api.subscribeRun = function (id, handlers) {
-      if (id === pausedRun.id) { capturedHandlers = handlers; return () => {}; }
-      return origSubscribe.call(api, id, handlers);
-    };
-    try {
-      await bpGoto(`#/runs/${pausedRun.id}`);
-      await sleep(20);
-      check("T3.4: review visible before any SSE event", bpQa(".brief-item").length === 1);
-      // A stale buffered event ranked behind brief_pause must not hide/replace the review.
-      capturedHandlers.onEvent({ run_id: pausedRun.id, stage: "collect", message: "stale", pct: 5, detail: {} });
-      await sleep(10);
-      check("T3.4: stale earlier-stage SSE does not regress the paused review", bpQa(".brief-item").length === 1
-        && bpQ(".run-title").textContent !== "Connecting\u2026");
-    } finally {
-      api.getRun = origGetRun;
-      api.subscribeRun = origSubscribe;
-    }
-  }
-
-  // ---- 8. Stale SSE cannot regress a fresh initial complete/failed snapshot ----
-  {
-    const origGetRun = api.getRun;
-    const origSubscribe = api.subscribeRun;
-    const completeRun = {
-      id: "t34-run-complete", sessionId: t3Session.id, status: "complete",
-      stage: "complete", pct: 100, message: "Done", briefPointIds: [], briefPoints: [], error: null,
-    };
-    let capturedHandlers = null;
-    api.getRun = async function (id) { return id === completeRun.id ? { ...completeRun } : origGetRun.call(api, id); };
-    api.subscribeRun = function (id, handlers) {
-      if (id === completeRun.id) { capturedHandlers = handlers; return () => {}; }
-      return origSubscribe.call(api, id, handlers);
-    };
-    try {
-      await bpGoto(`#/runs/${completeRun.id}`);
-      await sleep(20);
-      check("T3.4: fresh initial complete snapshot renders immediately", bpQ("#run-title").textContent === "Results are ready");
-      capturedHandlers.onEvent({ run_id: completeRun.id, stage: "classify", message: "stale", pct: 60, detail: {} });
-      await sleep(10);
-      check("T3.4: stale SSE cannot regress a fresh initial complete snapshot",
-        bpQ("#run-title").textContent === "Results are ready");
-    } finally {
-      api.getRun = origGetRun;
-      api.subscribeRun = origSubscribe;
-    }
-  }
-
-  // ---- 9. Method arities and live PATCH {messages} shape (mocked fetch, no network) ----
+  // ---- 7. Method arities and live PATCH {messages} shape (mocked fetch, no network) ----
   check("T3.4: demoApi.updateBriefPoints arity is 2", api.updateBriefPoints.length === 2);
   check("T3.4: __liveApi.updateBriefPoints arity is 2", window.__liveApi.updateBriefPoints.length === 2);
   {
