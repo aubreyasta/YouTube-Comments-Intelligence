@@ -14,7 +14,14 @@ import types
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, repo_root)
 
-# Stub heavy imports before adapter loads them.
+# Stub heavy imports before adapter loads them. Every stub is undone once
+# adapter has bound them, so a shared pytest run hands later files the real
+# modules.
+_STUBBED = ("db", "storage", "assets", "pipeline", "pipeline.collect",
+            "pipeline.brief", "pipeline.analyze", "pipeline.report",
+            "pipeline.llm", "pipeline.config_types")
+_saved_modules = {mod: sys.modules.get(mod) for mod in _STUBBED}
+
 for mod in ("db", "storage", "assets"):
     stub = types.ModuleType(mod)
     sys.modules[mod] = stub
@@ -45,6 +52,12 @@ import importlib.util as ilu
 spec2 = ilu.spec_from_file_location("adapter", os.path.join(repo_root, "adapter.py"))
 adapter = ilu.module_from_spec(spec2)
 spec2.loader.exec_module(adapter)
+
+for mod, original in _saved_modules.items():
+    if original is None:
+        sys.modules.pop(mod, None)
+    else:
+        sys.modules[mod] = original
 
 _build_report_json = adapter._build_report_json
 _build_evidence     = adapter._build_evidence
