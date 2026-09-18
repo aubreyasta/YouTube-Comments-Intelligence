@@ -212,6 +212,11 @@ const liveApi = {
     return apiJson("/api/runs/" + runId + "/proceed", { method: "POST" });
   },
 
+  /* touchReview: report review activity so an idle brief_pause does not stop the run. */
+  async touchReview(runId) {
+    await apiFetch("/api/runs/" + runId + "/review_activity", { method: "POST" });
+  },
+
   /* leaveQueue: take a queued run out of the queue. 409 once it has started. */
   async leaveQueue(runId) {
     await apiFetch("/api/runs/" + runId, { method: "DELETE" });

@@ -813,6 +813,10 @@ const demoApi = {
     throw demoError("conflict", "This run has already started, so it can no longer leave the queue.");
   },
 
+  /** Demo reviews never time out, so there is nothing to record.
+   * @param {string} runId @returns {Promise<void>} */
+  async touchReview(runId) {},
+
   /** @param {string} runId @returns {Promise<object>} */
   async proceedRun(runId) {
     const run = store.runs.get(runId);
@@ -943,7 +947,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
     "listSessions","getSession","createSession","getCampaign",
     "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
-    "proceedRun","leaveQueue",
+    "proceedRun","leaveQueue","touchReview",
     "getReport","getAssetData",
     "simulateDisconnect","simulateFailure",
   ];
@@ -2396,6 +2400,16 @@ async function renderRun(runId) {
   const subEl = document.getElementById("run-sub");
   const bannerEl = document.getElementById("run-banner");
   const briefEl = document.getElementById("brief-review");
+  // Edits stay in the page until confirm, so the server only learns the
+  // review is alive from these pings; an idle review stops the run (live).
+  let lastReviewPing = 0;
+  function noteReviewActivity() {
+    if (state.stage !== "brief_pause" || Date.now() - lastReviewPing < 30000) return;
+    lastReviewPing = Date.now();
+    demoApi.touchReview(runId).catch(() => {}); // a 409 means the review already ended
+  }
+  ["input", "change", "click", "keydown", "focusin", "pointermove", "wheel"].forEach((type) =>
+    briefEl.addEventListener(type, noteReviewActivity, { passive: true }));
   const cntLabelled = document.getElementById("cnt-labelled");
   const cntThemes = document.getElementById("cnt-themes");
   const cntOther = document.getElementById("cnt-other");
@@ -2540,6 +2554,7 @@ async function renderRun(runId) {
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
+          + (live ? " The run stops after 10 minutes with no activity here, so it doesn't hold up other analyses." : "")
         : "You can leave this page - the Session list will show the same status when you're back.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }
@@ -2577,6 +2592,7 @@ async function renderRun(runId) {
     const sourcePoints = (seeded || briefPointsSnapshot).slice().sort((a, b) => a.order - b.order);
     const points = sourcePoints.map((p) => ({ ...p })); // local working copy
     briefEl.hidden = false;
+    noteReviewActivity(); // opening the review counts
     let saving = false;
     let focusedField = null; // { i, f } of the control focused when Save was pressed
     const expanded = new Set(); // row indices currently showing their edit panel

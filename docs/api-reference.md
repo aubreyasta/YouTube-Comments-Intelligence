@@ -569,6 +569,14 @@ Response `200`: current `RunSnapshot`.
 
 Errors: `404` run not found; `409` run is not waiting; `422` no Key Message is included.
 
+### `POST /runs/{id}/review_activity`
+
+Report activity on the Key Message review. A run at `brief_pause` with no activity for 10 minutes fails with `"Stopped: the Key Message review had no activity for 10 minutes."`, which frees the run slot for the queue. Each call restarts that clock. The review page sends it at most every 30 seconds while someone interacts with it.
+
+Response `204`.
+
+Error: `409 CONFLICT` with `"This run is not waiting for review."`, also for an unknown id.
+
 ### `GET /runs/{id}/events`
 
 Open the SSE progress stream. Each data event is a `RunProgress` (see [Run snapshot](#run-snapshot)):
@@ -586,7 +594,7 @@ Stages:
 | `queued` | 0 | Run waits in the queue; `queuePosition` gives its place. |
 | `collect` | 2-20 | Load context, fetch comments and transcripts, clean rows. |
 | `brief` | 22-40 | Reconcile Key Messages. A skip-pause run may continue from this stage. |
-| `brief_pause` | 40 | Wait for review and `/proceed`. |
+| `brief_pause` | 40 | Wait for review and `/proceed`. Fails after 10 idle minutes. |
 | `themes` | 42 | Discover Themes from a comment sample. |
 | `classify` | 50-65 | Classify all labels, optionally refine `Other`. |
 | `emotion` | 67-75 | Validate and aggregate Sentiment and Emotion already assigned by classification. |

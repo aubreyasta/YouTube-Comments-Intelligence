@@ -1733,6 +1733,18 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
 
 
 # ---------------------------------------------------------------------------
+# /api/runs/{id}/review_activity  POST
+# ---------------------------------------------------------------------------
+
+@app.post("/api/runs/{run_id}/review_activity", status_code=204)
+def review_activity(run_id: str):
+    """The review page reports activity here, since edits stay in the page
+    until confirm. Keeps progress.REVIEW_IDLE_SECONDS from stopping the run."""
+    if not progress.touch_review(run_id):
+        _409("This run is not waiting for review.")
+
+
+# ---------------------------------------------------------------------------
 # /api/runs/{id}/proceed  POST
 # ---------------------------------------------------------------------------
 

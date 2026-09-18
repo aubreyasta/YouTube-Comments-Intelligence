@@ -1120,6 +1120,8 @@ def _execute(run_id: str) -> None:
         # --- 14. Mark complete ----------------------------------------------
         progress.finish(run_id)
 
+    except progress.ReviewExpired:
+        logger.info("run %s stopped: Key Message review idle", run_id)
     except Exception as exc:
         logger.exception("run %s failed", run_id)
         try:

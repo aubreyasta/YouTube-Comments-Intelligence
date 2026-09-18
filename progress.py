@@ -15,6 +15,7 @@ Snapshot (camelCase, the same object over GET and SSE):
 import json
 import re
 import threading
+import time
 from datetime import datetime, timezone
 
 import db
@@ -30,13 +31,24 @@ _QUEUE_KEY = "started_at, id"
 
 # Wake-ups for runs blocked in await_review. The run thread and the server
 # share one process, and a restart fails every running run (fail_orphans), so
-# an in-memory event never outlives the run it wakes.
+# an in-memory event never outlives the run it wakes. _review_activity holds
+# each waiting run's last review activity (time.monotonic()).
 _review_events: dict[str, threading.Event] = {}
+_review_activity: dict[str, float] = {}
 _lock = threading.Lock()
+
+# A run at brief_pause holds the only run slot, so a review left alone this
+# long stops the run and frees the queue.
+REVIEW_IDLE_SECONDS = 600
 
 
 class NotPaused(Exception):
     """proceed() on a run that is not waiting at brief_pause."""
+
+
+class ReviewExpired(Exception):
+    """await_review() stopped the run: no review activity for
+    REVIEW_IDLE_SECONDS. The run is already marked failed."""
 
 
 def _now() -> str:
@@ -95,19 +107,48 @@ def publish(run_id: str, stage: str, message: str, pct: int, **counts) -> None:
 def await_review(run_id: str, skip: bool) -> None:
     """Pause at brief_pause until proceed(), unless the user asked to skip.
     The event exists before the stage is written, so a proceed() that lands
-    right after the write always finds something to wake."""
+    right after the write always finds something to wake.
+    Raises ReviewExpired after REVIEW_IDLE_SECONDS without touch_review()."""
     if skip:
         publish(run_id, "brief", "Brief ready - skipping review", 40)
         return
     event = threading.Event()
     with _lock:
         _review_events[run_id] = event
+        _review_activity[run_id] = time.monotonic()
     publish(run_id, "brief_pause", "Brief ready for review. Waiting for approval.", 40)
     try:
-        event.wait()
+        while not event.wait(_idle_left(run_id)):
+            if _idle_left(run_id) > 0:
+                continue  # touched while waiting
+            # Conditional, like proceed(): exactly one of the two leaves
+            # brief_pause. If proceed() won, its event.set() is imminent.
+            if _write(run_id,
+                      "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
+                      "WHERE id = ? AND state = 'running' AND stage = 'brief_pause'",
+                      (_now(), f"Stopped: the Key Message review had no activity for "
+                               f"{REVIEW_IDLE_SECONDS // 60} minutes.", run_id)):
+                raise ReviewExpired(run_id)
+            event.wait()
     finally:
         with _lock:
             _review_events.pop(run_id, None)
+            _review_activity.pop(run_id, None)
+
+
+def _idle_left(run_id: str) -> float:
+    with _lock:
+        return max(0.0, _review_activity[run_id] + REVIEW_IDLE_SECONDS - time.monotonic())
+
+
+def touch_review(run_id: str) -> bool:
+    """Record review activity, restarting the idle clock. False when the run
+    is not waiting at brief_pause."""
+    with _lock:
+        if run_id not in _review_activity:
+            return False
+        _review_activity[run_id] = time.monotonic()
+        return True
 
 
 def proceed(run_id: str) -> None:

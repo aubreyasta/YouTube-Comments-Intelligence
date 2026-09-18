@@ -154,7 +154,7 @@ One GPU serves one model, so at most one run is `running` across all Sessions. E
 
 `start_next()` calls `progress.claim_next()`. Inside `BEGIN IMMEDIATE`, `claim_next()` moves the oldest `queued` run to `running` only when no run is `running`. Two concurrent callers therefore cannot start two runs. The server calls `start_next()` after each start, at the end of each run, and at startup. A failed claim is retried every 5 seconds instead of raised, and a run whose thread cannot start is failed, so neither leaves the queue stuck until a restart. `DELETE /api/runs/{id}` uses a conditional DELETE, so a run claimed a moment earlier is never removed.
 
-A run at `brief_pause` is `running` and holds the slot until the review completes.
+A run at `brief_pause` is `running` and holds the slot until the review completes or goes idle. Review edits stay in the page until confirm, so the page reports activity through `POST /api/runs/{id}/review_activity`. `await_review` fails the run after `progress.REVIEW_IDLE_SECONDS` without activity. It leaves `brief_pause` with the same kind of conditional UPDATE as `proceed`, so an expiry and a confirm cannot both win.
 
 The adapter thread then:
 
@@ -173,7 +173,7 @@ Closing a browser tab does not stop the thread. The persisted stage restores `br
 
 ### Progress
 
-`progress.py` owns the Run progress snapshot. The adapter thread writes it through `publish`, `await_review`, and `finish`. `publish` merges counts into `runs.progress`, so a later stage never erases an earlier count. `await_review` blocks the thread at `brief_pause` until `proceed` wakes it. `proceed` changes the stage with a conditional UPDATE, so two concurrent calls cannot both continue the run.
+`progress.py` owns the Run progress snapshot. The adapter thread writes it through `publish`, `await_review`, and `finish`. `publish` merges counts into `runs.progress`, so a later stage never erases an earlier count. `await_review` blocks the thread at `brief_pause` until `proceed` wakes it or the review goes idle. `proceed` changes the stage with a conditional UPDATE, so two concurrent calls cannot both continue the run.
 
 `GET /runs/{id}` and SSE both read the snapshot through `progress.read`. A terminal state wins over a stale stage. The SSE route polls the row about once a second and sends the snapshot when it changes, so every tab on a run sees the same state. The stream emits comment heartbeats while idle and closes after a terminal snapshot. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
 
