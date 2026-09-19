@@ -212,7 +212,7 @@ def test_six_public_artifacts_fixed_order_exact_fields():
         assert art["downloadUrl"] == expected_url, (
             f"artifact {i} ({kind}): downloadUrl {art['downloadUrl']!r} != expected {expected_url!r}"
         )
-        assert set(art.keys()) == {"id", "kind", "filename", "contentType", "downloadUrl", "size"}, (
+        assert set(art.keys()) == {"id", "kind", "filename", "contentType", "downloadUrl", "size", "addedAt"}, (
             f"artifact {i} ({kind}): unexpected field set {sorted(art.keys())}"
         )
         expected_size = os.path.getsize(os.path.join(art_dir, filename))
