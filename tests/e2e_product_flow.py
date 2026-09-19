@@ -970,6 +970,29 @@ def evidence_drawer_shows_metric_count(page, base):
     _expect(is_active, "focus did not return to the metric button after Collapse")
 
 
+def stale_render_does_not_overwrite(page, base):
+    """Issue #42: a slow Files render that finishes after the user has moved
+    on to a Run's results must not replace the results view."""
+    run_id = _require_run_id()
+    page.goto(base + "/#/home")
+    page.wait_for_selector(".view-pad")
+    # Hold the Files list request so its render finishes last.
+    page.evaluate("""() => {
+        const realFetch = window.fetch;
+        window.fetch = (url, opts) => String(url).endsWith("/api/sessions")
+            ? new Promise((r) => setTimeout(r, 1500)).then(() => realFetch(url, opts))
+            : realFetch(url, opts);
+    }""")
+    page.evaluate("() => { location.hash = '#/files'; }")
+    page.evaluate(f"() => {{ location.hash = '#/runs/{run_id}/results'; }}")
+    page.wait_for_selector(".bars")
+    page.wait_for_timeout(2500)
+    _expect(page.locator(".bars").count() > 0,
+            "late Files render replaced the results view")
+    _expect(page.locator("#files-search").count() == 0,
+            "late Files render replaced the topbar")
+
+
 def aria_and_keyboard(page, base):
     page.goto(base + "/#/sessions/" + _STATE["session_id"] +
               "/campaigns/" + _STATE["campaign_id"])
@@ -1340,6 +1363,7 @@ def main():
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
             ("evidence_drawer_shows_metric_count", evidence_drawer_shows_metric_count),
+            ("stale_render_does_not_overwrite", stale_render_does_not_overwrite),
             ("aria_and_keyboard", aria_and_keyboard),
             ("skip_pause_control_is_accessible", skip_pause_control_is_accessible),
             ("skip_pause_failed_start_retains_state", skip_pause_failed_start_retains_state),
