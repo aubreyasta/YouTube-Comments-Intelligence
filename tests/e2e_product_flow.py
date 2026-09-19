@@ -1293,7 +1293,7 @@ def no_console_errors(page, base):
     _expect(_DIALOG_MESSAGES == [], f"native dialogs: {_DIALOG_MESSAGES}")
 
 
-# ponytail: still not covered here - the missing-artifact disabled state,
+# Still not covered here - the missing-artifact disabled state,
 # because the fakes in this file write all six files so that path never
 # fires; backend restart recovery, out of scope by a locked decision; and
 # reduced motion plus the dropped-control selector sweep, already covered by

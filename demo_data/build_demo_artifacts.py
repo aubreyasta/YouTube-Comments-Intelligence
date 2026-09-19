@@ -216,7 +216,7 @@ def _transfer_lookup(transfer, label):
     return float(match["echoed_pct"].iloc[0]), int(match["n"].iloc[0])
 
 
-# ponytail: this markdown body is fixed prose for this one hand-labelled
+# This markdown body is fixed prose for this one hand-labelled
 # corpus (numbers are counted, wording is not). A second demo corpus
 # needs the real pipeline/report.py write() path with a model behind it.
 def build_markdown(df, transfer, affect_result):
@@ -337,14 +337,9 @@ def main():
 
     report_json = adapter._build_report_json(df, transfer, KEY_MESSAGES, columns)
 
-    # adapter's evidence rows carry text/likes/videoId/sentiment. The demo
-    # evidence drawer filters by emotion, so decorate each comment with the
-    # emotion already labelled on its source row. Joined on comment text,
-    # which is the only field the evidence rows and df share; comments.csv
-    # is already checked for duplicate text upstream.
-    # ponytail: text-keyed join, correct because the duplicate check above
-    # guarantees uniqueness. If duplicate comment text is ever allowed,
-    # carry comment_hash through adapter's evidence emit instead.
+    # The demo evidence drawer filters by emotion, so join each evidence row
+    # to its labelled emotion on comment text. The duplicate check upstream
+    # keeps text unique; if that changes, carry comment_hash through instead.
     emotion_by_text = {
         str(row["comment"]): (str(row["emotion"]) if pd.notna(row["emotion"]) else None)
         for _, row in df.iterrows()

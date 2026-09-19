@@ -64,9 +64,7 @@ _build_evidence     = adapter._build_evidence
 _slugify            = adapter._slugify
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 COLUMNS = {
     "pt__value_for_money": "Value for money",
@@ -112,9 +110,7 @@ TRANSFER_TABLE = pd.DataFrame([
 ])
 
 
-# ---------------------------------------------------------------------------
 # Test 1: top-level ReportJson has exactly the six required keys
-# ---------------------------------------------------------------------------
 
 def test_top_level_keys_exact():
     df = _make_df()
@@ -131,9 +127,7 @@ def test_top_level_keys_exact():
     print("  ok  top-level keys exact, no old keys")
 
 
-# ---------------------------------------------------------------------------
 # Test 2: keyMessages - types, IDs, excluded filtering, sort order, counts
-# ---------------------------------------------------------------------------
 
 def test_key_messages():
     df = _make_df()
@@ -170,9 +164,7 @@ def test_key_messages():
     print("  ok  keyMessages: filtering, order, IDs, counts")
 
 
-# ---------------------------------------------------------------------------
 # Test 3: overallTransfer - union counted once, one decimal
-# ---------------------------------------------------------------------------
 
 def test_overall_transfer():
     df = _make_df()
@@ -200,9 +192,7 @@ def test_overall_transfer_counted_once_on_overlap():
     print("  ok  overallTransfer dedupes overlapping messages")
 
 
-# ---------------------------------------------------------------------------
 # Test 4: zero denominator -> percent 0.0, not division error
-# ---------------------------------------------------------------------------
 
 def test_zero_denominator():
     empty_df = pd.DataFrame(columns=[
@@ -220,9 +210,7 @@ def test_zero_denominator():
     print("  ok  zero denominator -> 0.0, no crash")
 
 
-# ---------------------------------------------------------------------------
 # Test 5: null denominator - non-applicable-group rows excluded entirely
-# ---------------------------------------------------------------------------
 
 def test_unrelated_group_excluded():
     """Rows in a group not listed for the message must not enter numerator
@@ -270,9 +258,7 @@ def test_missing_transfer_table_group_or_point_zero_applicability():
     print("  ok  missing transfer_table.group/point -> zero applicability")
 
 
-# ---------------------------------------------------------------------------
 # Test 6: multi-group aggregation - a message applicable to 2+ groups
-# ---------------------------------------------------------------------------
 
 def test_multi_group_aggregation():
     """A single message applicable to groups G1 and G2 (deduplicated) must
@@ -301,9 +287,7 @@ def test_multi_group_aggregation():
     print("  ok  multi-group aggregation with dedup")
 
 
-# ---------------------------------------------------------------------------
 # Test 7: unmatched message - zero values, empty evidence, no crash
-# ---------------------------------------------------------------------------
 
 def test_unmatched_message_zero_and_empty_evidence():
     """A Key Message with no matching column and no transfer_table point
@@ -322,9 +306,7 @@ def test_unmatched_message_zero_and_empty_evidence():
     print("  ok  unmatched message: zero values, empty evidence")
 
 
-# ---------------------------------------------------------------------------
 # Test 8: themes/emotions - case-insensitive merge, first spelling preserved
-# ---------------------------------------------------------------------------
 
 def test_themes():
     df = _make_df()
@@ -385,9 +367,7 @@ def test_theme_case_merge_preserves_first_spelling():
     print("  ok  theme case-insensitive merge preserves first spelling")
 
 
-# ---------------------------------------------------------------------------
 # Test 9: emotions - counting/order/IDs, duplicate slug suffixing
-# ---------------------------------------------------------------------------
 
 def test_emotions():
     df = _make_df()
@@ -478,9 +458,7 @@ def test_emotion_slug_collision_suffix():
     print(f"  ok  emotion slug collision suffixed: {ids_in_order}")
 
 
-# ---------------------------------------------------------------------------
 # Test 10: slug fallback and m-t/m-is shared collision suffixing
-# ---------------------------------------------------------------------------
 
 def test_slugify_punctuation_fallback():
     assert _slugify("!!!") == "message"
@@ -516,9 +494,7 @@ def test_key_message_slug_collision_shared_across_mt_and_mis():
     print("  ok  slug collision suffix shared across m-t-*/m-is-*")
 
 
-# ---------------------------------------------------------------------------
 # Test 11: keyMessageSentiment - base rules, only recognized sentiments count
-# ---------------------------------------------------------------------------
 
 def test_key_message_sentiment():
     df = _make_df()
@@ -564,9 +540,7 @@ def test_sentiment_unrecognized_and_null_excluded_from_base():
     print("  ok  sentiment base excludes unrecognized/null, keeps neutral in baseN")
 
 
-# ---------------------------------------------------------------------------
 # Test 12: evidence - group order, MetricComment shape, sort, cap
-# ---------------------------------------------------------------------------
 
 def test_evidence_group_order_and_shape():
     df = _make_df()
@@ -700,9 +674,7 @@ def test_evidence_invalid_likes_become_zero():
     print("  ok  evidence: invalid/nonfinite/null likes -> 0")
 
 
-# ---------------------------------------------------------------------------
 # Test 13: key message sentiment evidence - balanced selection + backfill
-# ---------------------------------------------------------------------------
 
 def test_sentiment_evidence_balanced_selection_and_backfill():
     """Up to 4 positive + 4 negative selected first (ranked by ordinary
@@ -774,9 +746,7 @@ def test_sentiment_evidence_no_recognized_rows_empty():
     print("  ok  sentiment evidence: no recognized rows -> empty")
 
 
-# ---------------------------------------------------------------------------
 # Test 14: JSON serialization - allow_nan=False must not raise, no NaN/inf
-# ---------------------------------------------------------------------------
 
 def test_json_serializable_no_nan_or_inf():
     df = _make_df()
@@ -809,9 +779,7 @@ def test_json_serializable_on_edge_case_empty_df():
     print("  ok  empty-df report.json also JSON-safe")
 
 
-# ---------------------------------------------------------------------------
 # Runner
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     tests = [

@@ -618,7 +618,7 @@ def _label_to_pt_col(df, label):
     truncated slug - the common case, since analyze.classify() only
     appends a numeric suffix on collision.
 
-    # ponytail: report.export() is not handed analyze.classify()'s exact
+    # report.export() is not handed analyze.classify()'s exact
     # columns dict, so a genuine truncation collision (two labels sharing
     # the same 40-char slug) can misroute one of them here. Upgrade: pass
     # columns through run.py's report.export() call if that ever bites.

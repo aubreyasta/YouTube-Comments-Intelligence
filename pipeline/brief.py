@@ -144,18 +144,9 @@ def run(meta_df, cfg: PipelineConfig, context_map=None,
     return ("\n\n".join(grounded), points)
 
 
-# ---------------------------------------------------------------------------
-# Session-level Key Messages: draft from User Inputs, reconcile at run time
-# ---------------------------------------------------------------------------
-#
-# `run()` above produces (grounded_markdown, points) keyed by group/video_id,
-# for the per-comment classification step. The two entry points below
-# produce the separate KeyMessage shape the setup screen stores and edits:
-# {id, label, description, included, order, edited, source}. Neither
-# touches the DB; the caller (server.py, later) is responsible for storage.
-# source is input (from User Inputs), sharpened (an input message whose
-# description reconcile() refreshed from transcripts), or transcript
-# (derived from transcripts alone).
+# Session-level Key Messages: draft from User Inputs, reconcile at run time.
+# source is input (from User Inputs), sharpened (description refreshed from
+# transcripts by reconcile()), or transcript (from transcripts alone).
 
 INPUTS_PROMPT = """Read the material a campaign owner supplied about their \
 own campaign (documents, article text, and any image observations below).

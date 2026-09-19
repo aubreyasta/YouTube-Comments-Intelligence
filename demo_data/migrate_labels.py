@@ -30,7 +30,7 @@ ALLOWED_THEMES = {
 SENTIMENTS = {"positive", "negative", "neutral"}
 EMOTIONS = {"joy", "anger", "sadness", "fear", "other_neutral"}
 
-# ponytail: these index lists are hand-assigned for one frozen corpus;
+# These index lists are hand-assigned for one frozen corpus;
 # a second corpus needs a real classify pass instead of positional indices.
 # Rows judging whether it still tastes like cabe ijo.
 AUTHENTIC_TRUE = [6, 7, 11, 69, 75, 79, 84, 130, 134, 135, 141, 148, 151, 153, 164, 175]

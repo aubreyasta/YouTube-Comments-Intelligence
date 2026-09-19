@@ -49,9 +49,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="YouTube Comment Intelligence")
 
 
-# ---------------------------------------------------------------------------
 # Google sign-in - the only gate, applied before routing
-# ---------------------------------------------------------------------------
 
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -337,9 +335,7 @@ def auth_logout(request: Request):
     return resp
 
 
-# ---------------------------------------------------------------------------
 # Error helpers
-# ---------------------------------------------------------------------------
 
 def _err(status: int, code: str, message: str, field=None):
     raise HTTPException(status_code=status, detail={"error": code, "message": message, "field": field})
@@ -361,16 +357,9 @@ def _413(message):
     _err(413, "FILE_TOO_LARGE", message)
 
 
-# FastAPI wraps HTTPException.detail as {"detail": ...} by default and
-# emits its own {"detail": [...]} shape for Pydantic validation errors.
-# Both handlers below unwrap to the bare {error, message, field} shape
-# every client-facing error must have (docs/api-reference.md "Errors").
-#
-# Registered on starlette.exceptions.HTTPException, not fastapi.HTTPException:
-# fastapi.HTTPException is a subclass, so routes raising it are still
-# covered, but routing-level 404/405 responses (unmatched path, wrong
-# method) are raised by Starlette itself as the base class and would
-# bypass a handler registered only on the FastAPI subclass.
+# Unwrap FastAPI's {"detail": ...} to the {error, message, field} shape
+# (docs/api-reference.md "Errors"). Registered on Starlette's HTTPException
+# so routing-level 404/405 responses are covered too.
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -396,17 +385,13 @@ async def _validation_exc(request, exc):
     )
 
 
-# ---------------------------------------------------------------------------
 # ISO timestamp helper
-# ---------------------------------------------------------------------------
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-# ---------------------------------------------------------------------------
 # YouTube URL parsing (server-side trust boundary)
-# ---------------------------------------------------------------------------
 
 _PLAYLIST_RE = re.compile(r"[?&]list=", re.I)
 _WATCH_RE = re.compile(r"^(?:https?://)?(?:www\.)?youtube\.com/watch\?([^#]*)$", re.I)
@@ -438,9 +423,7 @@ def _parse_youtube_url(raw: str) -> str:
     _422("Only youtube.com/watch?v=, youtu.be/ and youtube.com/shorts/ links work.", "url")
 
 
-# ---------------------------------------------------------------------------
 # Upload validation
-# ---------------------------------------------------------------------------
 
 _DOC_EXTS = {"pdf", "pptx", "docx"}
 _IMG_EXTS = {"png", "jpg", "jpeg", "webp"}
@@ -452,9 +435,7 @@ def _asset_kind_from_ext(ext: str) -> str:
     return "image" if ext in _IMG_EXTS else "document"
 
 
-# ---------------------------------------------------------------------------
 # Serializers - camelCase dicts matching demoApi shapes
-# ---------------------------------------------------------------------------
 
 def _session_status(session_id: str, conn) -> str:
     """Derive session status from its most recent run."""
@@ -709,9 +690,7 @@ def _ser_artifact(row) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Request bodies
-# ---------------------------------------------------------------------------
 
 class SessionBody(BaseModel):
     name: str
@@ -752,9 +731,7 @@ class StartRunBody(BaseModel):
     skipPause: bool = False
 
 
-# ---------------------------------------------------------------------------
 # /api/me and /api/users
-# ---------------------------------------------------------------------------
 
 class UserBlockBody(BaseModel):
     blocked: bool
@@ -831,9 +808,7 @@ def erase_user(user_id: str, request: Request):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions
-# ---------------------------------------------------------------------------
 
 def _session_name(raw) -> str:
     name = (raw or "").strip()
@@ -925,21 +900,11 @@ def rename_session(session_id: str, body: SessionBody):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages/draft - concurrency control
-# ---------------------------------------------------------------------------
 #
-# At most one active draft per session. A request arriving while a draft
-# is in flight for the same session does not spawn a second model call:
-# it flags one coalesced rerun (covering every asset saved up to that
-# point) and waits for it, then returns that rerun's result. Any number
-# of concurrent latecomers share the same wait and the same rerun.
-#
-# Three dicts, one lock, keyed by session_id. No thread is ever
-# spawned here: the thread that first acquires a session's lock (an
-# existing FastAPI threadpool thread, not a new one) runs the draft pass,
-# and loops to run one more pass in place if a rerun was requested while
-# it worked. Latecomer threads only ever wait; they never draft.
+# At most one active draft per session. Requests that arrive mid-draft
+# share one coalesced rerun and wait for its result. The request thread
+# holding the session lock runs every pass; latecomers only wait.
 
 _draft_locks: dict[str, threading.Lock] = {}
 _draft_rerun_requested: dict[str, bool] = {}
@@ -954,9 +919,7 @@ def _get_draft_lock(session_id: str) -> threading.Lock:
         return _draft_locks[session_id]
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages/draft - input loading
-# ---------------------------------------------------------------------------
 
 def _load_draft_inputs(session_id: str, conn) -> tuple[str, list[tuple[bytes, str]], dict | None]:
     """Return (text, images, campaign) from every persisted User Input on
@@ -998,9 +961,7 @@ def _load_draft_inputs(session_id: str, conn) -> tuple[str, list[tuple[bytes, st
     return "\n\n".join(text_parts), images, camp
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages/draft - proposal merge
-# ---------------------------------------------------------------------------
 
 def _merge_key_messages(existing: list[dict], proposals: list[dict]) -> list[dict]:
     """Merge fresh model proposals into the current Key Message list.
@@ -1080,9 +1041,7 @@ def _merge_key_messages(existing: list[dict], proposals: list[dict]) -> list[dic
     return kept
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages/draft - one drafting pass
-# ---------------------------------------------------------------------------
 
 def _run_one_draft_pass(session_id: str) -> None:
     """Draft once against the latest persisted assets and persist the
@@ -1165,9 +1124,7 @@ def _run_one_draft_pass(session_id: str) -> None:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/key_messages
-# ---------------------------------------------------------------------------
 
 @app.post("/api/sessions/{session_id}/key_messages/draft")
 def draft_key_messages(session_id: str):
@@ -1273,9 +1230,7 @@ def save_key_messages(session_id: str, body: SaveKeyMessagesBody):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/campaigns
-# ---------------------------------------------------------------------------
 
 @app.post("/api/sessions/{session_id}/campaigns", status_code=201)
 def create_campaign(session_id: str, body: CampaignBody):
@@ -1316,9 +1271,7 @@ def list_campaigns(session_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/campaigns/{id}/videos
-# ---------------------------------------------------------------------------
 
 @app.post("/api/campaigns/{campaign_id}/videos", status_code=201)
 def add_video(campaign_id: str, body: VideoBody):
@@ -1402,9 +1355,7 @@ def remove_video(video_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/campaigns/{id}/assets/upload
-# ---------------------------------------------------------------------------
 
 @app.post("/api/campaigns/{campaign_id}/assets/upload", status_code=201)
 async def upload_asset(campaign_id: str, file: UploadFile = File(...)):
@@ -1454,9 +1405,7 @@ async def upload_asset(campaign_id: str, file: UploadFile = File(...)):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/campaigns/{id}/assets/article
-# ---------------------------------------------------------------------------
 
 @app.post("/api/campaigns/{campaign_id}/assets/article", status_code=201)
 def add_article(campaign_id: str, body: ArticleBody):
@@ -1498,9 +1447,7 @@ def add_article(campaign_id: str, body: ArticleBody):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/assets/{id} DELETE
-# ---------------------------------------------------------------------------
 
 @app.delete("/api/assets/{asset_id}", status_code=204)
 def remove_asset(asset_id: str):
@@ -1526,9 +1473,7 @@ def remove_asset(asset_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/assets/{id}/file  GET
-# ---------------------------------------------------------------------------
 
 @app.get("/api/assets/{asset_id}/file")
 def get_asset_file(asset_id: str):
@@ -1539,7 +1484,7 @@ def get_asset_file(asset_id: str):
             _404("Asset not found.")
         path = a["file_path"]
         if not path:
-            _404("Asset not found.")  # ponytail: could distinguish article vs missing file; one message keeps it simple
+            _404("Asset not found.")
         if not os.path.isfile(path):
             _404("Asset not found.")
         filename = os.path.basename(path)
@@ -1552,9 +1497,7 @@ def get_asset_file(asset_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/sessions/{id}/runs  POST
-# ---------------------------------------------------------------------------
 
 @app.post("/api/sessions/{session_id}/runs", status_code=202)
 def start_run(session_id: str, body: StartRunBody | None = None):
@@ -1609,9 +1552,7 @@ def start_run(session_id: str, body: StartRunBody | None = None):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}  GET, DELETE
-# ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
@@ -1642,9 +1583,7 @@ def leave_queue(run_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/brief_points  PATCH
-# ---------------------------------------------------------------------------
 
 @app.patch("/api/runs/{run_id}/brief_points")
 def update_brief_points(run_id: str, body: BriefPointsBody):
@@ -1732,9 +1671,7 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/review_activity  POST
-# ---------------------------------------------------------------------------
 
 @app.post("/api/runs/{run_id}/review_activity", status_code=204)
 def review_activity(run_id: str):
@@ -1744,9 +1681,7 @@ def review_activity(run_id: str):
         _409("This run is not waiting for review.")
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/proceed  POST
-# ---------------------------------------------------------------------------
 
 @app.post("/api/runs/{run_id}/proceed")
 def proceed_run(run_id: str):
@@ -1778,14 +1713,12 @@ def proceed_run(run_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/events  GET (SSE)
-# ---------------------------------------------------------------------------
 
 # Module level (not _generate() locals) so a test can patch them to small
 # values instead of waiting 15 real seconds for a heartbeat.
 _SSE_HEARTBEAT_SECONDS = 15.0
-# ponytail: polls one SQLite row per open stream; a push channel only if
+# Polls one SQLite row per open stream; a push channel only if
 # many concurrent viewers ever make this show up in a profile.
 _SSE_POLL_SECONDS = 1.0
 
@@ -1831,9 +1764,7 @@ async def run_events(run_id: str):
     )
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/report  GET
-# ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}/report")
 def get_report(run_id: str):
@@ -1859,9 +1790,7 @@ def get_report(run_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # /api/runs/{id}/artifacts/{artifact_id}  GET
-# ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}/artifacts/{artifact_id}")
 def download_artifact(run_id: str, artifact_id: str):
@@ -1889,9 +1818,7 @@ def download_artifact(run_id: str, artifact_id: str):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # Static files - mount AFTER all /api routes so API takes precedence.
-# ---------------------------------------------------------------------------
 
 _APP_DIR = Path(__file__).parent / "app"
 # Windows' mimetypes registry lacks .woff2, so StaticFiles would send octet-stream.
@@ -1900,9 +1827,7 @@ if _APP_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_APP_DIR), html=True), name="static")
 
 
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn

@@ -41,9 +41,7 @@ db.init()
 client = login(TestClient(server.app))
 
 
-# ---------------------------------------------------------------------------
 # Test fixtures
-# ---------------------------------------------------------------------------
 
 def _new_campaign():
     sid = client.post("/api/sessions", json={"name": "S"}).json()["id"]
@@ -215,9 +213,7 @@ def test_route_rejects_non_http_scheme_before_fetching():
     print("  ok  a file:// URL is rejected by the pre-filter with its own message and creates no asset")
 
 
-# ---------------------------------------------------------------------------
 # 2. Direct assets._validate_url assertions.
-# ---------------------------------------------------------------------------
 
 def test_validate_url_rejects_scheme_fragment_and_missing_host():
     with patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo({})):
@@ -241,9 +237,7 @@ def test_validate_url_rejects_scheme_fragment_and_missing_host():
     print("  ok  _validate_url raises BlockedUrl for a non-http(s) scheme, a fragment, and a missing hostname")
 
 
-# ---------------------------------------------------------------------------
 # 3. Acceptance.
-# ---------------------------------------------------------------------------
 
 def test_public_200_creates_asset_and_extracts_title_and_text():
     host_map = {"site.example": ["93.184.216.34"]}
@@ -323,9 +317,7 @@ def test_timeout_preserves_empty_text_behavior():
     print("  ok  a timeout during fetch does not raise, returns empty text, and the route still saves a 201 asset")
 
 
-# ---------------------------------------------------------------------------
 # 4. Anti-rebinding assertion.
-# ---------------------------------------------------------------------------
 
 def test_request_is_pinned_to_resolved_address_not_hostname():
     host_map = {"pin.example": ["93.184.216.34"]}
@@ -344,9 +336,7 @@ def test_request_is_pinned_to_resolved_address_not_hostname():
     print("  ok  the request is sent to the resolved address, not the hostname, with Host/SNI still the original hostname")
 
 
-# ---------------------------------------------------------------------------
 # 5. Shared-budget assertion.
-# ---------------------------------------------------------------------------
 
 def test_redirect_hops_share_one_shrinking_budget():
     host_map = {"budget.example": ["93.184.216.34"]}
@@ -370,9 +360,7 @@ def test_redirect_hops_share_one_shrinking_budget():
     print("  ok  a redirect chain shares one shrinking deadline: the second hop's timeout is strictly smaller than the first's")
 
 
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     tests = [

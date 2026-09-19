@@ -61,7 +61,7 @@ def start_next() -> None:
     try:
         run_id = progress.claim_next()
     except Exception:
-        # ponytail: fixed 5 s retry until the claim succeeds; back off if a
+        # Fixed 5 s retry until the claim succeeds; back off if a
         # DB outage ever makes this noisy.
         logger.exception("could not claim the next queued run; retrying in 5 s")
         threading.Timer(5, start_next).start()
@@ -81,7 +81,7 @@ def _clear_prior_runs(session_id: str, run_id: str) -> None:
     """Delete the Session's earlier runs and their files. Done when the new
     run starts, not when it is queued, so leaving the queue keeps the old
     result. None of them can be running: this run holds the only slot.
-    ponytail: hard overwrite, no run history; keep rows and add a `latest`
+    Hard overwrite, no run history; keep rows and add a `latest`
     flag if history is ever wanted."""
     conn = db.get_conn()
     try:
@@ -94,9 +94,7 @@ def _clear_prior_runs(session_id: str, run_id: str) -> None:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # DB helpers
-# ---------------------------------------------------------------------------
 
 def _load_run(run_id: str) -> dict:
     """Return the run row as a plain dict."""
@@ -230,9 +228,7 @@ def _insert_artifact(run_id: str, kind: str, file_path: str) -> None:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # Config builder
-# ---------------------------------------------------------------------------
 
 def _build_config(run_id: str | None, session_row: dict, campaign: dict,
                   videos: list[dict], campaign_context: dict) -> PipelineConfig:
@@ -267,9 +263,7 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
     )
 
 
-# ---------------------------------------------------------------------------
 # Evidence builder (for report.json)
-# ---------------------------------------------------------------------------
 
 _RECOGNIZED_SENTIMENTS = {"positive", "negative", "neutral"}
 
@@ -500,9 +494,7 @@ def _build_evidence(base_df, key_message_metrics: list[dict],
     return groups
 
 
-# ---------------------------------------------------------------------------
 # report.json prose builder
-# ---------------------------------------------------------------------------
 
 _PROSE_PROMPT = """You are writing the results summary for a YouTube comment analysis tool.
 
@@ -646,9 +638,7 @@ def _prose_fallback(base_df, transfer_table, themes_json: list,
     }
 
 
-# ---------------------------------------------------------------------------
 # report.json assembler
-# ---------------------------------------------------------------------------
 
 def _slugify(label: str) -> str:
     """Slug for a Key Message label. Falls back to 'message' if the label
@@ -905,9 +895,7 @@ def _build_report_json(base_df, transfer_table, key_messages: list[dict],
     }
 
 
-# ---------------------------------------------------------------------------
 # Main execution
-# ---------------------------------------------------------------------------
 
 def _execute(run_id: str) -> None:
     """
