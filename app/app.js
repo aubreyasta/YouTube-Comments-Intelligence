@@ -1178,6 +1178,10 @@ async function loadAccount() {
 /* ============================== Screens ============================== */
 
 let routeCleanup = null;
+// Bumped by every route(). A page render captures it before its first await
+// and returns early if it changed, so a render that finishes after the user
+// navigated away never writes over the newer page.
+let routeSeq = 0;
 
 function cleanupRoute() {
   if (routeCleanup) { routeCleanup(); routeCleanup = null; }
@@ -1294,7 +1298,9 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
 /* ---------- Home ---------- */
 async function renderHome() {
   setSidebarActive("sessions");
+  const seq = routeSeq;
   const sessions = await demoApi.listSessions();
+  if (seq !== routeSeq) return;
   if (sessions.length > 0) {
     // Populated Home routes directly to the Sessions list; no summary screen.
     location.hash = "#/sessions";
@@ -1333,7 +1339,9 @@ let sessionsQuery = "";
 
 async function renderSessions() {
   setSidebarActive("sessions");
+  const seq = routeSeq;
   const sessions = await demoApi.listSessions();
+  if (seq !== routeSeq) return;
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
@@ -1366,6 +1374,7 @@ async function renderSessions() {
     const runningRun = s.status === "running" || s.status === "queued" ? await demoApi.getRunningRun(s.id) : null;
     return { s, campaigns, videoCount, isDraft, runningRun };
   }));
+  if (seq !== routeSeq) return;
 
   const shown = sessionData.filter((d) => {
     if (sessionsFilter === "running") return d.s.status === "running" || d.s.status === "queued";
@@ -1867,12 +1876,14 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
 
   let session = null, campaign = null, runningRun = null, kmDraft = null;
   if (!createMode) {
+    const seq = routeSeq;
     [session, campaign, runningRun, kmDraft] = await Promise.all([
       demoApi.getSession(sessionId),
       demoApi.getCampaign(campaignId),
       demoApi.getRunningRun(sessionId),
       demoApi.getKeyMessages(sessionId),
     ]);
+    if (seq !== routeSeq) return;
   }
 
   if (createMode) {
@@ -2290,8 +2301,10 @@ const STAGE_TO_STEP = { queued: -1, collect: 0, brief: 1, brief_pause: 2, themes
 async function renderRun(runId) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
+  const seq = routeSeq;
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
+  if (seq !== routeSeq) return;
   const campaign = live
     ? ((session.campaigns && session.campaigns[0]) || null)
     : store.campaigns.get(session.campaignIds[0]);
@@ -2828,11 +2841,13 @@ function evSafeId(id) {
 async function renderResults(runId) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
+  const seq = routeSeq;
   let report;
   try {
     report = await demoApi.getReport(runId);
   } catch {
     const run = await demoApi.getRun(runId);
+    if (seq !== routeSeq) return;
     view.innerHTML = `
     <div class="view-pad">
       <div class="empty-block">
@@ -2850,7 +2865,8 @@ async function renderResults(runId) {
   // Demo: artifacts come from store. Both already filtered/sorted to the six
   // public kinds in contract order by listArtifacts.
   const artifacts = await demoApi.listArtifacts(runId);
-  const byKind = new Map(artifacts.map((a) => [a.kind, a]));
+  if (seq !== routeSeq) return;
+  const byKind =new Map(artifacts.map((a) => [a.kind, a]));
   const pdf = byKind.get("report_pdf");
   report._totalComments = session.commentCount || 0;
 
@@ -3198,7 +3214,9 @@ async function renderFiles() {
       <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="files-search" class="topbar-search" placeholder="Search files" aria-label="Search files"></span>
     </div>`);
 
+  const seq = routeSeq;
   const files = await demoApi.listFiles();
+  if (seq !== routeSeq) return;
   const shown = files.filter((f) =>
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
@@ -3345,7 +3363,9 @@ async function renderUsers() {
     throw new Error("Only admins can manage users.");
   }
   view.innerHTML = `<div class="view-pad"><span class="spinner" role="status" aria-label="Loading users"></span></div>`;
+  const seq = routeSeq;
   const users = await window.__liveApi.listUsers();
+  if (seq !== routeSeq) return;
 
   const cols = "1.6fr 1fr .9fr .9fr 190px";
   const rows = users.map((u) => {
@@ -3455,6 +3475,7 @@ async function route() {
   suppressDirtyGuard = false;
   cleanupRoute();
   activeDirtySessionId = null;
+  const seq = ++routeSeq;
   const hash = location.hash || "#/home";
   currentRouteHash = hash;
   const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
@@ -3470,6 +3491,7 @@ async function route() {
     else if (parts[0] === "users") await renderUsers();
     else await renderHome();
   } catch (err) {
+    if (seq !== routeSeq) return;
     setTopbar('<div class="topbar-left"><span class="topbar-title">Resonance</span></div><div class="topbar-right"></div>');
     view.innerHTML = `
     <div class="view-pad">
