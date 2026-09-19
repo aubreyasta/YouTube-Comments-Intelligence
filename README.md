@@ -39,7 +39,7 @@ These are the only words used in this repo's prose. Code identifiers still carry
 
 **Run.** In order: scrape comments and transcripts, build the Theme book from a sample, then use one Qwen classification pass to label every comment with one Theme, zero or more Key Messages, one Sentiment, and one Emotion. Python validates the labels and counts the results.
 
-**Read the results.** Key Message travel as percentages with a positive and negative split, the Theme mix, overall Sentiment, overall Emotions, and a written summary. Every percentage is clickable and shows the comments behind it.
+**Read the results.** Key Message travel as percentages with a positive and negative split, the Theme mix, overall Sentiment, overall Emotions, and a written summary. Every percentage is clickable and shows the comments behind it. Opening a completed Session from the list goes straight to its results; "Re-run analysis" returns to the setup page.
 
 ---
 

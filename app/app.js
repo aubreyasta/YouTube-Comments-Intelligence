@@ -391,11 +391,19 @@ function startEngineSchedule(engine) {
 
 /* ============================== demoApi ============================== */
 
+// Mirrors the live session's latestRun: the most recently started run, or null.
+// store.runs keeps insertion order, which is start order.
+function demoLatestRun(sessionId) {
+  let latest = null;
+  for (const r of store.runs.values()) if (r.sessionId === sessionId) latest = r;
+  return latest && { id: latest.id, status: latest.status };
+}
+
 const demoApi = {
   /** @returns {Promise<Array<object>>} all sessions, newest first */
   async listSessions() {
     return [...store.sessions.values()]
-      .map((s) => ({ ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) }))
+      .map((s) => ({ ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages), latestRun: demoLatestRun(s.id) }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
@@ -403,7 +411,7 @@ const demoApi = {
   async getSession(id) {
     const s = store.sessions.get(id);
     if (!s) throw demoError("not_found", "Session not found.");
-    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) };
+    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages), latestRun: demoLatestRun(s.id) };
   },
 
   /**
@@ -1384,7 +1392,14 @@ async function renderSessions() {
 
   const rows = shown.map((d) => {
     const { s, campaigns, videoCount, isDraft, runningRun } = d;
-    const target = campaigns.length
+    // A Session with a run opens where that run left off: the report once
+    // complete, the run page while queued, running, or failed.
+    const lr = s.latestRun;
+    const target = lr && s.status === "complete"
+      ? `#/runs/${lr.id}/results`
+      : lr && ["queued", "running", "failed"].includes(s.status)
+      ? `#/runs/${lr.id}`
+      : campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
     const statusCell = isDraft
@@ -1890,7 +1905,10 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
     sessionTopbar({ name: "New session" });
   } else {
     const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
-    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${!runningRun ? "Run analysis" : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
+    const viewReport = session.status === "complete" && session.latestRun
+      ? `<a class="btn secondary" href="#/runs/${session.latestRun.id}/results">View report</a>`
+      : "";
+    const rightHtml = `${viewReport}<button class="btn primary" type="button" id="btn-run">${!runningRun ? (viewReport ? "Re-run analysis" : "Run analysis") : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
     sessionTopbar({ name: session.name, badgeHtml, rightHtml });
   }
 
@@ -1968,7 +1986,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
     : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
 
   const priorResultWarning = (!createMode && session.status !== "ready") ? `
-    <div class="notice pink" role="note">This Session already has a result. Clicking "Run analysis" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
+    <div class="notice pink" role="note">This Session already has a result. Clicking "${session.status === "complete" ? "Re-run analysis" : "Run analysis"}" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
 
   const videosSectionInner = `
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
@@ -2876,6 +2894,7 @@ async function renderResults(runId) {
     return art ? btn : disWrap(btn, "This file was not generated.");
   }).join("");
   const rightHtml = `
+    <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${session.campaignIds[0]}">Re-run analysis</a>
     <details class="export-menu">
       <summary class="btn secondary">Export CSVs</summary>
       <div class="export-list" role="group" aria-label="CSV downloads">${exportItems}</div>
