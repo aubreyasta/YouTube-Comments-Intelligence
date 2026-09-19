@@ -212,6 +212,16 @@ const liveApi = {
     return apiJson("/api/runs/" + runId + "/proceed", { method: "POST" });
   },
 
+  /* touchReview: report review activity so an idle brief_pause does not stop the run. */
+  async touchReview(runId) {
+    await apiFetch("/api/runs/" + runId + "/review_activity", { method: "POST" });
+  },
+
+  /* leaveQueue: take a queued run out of the queue. 409 once it has started. */
+  async leaveQueue(runId) {
+    await apiFetch("/api/runs/" + runId, { method: "DELETE" });
+  },
+
   /* subscribeRun: EventSource on /api/runs/{id}/events.
      Terminal (complete|error): deliver event then close.
      onopen fires on initial connect and on reconnect; track connected state. */

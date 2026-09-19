@@ -12,7 +12,7 @@ never leaves anything under the repo's real data/ tree.
 adapter._execute()'s pipeline edges (collect, brief.reconcile, analyze,
 affect, report, and every model-touching call after brief_pause) are
 mocked - no network, no model, no real PDF render - but
-the run still executes on adapter.start_run()'s real daemon thread, so
+the run still executes on adapter.start_next()'s real daemon thread, so
 the brief_pause block and DB writes are exercised for real.
 
 Run: python tests/test_run_key_messages.py
@@ -41,7 +41,7 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-from auth_helper import login  # sets the sign-in env the startup hook requires
+from auth_helper import login, wait_until  # sets the sign-in env the startup hook requires
 
 import progress
 import server
@@ -54,17 +54,8 @@ _RUN_STAGES = set(progress.STAGES)
 _BRIEF_POINT_KEYS = {"id", "label", "description", "included", "order", "source"}
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "counts",
+    "error", "briefPoints", "artifacts", "skipPause", "counts", "queuePosition",
 }
-
-
-def _wait_until(pred, timeout=5.0, interval=0.02):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _new_session_with_video():
@@ -116,11 +107,10 @@ def _fake_affect_result():
 
 
 def _terminate_stray_runs():
-    """The one-run guard in server.start_run() is global. A test that
-    fails before its run reaches proceed leaves that run in `running`
-    forever, and every later test then gets a 409 body with no `id` key.
-    Flipping strays to `failed` in teardown keeps one failure to one
-    test."""
+    """Runs share one global queue. A test that fails before its run
+    reaches proceed leaves that run in `running` forever, and every later
+    test's run then waits behind it. Flipping strays to `failed` in
+    teardown keeps one failure to one test."""
     conn = db.get_conn()
     try:
         conn.execute(
@@ -201,7 +191,7 @@ def _run_to_brief_pause(session_id, proposals):
     for p in patches:
         p.start()
     run_id = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
-    assert _wait_until(
+    assert wait_until(
         lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
     ), "run never reached brief_pause"
     return run_id, patches
@@ -252,7 +242,7 @@ def test_second_concurrent_run_rejected_with_409_before_delete():
         assert still_there is not None, "409 path deleted the in-flight run"
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -292,7 +282,7 @@ def test_snapshot_and_reconcile_replace_brief_points_before_pause():
         p.start()
     try:
         run_id = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "run never reached brief_pause"
 
@@ -318,7 +308,7 @@ def test_snapshot_and_reconcile_replace_brief_points_before_pause():
         assert all(v is None for v in video_ids), video_ids
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -345,7 +335,7 @@ def test_session_key_messages_never_mutated_by_a_run():
     run_id, patches = _run_to_brief_pause(session_id, [("Transcript idea", "d")])
     try:
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "complete",
             timeout=5.0), "run did not reach complete (every pipeline edge is mocked to succeed)"
     finally:
@@ -413,7 +403,7 @@ def test_patch_and_proceed_gated_on_persisted_brief_pause_stage():
         late_proceed = client.post(f"/api/runs/{run_id}/proceed")
         assert late_proceed.status_code == 409, late_proceed.text
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -471,7 +461,7 @@ def test_id_null_creates_uuid_and_full_ordered_replace():
 
         proceed = client.post(f"/api/runs/{run_id}/proceed")
         assert proceed.status_code == 200, proceed.text
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -505,7 +495,7 @@ def test_brief_point_source_persisted_and_carried_by_patch():
     run_id = None
     try:
         run_id = client.post(f"/api/sessions/{session_id}/runs").json()["id"]
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "run never reached brief_pause"
 
@@ -528,7 +518,7 @@ def test_brief_point_source_persisted_and_carried_by_patch():
         assert [m["source"] for m in saved] == ["transcript", "input", "sharpened"], saved
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -556,7 +546,7 @@ def test_duplicate_non_null_id_rejected_422():
         }, resp.json()
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -581,7 +571,7 @@ def test_unknown_id_rejected_422():
         }, resp.json()
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -599,7 +589,7 @@ def test_cross_run_id_rejected_422():
     try:
         run_a_point_id = client.get(f"/api/runs/{run_a}").json()["briefPoints"][0]["id"]
         client.post(f"/api/runs/{run_a}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_a}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches_a, run_a)
@@ -619,7 +609,7 @@ def test_cross_run_id_rejected_422():
         }, resp.json()
 
         client.post(f"/api/runs/{run_b}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_b}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches_b, run_b)
@@ -651,7 +641,7 @@ def test_empty_reconciled_list_allows_insert_with_server_generated_id():
 
         proceed = client.post(f"/api/runs/{run_id}/proceed")
         assert proceed.status_code == 200, proceed.text
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -696,7 +686,7 @@ def test_proceed_still_requires_at_least_one_included():
         finally:
             conn.close()
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)

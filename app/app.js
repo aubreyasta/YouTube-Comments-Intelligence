@@ -807,6 +807,16 @@ const demoApi = {
     return { messages: kept.map((p) => ({ ...p })) };
   },
 
+  /** Demo runs never queue: startRun refuses while another run is active.
+   * @param {string} runId @returns {Promise<void>} */
+  async leaveQueue(runId) {
+    throw demoError("conflict", "This run has already started, so it can no longer leave the queue.");
+  },
+
+  /** Demo reviews never time out, so there is nothing to record.
+   * @param {string} runId @returns {Promise<void>} */
+  async touchReview(runId) {},
+
   /** @param {string} runId @returns {Promise<object>} */
   async proceedRun(runId) {
     const run = store.runs.get(runId);
@@ -937,7 +947,7 @@ demoApi.mode = "demo"; // default; overwritten at boot if probe succeeds
     "listSessions","getSession","createSession","getCampaign",
     "addVideo","removeVideo","updateVideo","renameSession","uploadAsset","addArticle","removeAsset",
     "setKeyVisual","startRun","getRun","getRunningRun",
-    "proceedRun",
+    "proceedRun","leaveQueue","touchReview",
     "getReport","getAssetData",
     "simulateDisconnect","simulateFailure",
   ];
@@ -1324,8 +1334,8 @@ async function renderHome() {
 }
 
 /* ---------- Sessions ---------- */
-const STATUS_LABEL = { draft: "Draft", ready: "Ready", running: "Running", complete: "Complete", failed: "Failed" };
-let sessionsFilter = "all"; // "all" | "running" | "drafts"
+const STATUS_LABEL = { draft: "Draft", ready: "Ready", queued: "Queued", running: "Running", complete: "Complete", failed: "Failed" };
+let sessionsFilter = "all"; // "all" | "running" (queued too) | "drafts"
 let sessionsQuery = "";
 
 async function renderSessions() {
@@ -1360,12 +1370,12 @@ async function renderSessions() {
       .map((c, i) => ({ ...c, id: s.campaignIds[i] }));
     const videoCount = campaigns.reduce((a, c) => a + c.videoIds.length, 0);
     const isDraft = s.status === "ready" && videoCount === 0;
-    const runningRun = s.status === "running" ? await demoApi.getRunningRun(s.id) : null;
+    const runningRun = s.status === "running" || s.status === "queued" ? await demoApi.getRunningRun(s.id) : null;
     return { s, campaigns, videoCount, isDraft, runningRun };
   }));
 
   const shown = sessionData.filter((d) => {
-    if (sessionsFilter === "running") return d.s.status === "running";
+    if (sessionsFilter === "running") return d.s.status === "running" || d.s.status === "queued";
     if (sessionsFilter === "drafts") return d.isDraft;
     return true;
   });
@@ -1377,6 +1387,8 @@ async function renderSessions() {
       : "#/sessions";
     const statusCell = isDraft
       ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
+      : s.status === "queued" && runningRun?.queuePosition != null
+      ? `<span class="status queued"><span class="dot"></span>${runningRun.queuePosition === 1 ? "Queued - next in line" : `Queued - ${runningRun.queuePosition - 1} ahead`}</span>`
       : s.status === "running" && runningRun
       ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
       : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
@@ -1874,7 +1886,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
     sessionTopbar({ name: "New session" });
   } else {
     const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
-    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${runningRun ? "Run in progress\u2026" : "Run analysis"}</button>`;
+    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${!runningRun ? "Run analysis" : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
     sessionTopbar({ name: session.name, badgeHtml, rightHtml });
   }
 
@@ -2302,6 +2314,8 @@ async function renderRun(runId) {
     state.counts = s.counts || {};
     state.failed = s.stage === "error" ? (s.error || s.message || "Run failed.") : null;
     state.completed = s.stage === "complete";
+    // Set only while the run waits behind another Session's run (live mode).
+    state.queuePosition = s.queuePosition ?? null;
     if (STAGE_TO_STEP[s.stage] != null) currentStep = STAGE_TO_STEP[s.stage];
   }
   applySnapshot(run);
@@ -2309,11 +2323,15 @@ async function renderRun(runId) {
   function badgeText() {
     if (state.failed) return "Failed";
     if (state.completed) return "Complete";
+    if (state.queuePosition != null) return "Queued";
     if (state.stage === "brief_pause") return "Waiting for you";
     return "Running";
   }
   function topbarRightHtml() {
     if (state.completed || state.failed) return "";
+    if (state.queuePosition != null) {
+      return '<button class="btn secondary" type="button" id="btn-leave-queue">Leave the queue</button>';
+    }
     const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
     const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
     return btn + note;
@@ -2324,6 +2342,20 @@ async function renderRun(runId) {
       badgeHtml: `<span class="badge" id="run-badge">${esc(badgeText())}</span>`,
       rightHtml: topbarRightHtml(),
     });
+    const leave = document.getElementById("btn-leave-queue");
+    if (leave) leave.onclick = onLeaveQueue;
+  }
+  async function onLeaveQueue(e) {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await demoApi.leaveQueue(runId);
+      location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
+    } catch (err) {
+      // A 409 means the run started a moment ago; the next snapshot repaints it.
+      btn.disabled = false;
+      bannerEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
+    }
   }
   paintTopbar();
 
@@ -2368,6 +2400,16 @@ async function renderRun(runId) {
   const subEl = document.getElementById("run-sub");
   const bannerEl = document.getElementById("run-banner");
   const briefEl = document.getElementById("brief-review");
+  // Edits stay in the page until confirm, so the server only learns the
+  // review is alive from these pings; an idle review stops the run (live).
+  let lastReviewPing = 0;
+  function noteReviewActivity() {
+    if (state.stage !== "brief_pause" || Date.now() - lastReviewPing < 30000) return;
+    lastReviewPing = Date.now();
+    demoApi.touchReview(runId).catch(() => {}); // a 409 means the review already ended
+  }
+  ["input", "change", "click", "keydown", "focusin", "pointermove", "wheel"].forEach((type) =>
+    briefEl.addEventListener(type, noteReviewActivity, { passive: true }));
   const cntLabelled = document.getElementById("cnt-labelled");
   const cntThemes = document.getElementById("cnt-themes");
   const cntOther = document.getElementById("cnt-other");
@@ -2490,6 +2532,12 @@ async function renderRun(runId) {
           <span class="spinner sm" aria-hidden="true"></span>
           <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
         </div>`;
+    } else if (state.queuePosition != null) {
+      const n = state.queuePosition;
+      titleEl.textContent = "Waiting for another analysis to finish";
+      subEl.textContent = (n === 1 ? "This run is next in line."
+        : `${n - 1} other ${n === 2 ? "run is" : "runs are"} waiting ahead of this one.`)
+        + " It starts on its own - you can leave this page.";
     } else {
       const total = totalComments();
       const labelling = total != null ? `Labelling ${fmtNum(total)} comments` : "Labelling comments";
@@ -2506,6 +2554,7 @@ async function renderRun(runId) {
       titleEl.textContent = msg;
       subEl.textContent = state.stage === "brief_pause"
         ? "This is the one decision point. Everything after this is automatic."
+          + (live ? " If another analysis is waiting, the run stops after 10 minutes with no activity here." : "")
         : "You can leave this page - the Session list will show the same status when you're back.";
       if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
     }
@@ -2543,6 +2592,7 @@ async function renderRun(runId) {
     const sourcePoints = (seeded || briefPointsSnapshot).slice().sort((a, b) => a.order - b.order);
     const points = sourcePoints.map((p) => ({ ...p })); // local working copy
     briefEl.hidden = false;
+    noteReviewActivity(); // opening the review counts
     let saving = false;
     let focusedField = null; // { i, f } of the control focused when Save was pressed
     const expanded = new Set(); // row indices currently showing their edit panel

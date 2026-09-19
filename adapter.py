@@ -1,9 +1,9 @@
 """
 adapter.py - run execution engine for the YouTube Comment Intelligence backend.
 
-start_run(run_id) runs the pipeline for run_id on a daemon thread and returns
-immediately. Progress, the brief_pause wait, and the terminal state all go
-through progress.py, which server.py reads.
+start_next() claims the oldest queued run and runs the pipeline for it on a
+daemon thread, returning immediately. Progress, the brief_pause wait, and the
+terminal state all go through progress.py, which server.py reads.
 """
 
 import json
@@ -52,22 +52,46 @@ def _missing_required_artifacts(out_dir: str) -> list[str]:
             if not os.path.isfile(os.path.join(out_dir, filename))]
 
 
-def start_run(run_id: str) -> None:
-    """
-    Spawn a daemon thread executing _execute(run_id). Returns immediately.
-    Raises ValueError if the run does not exist in the DB.
-    """
+def start_next() -> None:
+    """Start the oldest queued run on a daemon thread if no run is running.
+    Called after a run is queued, when a run ends, and at startup; a call
+    with nothing to do is a no-op. A failed claim is retried, not raised:
+    raising here would leave queued runs waiting for the next start or a
+    restart."""
+    try:
+        run_id = progress.claim_next()
+    except Exception:
+        # ponytail: fixed 5 s retry until the claim succeeds; back off if a
+        # DB outage ever makes this noisy.
+        logger.exception("could not claim the next queued run; retrying in 5 s")
+        threading.Timer(5, start_next).start()
+        return
+    if run_id is None:
+        return
+    try:
+        threading.Thread(target=_execute, args=(run_id,), daemon=True,
+                         name=f"adapter-run-{run_id[:8]}").start()
+    except Exception as exc:
+        # The claim committed 'running'; fail the run so it frees the slot.
+        logger.exception("run %s: could not start its thread", run_id)
+        progress.finish(run_id, error=f"Could not start the run: {exc}")
+
+
+def _clear_prior_runs(session_id: str, run_id: str) -> None:
+    """Delete the Session's earlier runs and their files. Done when the new
+    run starts, not when it is queued, so leaving the queue keeps the old
+    result. None of them can be running: this run holds the only slot.
+    ponytail: hard overwrite, no run history; keep rows and add a `latest`
+    flag if history is ever wanted."""
     conn = db.get_conn()
     try:
-        row = conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"run {run_id!r} not found")
+        for (old_id,) in conn.execute(
+                "SELECT id FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id)).fetchall():
+            storage.clear_run(old_id)
+        conn.execute("DELETE FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id))
+        conn.commit()
     finally:
         conn.close()
-
-    t = threading.Thread(target=_execute, args=(run_id,), daemon=True,
-                         name=f"adapter-run-{run_id[:8]}")
-    t.start()
 
 
 # ---------------------------------------------------------------------------
@@ -890,14 +914,15 @@ def _execute(run_id: str) -> None:
     Full pipeline run on a daemon thread.
     All exceptions are caught; the run always ends in 'complete' or 'failed'.
     """
-    out_dir = storage.run_dir(run_id)
     cfg = None
 
     try:
-        # --- 1. Mark running ------------------------------------------------
-        progress.start(run_id)
+        # Inside the try, so a failure still ends the run and frees the slot.
+        out_dir = storage.run_dir(run_id)
 
+        # --- 1. Replace the Session's prior result --------------------------
         run_row     = _load_run(run_id)
+        _clear_prior_runs(run_row["session_id"], run_id)
         session_row = _load_session(run_row["session_id"])
         campaign    = _load_campaign(run_row["session_id"])
         videos      = _load_videos(campaign["id"])
@@ -1095,9 +1120,13 @@ def _execute(run_id: str) -> None:
         # --- 14. Mark complete ----------------------------------------------
         progress.finish(run_id)
 
+    except progress.ReviewExpired:
+        logger.info("run %s stopped: Key Message review idle", run_id)
     except Exception as exc:
         logger.exception("run %s failed", run_id)
         try:
             progress.finish(run_id, error=f"{type(exc).__name__}: {exc}")
         except Exception:
             logger.exception("run %s: could not record the failure", run_id)
+    finally:
+        start_next()

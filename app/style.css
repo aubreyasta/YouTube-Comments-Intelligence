@@ -210,6 +210,7 @@ a.btn:hover { text-decoration: none; }
 .status.complete { color: var(--ink); }
 .status.ready { color: var(--pink); } .status.ready .dot { background: var(--pink); }
 .status.running { color: var(--pink); } .status.running .dot { background: var(--pink); }
+.status.queued { color: var(--muted); } .status.queued .dot { background: var(--quiet); }
 .status.failed { color: var(--danger); } .status.failed .dot { background: var(--danger); }
 .status.draft { color: var(--quiet); } .status.draft .dot { background: var(--chev); }
 
