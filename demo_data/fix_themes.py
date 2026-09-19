@@ -21,7 +21,7 @@ ALLOWED_THEMES = {
     "Other",
 }
 
-# ponytail: one-off correction table for one frozen corpus, safe to delete
+# One-off correction table for one frozen corpus, safe to delete
 # once the corrected labelled.csv is committed.
 # positional row index -> (expected current theme, corrected theme)
 CHANGES = {

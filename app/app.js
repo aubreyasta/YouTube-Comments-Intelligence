@@ -1,4 +1,4 @@
-/* Resonance local demo — frontend-only. No persistence; one mutable in-memory
+/* Resonance local demo - frontend-only. No persistence; one mutable in-memory
    store mutated only inside demoApi. UI renderers treat store data as read-only. */
 (function () {
 "use strict";
@@ -94,10 +94,10 @@ const DEMO_VIDEOS = {
 };
 
 const DEMO_TITLES = [
-  "Bola Rakyat — full film (60s)",
-  "Kampung derby — behind the scenes",
+  "Bola Rakyat - full film (60s)",
+  "Kampung derby - behind the scenes",
   "Street football, one take (director's cut)",
-  "Matchday in the gang — short",
+  "Matchday in the gang - short",
 ];
 const DEMO_CHANNELS = ["Nike Indonesia", "Nike Indonesia", "Bung Kicau", "Garuda Select"];
 
@@ -308,7 +308,7 @@ function finalizeRun(engine) {
   }
 }
 
-/* The stage machine lives in makeRunEngine/startEngineSchedule — all fixture
+/* The stage machine lives in makeRunEngine/startEngineSchedule - all fixture
    timing stays in this layer, never in renderers. */
 
 function startEngineSchedule(engine) {
@@ -572,7 +572,7 @@ const demoApi = {
     try { host = new URL(u).hostname; } catch { throw demoError("validation", "That link does not look right.", "article"); }
     const asset = {
       id: uid(), campaignId, kind: "article",
-      name: host + " — article", sourceUrl: u,
+      name: host + " - article", sourceUrl: u,
       mimeType: "text/html", size: null, addedAt: nowIso(),
       status: "ready",
     };
@@ -1242,16 +1242,9 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
       const nl = kmNormLabel(dm.label);
       if (nl && byLabel.has(nl)) local = byLabel.get(nl);
     }
-    // A dirty local row whose label diverged from this draft entry is not
-    // described by this draft entry: the local row already owns this id and
-    // survives untouched in the pass below. Drop the draft entry instead of
-    // appending it, because appending it would duplicate the server id that
-    // the surviving local row already owns and make the next save fail
-    // validation.
-    // ponytail: this merge reconciles by server id then by normalized label,
-    // so two rows that share a normalized label cannot be told apart; if Key
-    // Messages ever need duplicate labels, give every local row a stable
-    // client key at creation and merge on that instead.
+    // A dirty local row whose label diverged keeps its id and survives below;
+    // appending this draft entry would duplicate that id and fail the save.
+    // Matching by normalized label cannot tell apart two rows that share one.
     if (local) {
       const localKey = local.id || kmLocalKey(local);
       if (dirtyIds.has(localKey) && kmNormLabel(local.label) !== kmNormLabel(dm.label)) {
@@ -1826,7 +1819,7 @@ function renderSetupKeyMessages(sessionId, container, initialDraft) {
     }
   }
 
-  // ponytail: coordinates a deferred repaint against pointer and keyboard
+  // Coordinates a deferred repaint against pointer and keyboard
   // activation with two flags on the container; if the editor ever needs
   // more deferred-update sources, replace the flags with a single explicit
   // "safe to repaint" check.
@@ -2745,9 +2738,8 @@ async function renderRun(runId) {
 
     if (snapshot.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
-      // Snapshots never carry brief_points, so this re-fetches them. onEvent
-      // is synchronous, so this cannot be awaited here.
-      renderBriefReviewFresh(null).catch(() => {});
+      // Snapshots never carry brief_points, so this re-fetches them.
+      renderBriefReviewFresh(null);
     }
     if (currentStep > STAGE_TO_STEP.brief_pause && briefRendered) {
       briefEl.hidden = true;
@@ -2791,7 +2783,7 @@ async function renderRun(runId) {
   paintCounts();
   if (state.stage === "brief_pause") {
     briefRendered = true;
-    renderBriefReviewFresh().catch(() => {});
+    renderBriefReviewFresh();
   }
 
   const unsubscribe = demoApi.subscribeRun(runId, { onEvent, onDisconnect, onReconnect });
@@ -2813,7 +2805,7 @@ async function renderRun(runId) {
 
 /* ---------- Results ---------- */
 
-/* Model labels are snake_case ("other_neutral"). Display only — filters and
+/* Model labels are snake_case ("other_neutral"). Display only - filters and
    metric IDs keep the raw value. */
 function fmtLabel(label) {
   return String(label).replace(/_/g, " ");
@@ -3135,7 +3127,7 @@ async function renderResults(runId) {
     let ariaLabel, count, noun, items;
     if (id === "overall") {
       ariaLabel = "Overall Travel";
-      // ponytail: rounded derivation from the percent, until report.json
+      // Rounded derivation from the percent, until report.json
       // carries an overall comment count of its own.
       count = Math.round(report.overallTransfer / 100 * report._totalComments);
       noun = "comments echoed at least one Key Message";

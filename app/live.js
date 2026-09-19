@@ -104,7 +104,7 @@ const liveApi = {
         await apiJson("/api/campaigns/" + campaign.id + "/videos",
           json({ url, kind: "auto" }));
       } catch (err) {
-        // ponytail: no partial rollback; session+campaign remain on server.
+        // No partial rollback; session+campaign remain on server.
         err.field = "videos";
         throw err;
       }
@@ -267,7 +267,7 @@ const liveApi = {
      uses different names (transfers/value/id) and carries prose the server
      never produces. Mapping here keeps the renderer shape-agnostic and keeps
      the demo/live boundary in this file.
-     ponytail: a one-way field map, not a general adapter layer; if the report
+     A one-way field map, not a general adapter layer; if the report
      contract and the renderer converge later, delete this and pass through. */
   async getReport(runId) {
     const raw = await apiJson("/api/runs/" + runId + "/report");
@@ -310,14 +310,14 @@ const liveApi = {
 
   /* getArtifact: the artifact id is known from run.artifacts list.
      We need the runId too - callers pass id only, so we must search.
-     ponytail: requires run.artifacts to carry runId on each artifact.
+     Requires run.artifacts to carry runId on each artifact.
      The server response includes runId on each artifact object. */
   async getArtifact(artifactId) {
     // The caller knows only artifactId. We need runId to build the URL.
     // live callers always have a run in scope - they first call getRun and then
     // iterate run.artifacts which carry runId. But this method signature takes
     // only id. Scan sessions to find the run that owns this artifact.
-    // ponytail: O(sessions * runs) scan; acceptable for typical session counts.
+    // O(sessions * runs) scan; acceptable for typical session counts.
     const sessions = await apiJson("/api/sessions");
     for (const sess of sessions) {
       const full = await apiJson("/api/sessions/" + sess.id);
