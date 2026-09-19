@@ -220,15 +220,16 @@ function failRun(engine, message) {
 }
 
 /* The six public run artifacts, in contract order. kind is the stable id;
-   filename/contentType are exact and must never drift. No seventh entry,
+   filename/contentType are exact and must never drift. label is the
+   user-facing file stem (see artifactDownloadName). No seventh entry,
    no report_json, no chart_transfer.csv/chart_themes.csv/summary.csv. */
 const PUBLIC_ARTIFACTS = [
-  { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf" },
-  { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv" },
-  { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv" },
-  { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv" },
-  { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv" },
-  { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv" },
+  { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf", label: "Report" },
+  { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv", label: "Comments" },
+  { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv", label: "Key Messages" },
+  { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv", label: "Themes" },
+  { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv", label: "Sentiment" },
+  { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv", label: "Emotions" },
 ];
 const PUBLIC_ARTIFACT_ORDER = PUBLIC_ARTIFACTS.reduce((m, a, i) => (m[a.kind] = i, m), {});
 
@@ -1088,16 +1089,29 @@ function downloadBlob(content, name, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+/* "<Session>-<YYYY-MM-DD HHmm>-<Label>.<ext>", stamped with the Run's finish
+   (addedAt, always sent since #39) in local time, to the minute, no zone.
+   Drops the characters Windows forbids in filenames. */
+function artifactDownloadName(artifact, sessionName) {
+  const meta = PUBLIC_ARTIFACTS[PUBLIC_ARTIFACT_ORDER[artifact.kind]];
+  const d = new Date(artifact.addedAt);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+  const name = (sessionName || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "").trim().replace(/[. ]+$/, "") || "Session";
+  return `${name}-${stamp}-${meta.label}.${meta.filename.split(".").pop()}`;
+}
+
 /* Shared blob-first download path for Results and Files. Always fetches
    the artifact fresh (live: blob + Content-Disposition; demo: in-memory
    Blob) before handing off to downloadBlob, so both modes use the exact
-   filename/contentType the API returns rather than any stale reference.
+   contentType the API returns rather than any stale reference. The saved
+   name comes from artifactDownloadName, not the API's Content-Disposition.
    errorRegion is a live/alert region element; failures are announced there,
    never swallowed. */
-async function downloadArtifact(artifact, errorRegion) {
+async function downloadArtifact(artifact, sessionName, errorRegion) {
   try {
     const a = await demoApi.getArtifact(artifact.id);
-    downloadBlob(a.content, a.filename, a.contentType);
+    downloadBlob(a.content, artifactDownloadName(artifact, sessionName), a.contentType);
     if (errorRegion) errorRegion.textContent = "";
   } catch {
     if (errorRegion) errorRegion.textContent = "Download failed. Try again.";
@@ -1106,7 +1120,7 @@ async function downloadArtifact(artifact, errorRegion) {
 
 /* Modal with focus trap, Escape, and focus restoration. */
 let modalState = null;
-function openModal(title, bodyHtml, objectUrl) {
+function openModal(title, bodyHtml, objectUrl, headActionsHtml = "") {
   closeModal();
   const prevFocus = document.activeElement;
   const backdrop = document.createElement("div");
@@ -1115,6 +1129,7 @@ function openModal(title, bodyHtml, objectUrl) {
     <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="modal-head">
         <div class="t">${esc(title)}</div>
+        ${headActionsHtml}
         <button class="ev-close" data-close aria-label="Close preview">${ICONS.xLg}</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>
@@ -2890,7 +2905,7 @@ async function renderResults(runId) {
 
   const exportItems = PUBLIC_ARTIFACTS.filter((m) => m.kind !== "report_pdf").map((meta) => {
     const art = byKind.get(meta.kind);
-    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)}</button>`;
+    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(art ? artifactDownloadName(art, session.name) : meta.filename)}</button>`;
     return art ? btn : disWrap(btn, "This file was not generated.");
   }).join("");
   const rightHtml = `
@@ -2916,7 +2931,7 @@ async function renderResults(runId) {
   topbar.querySelectorAll("[data-artifact]").forEach((b) => {
     b.addEventListener("click", () => {
       const art = byKind.get(b.dataset.artifact);
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
       // A CSV pick closes the menu; focus goes back to its summary so it is
       // not lost on a now-hidden item.
       const menu = b.closest("details");
@@ -3201,13 +3216,13 @@ async function renderResults(runId) {
     const seeAllBtn = e.target.closest("[data-see-all]");
     if (seeAllBtn && !seeAllBtn.disabled) {
       const art = byKind.get("comments_csv");
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
       return;
     }
     const csvBtn = e.target.closest("[data-section-csv]");
     if (csvBtn && !csvBtn.disabled) {
       const art = byKind.get(csvBtn.dataset.sectionCsv);
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
     }
   });
 
@@ -3239,10 +3254,12 @@ async function renderFiles() {
   const shown = files.filter((f) =>
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
+  const fileSessionName = (f) =>
+    f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
   const rows = shown.map((f) => {
-    const sessionName = f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
+    const sessionName = fileSessionName(f);
     const isArtifact = f._file === "artifact";
-    const displayName = isArtifact ? f.filename : f.name;
+    const displayName = isArtifact ? artifactDownloadName(f, sessionName) : f.name;
     const ext = isArtifact ? (f.contentType === "application/pdf" ? "PDF" : "CSV")
       : f.kind === "article" ? null : (f.name.split(".").pop() || "").toUpperCase().slice(0, 4);
     const icon = f.kind === "article"
@@ -3336,7 +3353,7 @@ async function renderFiles() {
       const item = files.find((x) => x.id === b.dataset.dlFile);
       if (!item) return;
       if (b.dataset.kind === "artifact") {
-        await downloadArtifact(item, filesDlErr);
+        await downloadArtifact(item, fileSessionName(item), filesDlErr);
       } else {
         try {
           const blob = await demoApi.getAssetData(item.id);
@@ -3357,7 +3374,12 @@ async function renderFiles() {
         try {
           const a = await demoApi.getArtifact(item.id);
           const url = URL.createObjectURL(a.content);
-          openModal(a.filename + (live ? "" : " (demo data)"), `<iframe src="${url}" title="Preview of ${esc(a.filename)}"></iframe>`, url);
+          const name = artifactDownloadName(item, fileSessionName(item));
+          // The PDF viewer's own save names the file after the blob URL, so the
+          // modal carries a named download link.
+          openModal(name + (live ? "" : " (demo data)"),
+            `<iframe src="${url}" title="Preview of ${esc(name)}"></iframe>`, url,
+            `<a class="btn secondary" href="${url}" download="${esc(name)}">Download</a>`);
           filesDlErr.textContent = "";
         } catch {
           filesDlErr.textContent = "Download failed. Try again.";

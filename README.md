@@ -64,6 +64,8 @@ Six files per run.
 | `sentiment.csv` | Sentiment breakdown. |
 | `emotions.csv` | Emotion breakdown. |
 
+Downloads are named `<Session>-<YYYY-MM-DD HHmm>-<File>`, stamped with the run's finish time in local time, for example `Spring Launch-2026-09-19 1430-Key Messages.csv`.
+
 The four small CSVs are shaped to be dropped straight into Google Slides or any chart tool. The pipeline draws no charts of its own on purpose, because the design team builds their own.
 
 `report.pdf` is an internal debrief, not a client deliverable.

@@ -1424,6 +1424,15 @@
     const origOpen = win.open;
     win.open = function () { throw new Error("must not navigate directly for artifact download"); };
     let getArtifactCalledWith = null;
+    let savedAs = null;
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { savedAs = this.download; };
+    // Fixed finish time and a name with Windows-forbidden characters, so the
+    // expected download name is a literal rather than a copy of the formula.
+    const origGetSession = api.getSession, origListArtifacts = api.listArtifacts;
+    const finished = new Date(2026, 8, 19, 14, 30).toISOString();
+    api.getSession = async (id) => ({ ...(await origGetSession.call(api, id)), name: ' a/b:c*?". ' });
+    api.listArtifacts = async (id) => (await origListArtifacts.call(api, id)).map((x) => ({ ...x, addedAt: finished }));
     api.getArtifact = async function (id) {
       getArtifactCalledWith = id;
       return { id, runId: run.id, kind: "themes_csv", filename: "themes.csv", contentType: "text/csv",
@@ -1438,8 +1447,13 @@
       fireClick(btn);
       await sleep(20);
       check("T3.5: Results click fetches via demoApi.getArtifact, not downloadUrl", getArtifactCalledWith !== null);
+      check("#41: download is named <Session>-<local finish time>-<File>, minus Windows-forbidden characters",
+        savedAs === "abc-2026-09-19 1430-Themes.csv");
     } finally {
       api.getArtifact = origGetArtifact;
+      api.getSession = origGetSession;
+      api.listArtifacts = origListArtifacts;
+      HTMLAnchorElement.prototype.click = origClick;
       win.open = origOpen;
     }
   }

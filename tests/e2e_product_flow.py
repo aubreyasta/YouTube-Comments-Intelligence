@@ -837,6 +837,22 @@ def run_completes(page, base):
             f"{expected_suffix!r}")
 
 
+# Issue #41: "<Session>-<YYYY-MM-DD HHmm>-<File>", stamped with the run's
+# finish time in the browser's local time.
+_DOWNLOAD_STEMS = {
+    "report_pdf": "Report.pdf",
+    "comments_csv": "Comments.csv",
+    "key_messages_csv": "Key Messages.csv",
+    "themes_csv": "Themes.csv",
+    "sentiment_csv": "Sentiment.csv",
+    "emotions_csv": "Emotions.csv",
+}
+
+
+def _download_name_re(kind):
+    return re.compile(r"E2E Session-\d{4}-\d{2}-\d{2} \d{4}-" + re.escape(_DOWNLOAD_STEMS[kind]))
+
+
 def six_downloads_in_order(page, base):
     run_id = _require_run_id()
     page.goto(base + "/#/runs/" + run_id + "/results")
@@ -849,17 +865,14 @@ def six_downloads_in_order(page, base):
 
     expected_csv_kinds = ["comments_csv", "key_messages_csv", "themes_csv",
                            "sentiment_csv", "emotions_csv"]
-    expected_csv_labels = ["comments.csv", "key-messages.csv", "themes.csv",
-                            "sentiment.csv", "emotions.csv"]
 
     actual_kinds = [csv_buttons.nth(i).get_attribute("data-artifact") for i in range(5)]
     _expect(actual_kinds == expected_csv_kinds,
             f"data-artifact order was {actual_kinds!r}, expected {expected_csv_kinds!r}")
 
     actual_labels = [csv_buttons.nth(i).text_content().strip() for i in range(5)]
-    _expect(actual_labels == expected_csv_labels,
-            f"export menu labels were {actual_labels!r}, "
-            f"expected {expected_csv_labels!r}")
+    _expect(all(_download_name_re(k).fullmatch(l) for k, l in zip(expected_csv_kinds, actual_labels)),
+            f"export menu labels were {actual_labels!r}, expected the #41 download names")
 
     pdf_btn = page.locator("#btn-pdf")
     _expect(pdf_btn.count() == 1, "#btn-pdf was not rendered")
@@ -868,14 +881,6 @@ def six_downloads_in_order(page, base):
 
     expected_kinds = expected_csv_kinds + ["report_pdf"]
     ordered_buttons = [csv_buttons.nth(i) for i in range(5)] + [pdf_btn]
-    expected_filenames = {
-        "report_pdf": "report.pdf",
-        "comments_csv": "comments.csv",
-        "key_messages_csv": "key-messages.csv",
-        "themes_csv": "themes.csv",
-        "sentiment_csv": "sentiment.csv",
-        "emotions_csv": "emotions.csv",
-    }
 
     for kind, btn in zip(expected_kinds, ordered_buttons):
         _expect(btn.get_attribute("disabled") is None,
@@ -888,7 +893,6 @@ def six_downloads_in_order(page, base):
                 "expected enabled since the fakes write all six files")
 
     for kind, btn in zip(expected_kinds, ordered_buttons):
-        expected_filename = expected_filenames[kind]
         # Each CSV pick closes the menu, so reopen it for the next one.
         if kind != "report_pdf" and not page.evaluate(
                 "document.querySelector('.export-menu').open"):
@@ -896,9 +900,9 @@ def six_downloads_in_order(page, base):
         with page.expect_download(timeout=15000) as dl_info:
             btn.click()
         actual_filename = dl_info.value.suggested_filename
-        _expect(actual_filename == expected_filename,
+        _expect(_download_name_re(kind).fullmatch(actual_filename),
                 f"artifact {kind!r} suggested_filename was {actual_filename!r}, "
-                f"expected {expected_filename!r}")
+                f"expected E2E Session-<YYYY-MM-DD HHmm>-{_DOWNLOAD_STEMS[kind]}")
 
     # report.json is never exposed as a download, even from inside the menu.
     _expect(page.locator('[data-artifact="report_json"]').count() == 0,
@@ -978,6 +982,27 @@ def files_page_shows_added_date(page, base):
     page.wait_for_selector("[data-dl-file], [data-open]")
     text = page.inner_text("#view")
     _expect("NaN" not in text, f"Files page printed NaN: {text!r}")
+
+
+def files_page_uses_download_names(page, base):
+    """Issue #41: Files rows show the download names, and the PDF preview
+    offers a download under that name (the viewer's own save would not)."""
+    _require_run_id()
+    page.goto(base + "/#/files")
+    page.wait_for_selector("[data-open]")
+    text = page.inner_text("#view")
+    for kind in _DOWNLOAD_STEMS:
+        _expect(_download_name_re(kind).search(text),
+                f"Files page had no {_DOWNLOAD_STEMS[kind]} row: {text!r}")
+    page.click('[data-open][data-kind="artifact"]')
+    title = page.inner_text(".modal-head .t").strip()
+    _expect(_download_name_re("report_pdf").fullmatch(title),
+            f"PDF preview title was {title!r}")
+    with page.expect_download(timeout=15000) as dl_info:
+        page.click(".modal-head a[download]")
+    saved = dl_info.value.suggested_filename
+    _expect(saved == title, f"PDF preview saved as {saved!r}, expected {title!r}")
+    page.click(".modal [data-close]")
 
 
 def stale_render_does_not_overwrite(page, base):
@@ -1374,6 +1399,7 @@ def main():
             ("report_json_never_exposed", report_json_never_exposed),
             ("evidence_drawer_shows_metric_count", evidence_drawer_shows_metric_count),
             ("files_page_shows_added_date", files_page_shows_added_date),
+            ("files_page_uses_download_names", files_page_uses_download_names),
             ("stale_render_does_not_overwrite", stale_render_does_not_overwrite),
             ("aria_and_keyboard", aria_and_keyboard),
             ("skip_pause_control_is_accessible", skip_pause_control_is_accessible),
