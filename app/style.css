@@ -764,7 +764,7 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 14px 18px; border-bottom: 1px solid var(--border);
 }
-.modal-head .t { font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-head .t { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal-body { flex: 1; min-height: 0; overflow: auto; padding: 18px; display: flex; justify-content: center; background: var(--neutral); }
 .modal-body img { max-width: 100%; height: auto; border-radius: 6px; }
 .modal-body iframe { width: 100%; height: 70vh; border: none; background: #fff; }
