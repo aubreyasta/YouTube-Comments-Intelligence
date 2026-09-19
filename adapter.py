@@ -1,47 +1,18 @@
 """
 adapter.py - run execution engine for the YouTube Comment Intelligence backend.
 
-This module wraps the existing pipeline in a daemon thread, streams progress
-via per-run queues, and handles the brief-pause/proceed interrupt.
-
-Public API (for server.py / Wave 3):
--------------------------------------
-  start_run(run_id: str) -> None
-      Start a daemon thread executing the full pipeline for run_id.
-      Returns immediately. Raises ValueError if run_id not found in DB.
-
-  get_queue(run_id: str) -> queue.Queue
-      Return the progress queue for run_id. Creates it on demand.
-      Each item is a progress dict (see PROGRESS_SHAPE below).
-
-  get_proceed_event(run_id: str) -> threading.Event
-      Return the proceed event for run_id. The SSE endpoint should call
-      .set() on this after PATCH /runs/{id}/brief_points + POST /runs/{id}/proceed.
-
-  is_terminal(run_id: str) -> bool
-      True if the run has pushed a 'complete' or 'error' stage event.
-      Use this to know when to close the SSE stream.
-
-PROGRESS_SHAPE:
-  {
-    "run_id":  str,           # the run UUID
-    "stage":   str,           # collect | brief | brief_pause | themes |
-                              # classify | emotion | report | complete | error
-    "message": str,           # human-readable status line
-    "pct":     int,           # 0-100
-    "detail":  str | None,    # extra context (error message, counts, etc.)
-  }
+start_next() claims the oldest queued run and runs the pipeline for it on a
+daemon thread, returning immediately. Progress, the brief_pause wait, and the
+terminal state all go through progress.py, which server.py reads.
 """
 
 import json
 import logging
 import os
-import queue
 import re
 import shutil
 import threading
 import uuid
-from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -53,18 +24,13 @@ except ImportError:
     pass  # python-dotenv optional; env vars may be set by the shell
 
 import db
+import progress
 import storage
 from pipeline import collect, brief, analyze, report as pipeline_report
 from pipeline import llm as pipeline_llm
 from pipeline.config_types import PipelineConfig, llm_env
 
 logger = logging.getLogger(__name__)
-
-# Module-level state: one queue and one event per run.
-_queues: dict[str, queue.Queue] = {}
-_proceed_events: dict[str, threading.Event] = {}
-_terminal: dict[str, bool] = {}
-_lock = threading.Lock()
 
 # Single source of truth for the seven (kind, filename) pairs a completed
 # run must produce under out_dir. server.py's _ARTIFACT_CONTRACT carries
@@ -86,123 +52,51 @@ def _missing_required_artifacts(out_dir: str) -> list[str]:
             if not os.path.isfile(os.path.join(out_dir, filename))]
 
 
-# ---------------------------------------------------------------------------
-# Public helpers
-# ---------------------------------------------------------------------------
+def start_next() -> None:
+    """Start the oldest queued run on a daemon thread if no run is running.
+    Called after a run is queued, when a run ends, and at startup; a call
+    with nothing to do is a no-op. A failed claim is retried, not raised:
+    raising here would leave queued runs waiting for the next start or a
+    restart."""
+    try:
+        run_id = progress.claim_next()
+    except Exception:
+        # ponytail: fixed 5 s retry until the claim succeeds; back off if a
+        # DB outage ever makes this noisy.
+        logger.exception("could not claim the next queued run; retrying in 5 s")
+        threading.Timer(5, start_next).start()
+        return
+    if run_id is None:
+        return
+    try:
+        threading.Thread(target=_execute, args=(run_id,), daemon=True,
+                         name=f"adapter-run-{run_id[:8]}").start()
+    except Exception as exc:
+        # The claim committed 'running'; fail the run so it frees the slot.
+        logger.exception("run %s: could not start its thread", run_id)
+        progress.finish(run_id, error=f"Could not start the run: {exc}")
 
-def get_queue(run_id: str) -> queue.Queue:
-    """Return (create on demand) the progress queue for run_id."""
-    with _lock:
-        if run_id not in _queues:
-            _queues[run_id] = queue.Queue()
-        return _queues[run_id]
 
-
-def get_proceed_event(run_id: str) -> threading.Event:
-    """Return (create on demand) the proceed threading.Event for run_id."""
-    with _lock:
-        if run_id not in _proceed_events:
-            _proceed_events[run_id] = threading.Event()
-        return _proceed_events[run_id]
-
-
-def is_terminal(run_id: str) -> bool:
-    """True once 'complete' or 'error' has been pushed to the queue."""
-    return _terminal.get(run_id, False)
-
-
-def start_run(run_id: str) -> None:
-    """
-    Spawn a daemon thread executing _execute(run_id). Returns immediately.
-    Raises ValueError if the run does not exist in the DB.
-    """
+def _clear_prior_runs(session_id: str, run_id: str) -> None:
+    """Delete the Session's earlier runs and their files. Done when the new
+    run starts, not when it is queued, so leaving the queue keeps the old
+    result. None of them can be running: this run holds the only slot.
+    ponytail: hard overwrite, no run history; keep rows and add a `latest`
+    flag if history is ever wanted."""
     conn = db.get_conn()
     try:
-        row = conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone()
-        if row is None:
-            raise ValueError(f"run {run_id!r} not found")
+        for (old_id,) in conn.execute(
+                "SELECT id FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id)).fetchall():
+            storage.clear_run(old_id)
+        conn.execute("DELETE FROM runs WHERE session_id = ? AND id != ?", (session_id, run_id))
+        conn.commit()
     finally:
         conn.close()
-
-    t = threading.Thread(target=_execute, args=(run_id,), daemon=True,
-                         name=f"adapter-run-{run_id[:8]}")
-    t.start()
-
-
-# ---------------------------------------------------------------------------
-# Progress helpers
-# ---------------------------------------------------------------------------
-
-def _push(run_id: str, stage: str, message: str, pct: int,
-          detail: str | None = None) -> None:
-    get_queue(run_id).put({
-        "run_id": run_id,
-        "stage": stage,
-        "message": message,
-        "pct": pct,
-        "detail": detail,
-    })
-    # Persisted alongside the queue event (not instead of it) so GET
-    # /runs/{id} can report brief_pause after a tab reopens with no SSE
-    # connection to replay from - the queue is per-process and empties
-    # once drained, but this column survives.
-    _set_run_stage(run_id, stage,
-                   detail if stage == "classify" and detail else None)
-    if stage in ("complete", "error"):
-        with _lock:
-            _terminal[run_id] = True
 
 
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _set_run_state(run_id: str, state: str, **extra_cols) -> None:
-    cols = {"state": state, **extra_cols}
-    set_clause = ", ".join(f"{k} = ?" for k in cols)
-    conn = db.get_conn()
-    try:
-        conn.execute(
-            f"UPDATE runs SET {set_clause} WHERE id = ?",
-            (*cols.values(), run_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_run_stage(run_id: str, stage: str,
-                   progress_detail: str | None = None) -> None:
-    """Persist the fine-grained SSE stage onto the run row, plus the latest
-    classify progress detail when given (an earlier one is kept otherwise).
-    Best-effort: a run that vanished mid-flight (deleted by a later
-    overwrite) is not an error worth surfacing from inside a progress
-    callback."""
-    conn = db.get_conn()
-    try:
-        conn.execute(
-            "UPDATE runs SET stage = ?, "
-            "progress_detail = COALESCE(?, progress_detail) WHERE id = ?",
-            (stage, progress_detail, run_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_run_total(run_id: str, total: int) -> None:
-    """Persist the analysis-base comment count once collect finishes, so
-    GET /runs/{id} can paint it after a reopen with no SSE connection to
-    replay from (see _push). Best-effort, same as _set_run_stage."""
-    conn = db.get_conn()
-    try:
-        conn.execute("UPDATE runs SET total_comments = ? WHERE id = ?", (total, run_id))
-        conn.commit()
-    finally:
-        conn.close()
-
 
 def _load_run(run_id: str) -> dict:
     """Return the run row as a plain dict."""
@@ -1020,14 +914,15 @@ def _execute(run_id: str) -> None:
     Full pipeline run on a daemon thread.
     All exceptions are caught; the run always ends in 'complete' or 'failed'.
     """
-    out_dir = storage.run_dir(run_id)
     cfg = None
 
     try:
-        # --- 1. Mark running ------------------------------------------------
-        _set_run_state(run_id, "running", started_at=_now_iso())
+        # Inside the try, so a failure still ends the run and frees the slot.
+        out_dir = storage.run_dir(run_id)
 
+        # --- 1. Replace the Session's prior result --------------------------
         run_row     = _load_run(run_id)
+        _clear_prior_runs(run_row["session_id"], run_id)
         session_row = _load_session(run_row["session_id"])
         campaign    = _load_campaign(run_row["session_id"])
         videos      = _load_videos(campaign["id"])
@@ -1040,7 +935,7 @@ def _execute(run_id: str) -> None:
         # Text extraction and article fetching happen at asset-creation time
         # (server.py's upload/article routes), not here. This stage only
         # assembles what was already extracted into the run's context.
-        _push(run_id, "collect", "Assembling asset context", 2)
+        progress.publish(run_id, "collect", "Assembling asset context", 2)
         campaign_context_parts = []
         images_by_group: dict[str, list[tuple[bytes, str]]] = {}
 
@@ -1090,14 +985,13 @@ def _execute(run_id: str) -> None:
 
         # --- 5. Collect -------------------------------------------------------
         pipeline_llm.preflight(cfg)
-        _push(run_id, "collect", "Fetching comments and transcripts", 5)
+        progress.publish(run_id, "collect", "Fetching comments and transcripts", 5)
         comments_df, meta_df = collect.fetch(cfg)
         comments_df = collect.clean(comments_df, cfg)
         base_df = comments_df[comments_df["in_base"]].reset_index(drop=True)
-        _set_run_total(run_id, len(base_df))
-        _push(run_id, "collect",
-              f"Collected {len(base_df)} comments in analysis base", 20,
-              detail=f"total={len(base_df)}")
+        progress.publish(run_id, "collect",
+                         f"Collected {len(base_df)} comments in analysis base", 20,
+                         total=len(base_df))
 
         # --- 6. Brief: reconcile the snapshot against transcripts -----------
         # brief.reconcile() keeps edited entries and stable ids verbatim,
@@ -1105,16 +999,15 @@ def _execute(run_id: str) -> None:
         # description, and appends transcript-only messages a Session
         # with no User Inputs would otherwise have none of (see
         # docs/architecture.md "Grounded Key Messages").
-        _push(run_id, "brief", "Reading the videos", 22)
+        progress.publish(run_id, "brief", "Reading the videos", 22)
         summary_str = "; ".join(
             meta_df["title"].fillna("").astype(str).head(6))
         grounded, reconciled = brief.reconcile(
             session_key_messages, meta_df, cfg,
             context_map=campaign_context, images_map=images_map,
             include_grounded=True)
-        _push(run_id, "brief",
-              f"Brief complete - {len(reconciled)} points discovered", 38,
-              detail=str(len(reconciled)))
+        progress.publish(run_id, "brief",
+                         f"Brief complete - {len(reconciled)} points discovered", 38)
 
         # --- 7. Replace brief points with the reconciled list; brief pause --
         # The reconciled list is persisted before the stage decision either
@@ -1126,16 +1019,7 @@ def _execute(run_id: str) -> None:
         # messages there is nothing to classify against, so the run pauses
         # regardless and the user must include at least one.
         any_included = any(pt.get("included") for pt in reconciled)
-        if run_row["skip_pause"] and any_included:
-            _push(run_id, "brief", "Brief ready - skipping review", 40,
-                  detail=str(len(reconciled)))
-        else:
-            _push(run_id, "brief_pause",
-                  "Brief ready for review. Waiting for approval.", 40,
-                  detail=str(len(reconciled)))
-
-            # Block until server.py calls proceed (sets the event).
-            get_proceed_event(run_id).wait()
+        progress.await_review(run_id, skip=bool(run_row["skip_pause"]) and any_included)
 
         # --- 8. Re-read included brief points ---------------------------------
         # video_id is always NULL on these rows (Session-level Key
@@ -1159,40 +1043,35 @@ def _execute(run_id: str) -> None:
                 "All brief points were excluded. At least one must be included.")
 
         # --- 9. Classify ----------------------------------------------------
-        _push(run_id, "themes", "Discovering themes", 42)
+        progress.publish(run_id, "themes", "Discovering themes", 42)
         themes = analyze.build(base_df, summary_str, cfg)
-        _push(run_id, "classify",
-              f"Classifying {len(base_df)} comments", 50,
-              detail=f"themes={len(themes)};labelled=0;total={len(base_df)}")
-        # Every classify detail repeats the theme count: _push persists only
-        # the latest detail, and a reopened run page repaints from that one.
+        progress.publish(run_id, "classify", f"Classifying {len(base_df)} comments", 50,
+                         themes=len(themes), labelled=0)
+
         def classify_progress(completed, total, labelled):
             pct = 50 + int(completed / max(total, 1) * 9)
-            _push(run_id, "classify",
-                  f"Classified batch {completed} of {total}", pct,
-                  detail=(f"themes={len(themes)};labelled={labelled};"
-                          f"total={len(base_df)};batch={completed};batches={total}"))
+            progress.publish(run_id, "classify", f"Classified batch {completed} of {total}",
+                             pct, labelled=labelled, batch=completed, batches=total)
 
         base_df, columns = analyze.classify(
             base_df, themes, classifier_points, cfg,
             on_progress=classify_progress)
         base_df, themes, other_share = analyze.extend(
             base_df, themes, classifier_points, summary_str, cfg,
-            on_progress=lambda msg: _push(run_id, "classify", msg, 60))
+            on_progress=lambda msg: progress.publish(run_id, "classify", msg, 60))
         theme_table, transfer_table = analyze.summarise(base_df, columns)
-        _push(run_id, "classify",
-              f"Classification complete - {other_share:.0f}% Other", 65,
-              detail=(f"themes={len(themes)};labelled={len(base_df)};"
-                      f"total={len(base_df)};other_share={other_share:.1f}"))
+        progress.publish(run_id, "classify",
+                         f"Classification complete - {other_share:.0f}% Other", 65,
+                         themes=len(themes), labelled=len(base_df),
+                         other_share=round(other_share, 1))
 
         # --- 10. Emotion and sentiment ---------------------------------------
-        _push(run_id, "emotion", "Running emotion and sentiment analysis", 67)
+        progress.publish(run_id, "emotion", "Running emotion and sentiment analysis", 67)
         base_df, affect_result = analyze.affect(base_df, cfg)
-        _push(run_id, "emotion", "Emotion and sentiment analysis complete", 75,
-              detail=affect_result.get("emotion", {}).get("caveat", ""))
+        progress.publish(run_id, "emotion", "Emotion and sentiment analysis complete", 75)
 
         # --- 11. Report -----------------------------------------------------
-        _push(run_id, "report", "Writing report", 77)
+        progress.publish(run_id, "report", "Writing report", 77)
         markdown = pipeline_report.write(
             grounded, theme_table, transfer_table,
             affect_result, base_df, cfg)
@@ -1202,7 +1081,7 @@ def _execute(run_id: str) -> None:
         pipeline_report.export(
             base_df, theme_table, transfer_table, affect_result,
             meta_df, out_dir)
-        _push(run_id, "report", "Report written", 88)
+        progress.publish(run_id, "report", "Report written", 88)
 
         # --- 12. Build report.json ------------------------------------------
         report_data = _build_report_json(
@@ -1212,7 +1091,7 @@ def _execute(run_id: str) -> None:
         # counting-only and model-free, so the prose is merged in here rather
         # than built inside it. _build_prose never raises: a failed model call
         # falls back to deterministic prose instead of failing the run.
-        _push(run_id, "report", "Writing the read", 90)
+        progress.publish(run_id, "report", "Writing the read", 90)
         report_data.update(_build_prose(
             grounded, transfer_table, base_df, affect_result,
             [{"label": m["label"], "value": m["percent"]}
@@ -1239,15 +1118,15 @@ def _execute(run_id: str) -> None:
             _insert_artifact(run_id, kind, dst)
 
         # --- 14. Mark complete ----------------------------------------------
-        _set_run_state(run_id, "complete", finished_at=_now_iso())
-        _push(run_id, "complete", "Run complete", 100,
-              detail=f"artifacts: {art_dir}")
+        progress.finish(run_id)
 
+    except progress.ReviewExpired:
+        logger.info("run %s stopped: Key Message review idle", run_id)
     except Exception as exc:
-        err_str = f"{type(exc).__name__}: {exc}"
         logger.exception("run %s failed", run_id)
         try:
-            _set_run_state(run_id, "failed", finished_at=_now_iso(), error=err_str)
+            progress.finish(run_id, error=f"{type(exc).__name__}: {exc}")
         except Exception:
-            pass
-        _push(run_id, "error", "Run failed", 0, detail=err_str)
+            logger.exception("run %s: could not record the failure", run_id)
+    finally:
+        start_next()

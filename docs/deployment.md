@@ -476,7 +476,7 @@ An `.env` or code change requires a FastAPI restart. A FastAPI or `cloudflared` 
 ## Accepted operational limits
 
 - Google Workspace sign-in protects one shared workspace. Every signed-in user sees every Session.
-- One analysis runs at a time. A second start request is rejected, not queued.
+- One analysis runs at a time. Other starts wait in a queue, in start order.
 - The Mac disk holds the only copy of `data/`.
 - The service is down when the Mac is off, asleep, or offline.
 - A FastAPI or Mac restart loses an active run. Closing a browser tab does not.

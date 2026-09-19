@@ -10,7 +10,7 @@ data/artifacts write adapter.py makes), then drives the routes through
 FastAPI's TestClient. adapter._execute()'s pipeline edges (collect,
 brief.reconcile, analyze, affect, report, and every model-touching call)
 are mocked - no network, no model, no real PDF render -
-but the run still executes on adapter.start_run()'s real daemon thread,
+but the run still executes on adapter.start_next()'s real daemon thread,
 so the skip_pause branch and DB writes are exercised for real.
 
 Run: python tests/test_skip_pause.py
@@ -39,8 +39,9 @@ storage._ROOT = tempfile.mkdtemp()
 
 from starlette.testclient import TestClient
 
-from auth_helper import login  # sets the sign-in env the startup hook requires
+from auth_helper import login, wait_until  # sets the sign-in env the startup hook requires
 
+import progress
 import server
 import adapter
 
@@ -49,18 +50,8 @@ client = login(TestClient(server.app))
 
 _RUN_SNAPSHOT_KEYS = {
     "id", "sessionId", "createdAt", "status", "stage", "pct", "message",
-    "error", "briefPoints", "artifacts", "skipPause", "totalComments",
-    "progressDetail",
+    "error", "briefPoints", "artifacts", "skipPause", "counts", "queuePosition",
 }
-
-
-def _wait_until(pred, timeout=5.0, interval=0.02):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _new_session_with_video():
@@ -167,7 +158,10 @@ def _wait_for_run_thread(run_id, timeout=5.0):
 
 def _stop(patches, run_id=None):
     if run_id is not None:
-        adapter.get_proceed_event(run_id).set()
+        try:
+            progress.proceed(run_id)  # wake a run still parked at brief_pause
+        except progress.NotPaused:
+            pass
         _wait_for_run_thread(run_id)
     for p in patches:
         p.stop()
@@ -175,11 +169,10 @@ def _stop(patches, run_id=None):
 
 
 def _terminate_stray_runs():
-    """The one-run guard in server.start_run() is global. A test that
-    fails before its run reaches a terminal state leaves that run in
-    `running` forever, and every later test then gets a 409 body with
-    no `id` key. Flipping strays to `failed` in teardown keeps one
-    failure to one test."""
+    """Runs share one global queue. A test that fails before its run
+    reaches a terminal state leaves that run in `running` forever, and
+    every later test's run then waits behind it. Flipping strays to
+    `failed` in teardown keeps one failure to one test."""
     conn = db.get_conn()
     try:
         conn.execute(
@@ -213,7 +206,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r1 = client.post(f"/api/sessions/{session_id}/runs")
         assert r1.status_code == 202, r1.text
         run_id_1 = r1.json()["id"]
@@ -221,7 +214,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r2 = client.post(f"/api/sessions/{session_id}/runs", json={})
         assert r2.status_code == 202, r2.text
         run_id_2 = r2.json()["id"]
@@ -229,7 +222,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r3 = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": False})
         assert r3.status_code == 202, r3.text
         run_id_3 = r3.json()["id"]
@@ -237,7 +230,7 @@ def test_start_run_request_shapes_persist_skip_pause_correctly():
 
     _clear_runs()
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         r4 = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": True})
         assert r4.status_code == 202, r4.text
         run_id_4 = r4.json()["id"]
@@ -261,7 +254,7 @@ def test_non_boolean_skip_pause_rejected_422_no_row_created():
     finally:
         conn.close()
 
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         resp = client.post(f"/api/sessions/{session_id}/runs",
                            json={"skipPause": "yes-please"})
     assert resp.status_code == 422, resp.text
@@ -299,7 +292,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
         run_id = start_resp.json()["id"]
         _assert_snapshot_skip_pause_bool(start_resp.json(), True)
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "run never reached brief_pause"
         get_resp = client.get(f"/api/runs/{run_id}")
@@ -317,7 +310,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
         assert proceed_resp.status_code == 200, proceed_resp.text
         _assert_snapshot_skip_pause_bool(proceed_resp.json(), True)
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -325,7 +318,7 @@ def test_snapshot_skip_pause_is_real_bool_on_start_get_and_proceed():
 
     # skipPause omitted -> False, distinguishable from int 0/1.
     session_id, _ = _new_session_with_video()
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         omitted_resp = client.post(f"/api/sessions/{session_id}/runs")
         assert omitted_resp.status_code == 202, omitted_resp.text
         _assert_snapshot_skip_pause_bool(omitted_resp.json(), False)
@@ -349,7 +342,7 @@ def test_skip_true_with_included_message_skips_brief_pause():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"]
                     in ("classify", "emotion", "report", "complete")
         ), "run with skipPause and an included message never advanced past brief"
@@ -357,16 +350,12 @@ def test_skip_true_with_included_message_skips_brief_pause():
         current = client.get(f"/api/runs/{run_id}").json()["stage"]
         assert current != "brief_pause", current
 
-        assert adapter.get_proceed_event(run_id).is_set() is False, (
-            "skip_pause branch must never set the proceed event - nothing calls it")
-
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
     print("  ok  skipPause:true with >=1 included brief point never enters "
-          "brief_pause, advances past brief with no /proceed call, and never "
-          "sets the proceed event")
+          "brief_pause and advances past brief with no /proceed call")
 
 
 def test_skip_true_with_zero_included_still_pauses():
@@ -382,7 +371,7 @@ def test_skip_true_with_zero_included_still_pauses():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "skipPause:true with zero included messages must still pause"
 
@@ -406,7 +395,7 @@ def test_skip_true_with_zero_included_still_pauses():
         proceed_resp = client.post(f"/api/runs/{run_id}/proceed")
         assert proceed_resp.status_code == 200, proceed_resp.text
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -428,12 +417,12 @@ def test_skip_false_behaves_as_before():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause"
         ), "skipPause omitted must still pause as before"
 
         client.post(f"/api/runs/{run_id}/proceed")
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"))
     finally:
         _stop(patches, run_id)
@@ -445,7 +434,7 @@ def test_restart_reopen_persists_skip_pause_true():
     _clear_runs()
     session_id, _ = _new_session_with_video()
 
-    with patch.object(adapter, "start_run", return_value=None):
+    with patch.object(adapter, "start_next", return_value=None):
         resp = client.post(f"/api/sessions/{session_id}/runs", json={"skipPause": True})
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
@@ -460,6 +449,61 @@ def test_restart_reopen_persists_skip_pause_true():
           "persisted skipPause:true")
 
 
+def _stage(run_id):
+    return client.get(f"/api/runs/{run_id}").json()["stage"]
+
+
+def test_idle_review_stops_the_run_only_when_another_is_queued():
+    _clear_runs()
+    patches = _patched_pipeline(_run_reconcile_of([("Idea", "d")])) + (
+        patch.object(progress, "REVIEW_IDLE_SECONDS", 0.3),
+        patch.object(progress, "_QUEUE_POLL_SECONDS", 0.1))
+    for p in patches:
+        p.start()
+    waiting = None
+    try:
+        idle = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
+        assert wait_until(lambda: _stage(idle) == "brief_pause"), "run never reached brief_pause"
+        time.sleep(1.0)  # well past the idle limit, with nothing queued
+        assert _stage(idle) == "brief_pause", "an idle review stopped with no queue behind it"
+
+        waiting = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
+
+        assert wait_until(lambda: client.get(f"/api/runs/{idle}").json()["status"] == "failed")
+        snap = client.get(f"/api/runs/{idle}").json()
+        assert snap["error"].startswith("Stopped: the Key Message review had no activity"), snap
+        assert client.post(f"/api/runs/{idle}/review_activity").status_code == 409
+        assert wait_until(lambda: _stage(waiting) == "brief_pause"), \
+            "the queued run did not start after the idle review stopped"
+    finally:
+        _stop(patches, waiting)
+    print("  ok  an idle Key Message review waits with no queue, then stops once a run queues")
+
+
+def test_review_activity_keeps_the_run_waiting():
+    _clear_runs()
+    patches = _patched_pipeline(_run_reconcile_of([("Idea", "d")])) + (
+        patch.object(progress, "REVIEW_IDLE_SECONDS", 1.5),)
+    for p in patches:
+        p.start()
+    run_id = None
+    try:
+        run_id = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
+        assert wait_until(lambda: _stage(run_id) == "brief_pause"), "run never reached brief_pause"
+        # A queued run makes an idle review expire; activity must hold it off.
+        queued = client.post(f"/api/sessions/{_new_session_with_video()[0]}/runs").json()["id"]
+        for _ in range(15):  # 3 s of activity, twice the 1.5 s limit
+            assert client.post(f"/api/runs/{run_id}/review_activity").status_code == 204
+            time.sleep(0.2)
+        assert _stage(run_id) == "brief_pause", _stage(run_id)
+        assert client.delete(f"/api/runs/{queued}").status_code == 204
+        assert client.post(f"/api/runs/{run_id}/proceed").status_code == 200
+        assert wait_until(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "complete")
+    finally:
+        _stop(patches, run_id)
+    print("  ok  review activity keeps a paused run waiting past the idle limit")
+
+
 if __name__ == "__main__":
     tests = [
         test_start_run_request_shapes_persist_skip_pause_correctly,
@@ -469,6 +513,8 @@ if __name__ == "__main__":
         test_skip_true_with_zero_included_still_pauses,
         test_skip_false_behaves_as_before,
         test_restart_reopen_persists_skip_pause_true,
+        test_idle_review_stops_the_run_only_when_another_is_queued,
+        test_review_activity_keeps_the_run_waiting,
     ]
     failed = 0
     for t in tests:

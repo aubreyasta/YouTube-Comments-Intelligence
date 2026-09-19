@@ -37,6 +37,7 @@ from starlette.concurrency import run_in_threadpool
 
 import assets
 import db
+import progress
 import storage
 import adapter
 from pipeline import brief as pipeline_brief
@@ -99,18 +100,8 @@ def _startup():
     # A malformed LLM_HEADERS fails here, not minutes into the first run.
     llm_env(os.environ)
     db.init()
-    # Run threads die with the process, so an active row at startup has no
-    # worker behind it and would block every new run forever.
-    conn = db.get_conn()
-    try:
-        conn.execute(
-            "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
-            "WHERE state IN ('queued', 'running')",
-            (_now(), "Interrupted: the server restarted before this run finished.")
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    progress.fail_orphans()
+    adapter.start_next()  # queued runs survive a restart
     for key in ("YOUTUBE_API_KEY",):
         if not os.environ.get(key):
             logger.warning("%s is not set - runs will fail without it", key)
@@ -474,13 +465,7 @@ def _session_status(session_id: str, conn) -> str:
     if row is None:
         return "ready"
     s = row["state"]
-    if s in ("queued", "running"):
-        return "running"
-    if s == "complete":
-        return "complete"
-    if s == "failed":
-        return "failed"
-    return "ready"
+    return s if s in ("queued", "running", "complete", "failed") else "ready"
 
 
 def _session_comment_count(session_id: str, conn) -> int:
@@ -519,15 +504,10 @@ def _ser_session(row, conn) -> dict:
         (sid,)
     ).fetchone()
     if latest_run_row is not None:
-        state = latest_run_row["state"]
-        stage = state if state in ("complete", "failed") else ("connecting" if state == "queued" else "running")
         latest_run = {
             "id": latest_run_row["id"],
-            "status": state,
-            "stage": stage,
-            "pct": 100 if state == "complete" else 0,
-            "message": "",
-            "error": latest_run_row["error"],
+            "status": latest_run_row["state"],
+            **progress.read(latest_run_row, conn),
         }
     else:
         latest_run = None
@@ -628,33 +608,11 @@ def _ser_campaign(row, conn) -> dict:
     }
 
 
-_RUN_STAGES = {"queued", "collect", "brief", "brief_pause", "themes", "classify",
-               "emotion", "report", "complete", "error"}
-
-
 def _ser_run(row, conn) -> dict:
     """RunSnapshot shape (docs/api-reference.md "Run snapshot"): briefPoints and
     artifacts are always present, including empty arrays, so a fresh
     queued run and a completed run have the same shape."""
     rid = row["id"]
-    state = row["state"]
-    # stage: terminal DB states always win over whatever was last
-    # persisted, since a run can crash leaving a stale non-terminal stage
-    # on the row. Otherwise use the persisted fine-grained stage
-    # adapter.py writes on every progress push (see adapter._set_run_stage)
-    # so a tab reopened with no SSE connection to replay from can still
-    # tell brief_pause apart from plain "running". "failed" is a run
-    # status, not a RunStage - it maps to the "error" stage. row["stage"]
-    # is never empty (schema default 'queued'); the `or` below is a
-    # defensive fallback, not a case that happens in practice.
-    if state == "complete":
-        stage = "complete"
-    elif state == "failed":
-        stage = "error"
-    else:
-        stage = row["stage"] or "queued"
-    assert stage in _RUN_STAGES, f"unexpected run stage {stage!r}"
-
     bp_rows = conn.execute(
         "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (rid,)
     ).fetchall()
@@ -674,17 +632,14 @@ def _ser_run(row, conn) -> dict:
     return {
         "id": rid,
         "sessionId": row["session_id"],
-        # The run's start time, under the name the demo store already uses, so
-        # the results page dates the strategy note from one field in both modes.
+        # Queue time while queued, then start time (progress.claim_next), under
+        # the name the demo store already uses, so the results page dates the
+        # strategy note from one field in both modes.
         "createdAt": row["started_at"],
-        "status": state,
-        "stage": stage,
-        "pct": 100 if state == "complete" else 0,
-        "message": "",
-        "error": row["error"],
+        "status": row["state"],
+        # stage, pct, message, counts, error, queuePosition: the same snapshot SSE sends.
+        **progress.read(row, conn),
         "skipPause": bool(row["skip_pause"]),
-        "totalComments": row["total_comments"],
-        "progressDetail": row["progress_detail"],
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
         "artifacts": [_ser_artifact(a) for a in public_arts],
     }
@@ -980,8 +935,7 @@ def rename_session(session_id: str, body: SessionBody):
 # point) and waits for it, then returns that rerun's result. Any number
 # of concurrent latecomers share the same wait and the same rerun.
 #
-# Three dicts, one lock, keyed by session_id - same shape as adapter.py's
-# _queues/_proceed_events/_lock for per-run state. No thread is ever
+# Three dicts, one lock, keyed by session_id. No thread is ever
 # spawned here: the thread that first acquires a session's lock (an
 # existing FastAPI threadpool thread, not a new one) runs the draft pass,
 # and loops to run one more pass in place if a rerun was requested while
@@ -1610,62 +1564,53 @@ def start_run(session_id: str, body: StartRunBody | None = None):
         if conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
             _404("Session not found.")
 
-        # One GPU serves every run, so the guard is global, not per-Session
-        # (docs/architecture.md "Run admission and lifecycle"). BEGIN IMMEDIATE takes SQLite's write
-        # lock before the check, so the check and the INSERT are one
-        # transaction and two simultaneous requests cannot both pass it.
-        # Manual transaction control: get_conn() leaves pysqlite's implicit
-        # BEGIN in charge, which would open the transaction too late.
+        # Every start joins one queue across Sessions; adapter.start_next()
+        # runs them one at a time (docs/architecture.md "Run admission and
+        # lifecycle"). BEGIN IMMEDIATE makes the check below and the INSERT
+        # one transaction, so a claim cannot move this Session's queued run
+        # to running in between. Manual transaction control: get_conn()
+        # leaves pysqlite's implicit BEGIN in charge, which would open the
+        # transaction too late.
         conn.isolation_level = None
         conn.execute("BEGIN IMMEDIATE")
 
-        # Reject a second concurrent run BEFORE deleting anything: overwrite
-        # (below) is only safe once we know no run is currently in flight,
-        # otherwise this would nuke a running adapter thread's brief_points
-        # and artifacts out from under it.
-        active = conn.execute(
-            "SELECT id, session_id FROM runs WHERE state IN ('queued', 'running')"
+        # A running run is never overwritten. A queued one has nothing on
+        # disk yet, so the new request simply replaces it and keeps its place
+        # in line. The Session's finished runs stay until the new run starts
+        # (adapter._clear_prior_runs).
+        if conn.execute(
+            "SELECT 1 FROM runs WHERE session_id = ? AND state = 'running'", (session_id,)
+        ).fetchone():
+            _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
+        prior = conn.execute(
+            "SELECT started_at FROM runs WHERE session_id = ? AND state = 'queued'", (session_id,)
         ).fetchone()
-        if active:
-            if active["session_id"] == session_id:
-                _409("This session already has a run in progress.", "RUN_IN_PROGRESS")
-            _409("Another analysis is already running. Wait for it to finish.",
-                 "RUN_IN_PROGRESS")
-
-        # Overwrite: clear prior runs for this session before inserting the new one.
-        # ponytail: hard overwrite, no run history; if history is wanted later, keep rows
-        # and add a `latest` flag instead of deleting.
-        # The client is expected to confirm the overwrite before calling (frontend concern, Phase 2).
-        old_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM runs WHERE session_id=?", (session_id,)
-        ).fetchall()]
-        for old_id in old_ids:
-            storage.clear_run(old_id)
-        conn.execute("DELETE FROM runs WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM runs WHERE session_id = ? AND state = 'queued'", (session_id,))
 
         rid = str(uuid.uuid4())
         now = _now()
+        # started_at holds the queue time until claim_next() sets the start
+        # time; the queue is ordered by it.
         conn.execute(
             "INSERT INTO runs (id, session_id, state, started_at, skip_pause) "
             "VALUES (?,?,?,?,?)",
-            (rid, session_id, "queued", now, skip_pause)
+            (rid, session_id, "queued", prior["started_at"] if prior else now, skip_pause)
         )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
         )
         conn.commit()
+        # After the commit, so the claim can see the new row, and before the
+        # snapshot, so a run that starts at once reads as running.
+        adapter.start_next()
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (rid,)).fetchone()
-        result = _ser_run(row, conn)
+        return _ser_run(row, conn)
     finally:
         conn.close()
 
-    # Start the adapter thread AFTER the DB transaction commits.
-    adapter.start_run(rid)
-    return result
-
 
 # ---------------------------------------------------------------------------
-# /api/runs/{id}  GET
+# /api/runs/{id}  GET, DELETE
 # ---------------------------------------------------------------------------
 
 @app.get("/api/runs/{run_id}")
@@ -1676,6 +1621,23 @@ def get_run(run_id: str):
         if row is None:
             _404("Run not found.")
         return _ser_run(row, conn)
+    finally:
+        conn.close()
+
+
+@app.delete("/api/runs/{run_id}", status_code=204)
+def leave_queue(run_id: str):
+    """Take a queued run out of the queue. A running run has no stop path,
+    so it is refused. The conditional DELETE is the check, so a run claimed
+    a moment earlier is never deleted from under its thread."""
+    conn = db.get_conn()
+    try:
+        deleted = conn.execute(
+            "DELETE FROM runs WHERE id = ? AND state = 'queued'", (run_id,)).rowcount
+        conn.commit()
+        if not deleted and conn.execute(
+                "SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone():
+            _409("This run has already started, so it can no longer leave the queue.")
     finally:
         conn.close()
 
@@ -1692,19 +1654,14 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
         if run is None:
             _404("Run not found.")
 
-        # 409 if past brief phase: the run must currently be paused at
-        # brief_pause. Checked against the persisted stage column
-        # (adapter._set_run_stage), not "brief_points exist" - a Session
-        # with no Key Messages and no transcript-derived ones reconciles
-        # to an empty list, and that empty list is still a legitimate
-        # brief_pause the user must be able to edit (see the insert path
-        # below), not an "already moved on" state.
-        if run["state"] not in ("running", "queued") or run["stage"] != "brief_pause":
+        # 409 unless paused at brief_pause, not "brief_points exist" - a
+        # Session with no Key Messages and no transcript-derived ones
+        # reconciles to an empty list, and that empty list is still a
+        # legitimate brief_pause the user must be able to edit (see the
+        # insert path below). proceed() moves the stage on, so an approved
+        # run fails this check too.
+        if not progress.is_paused(run):
             _409("Brief review is only open while the run is paused at the brief stage.")
-
-        proceed_event = adapter.get_proceed_event(run_id)
-        if proceed_event.is_set():
-            _409("Brief has already been approved and the run has continued.")
 
         messages = body.messages
 
@@ -1776,6 +1733,18 @@ def update_brief_points(run_id: str, body: BriefPointsBody):
 
 
 # ---------------------------------------------------------------------------
+# /api/runs/{id}/review_activity  POST
+# ---------------------------------------------------------------------------
+
+@app.post("/api/runs/{run_id}/review_activity", status_code=204)
+def review_activity(run_id: str):
+    """The review page reports activity here, since edits stay in the page
+    until confirm. Keeps progress.REVIEW_IDLE_SECONDS from stopping the run."""
+    if not progress.touch_review(run_id):
+        _409("This run is not waiting for review.")
+
+
+# ---------------------------------------------------------------------------
 # /api/runs/{id}/proceed  POST
 # ---------------------------------------------------------------------------
 
@@ -1787,26 +1756,22 @@ def proceed_run(run_id: str):
         if run is None:
             _404("Run not found.")
 
-        # Checked against the persisted stage, not "brief_points exist" -
-        # brief_points now exist from the pre-collect snapshot onward
-        # (see adapter._replace_brief_points), so their mere presence no
-        # longer means the run has reached the review pause.
-        if run["state"] not in ("running", "queued") or run["stage"] != "brief_pause":
+        # Checked against the stage, not "brief_points exist" - brief_points
+        # exist from the pre-collect snapshot onward (see
+        # adapter._replace_brief_points).
+        if not progress.is_paused(run):
             _409("This run is not waiting for review.")
 
         bp = conn.execute(
-            "SELECT * FROM brief_points WHERE run_id = ? ORDER BY sort_order", (run_id,)
+            "SELECT included FROM brief_points WHERE run_id = ?", (run_id,)
         ).fetchall()
-
-        proceed_event = adapter.get_proceed_event(run_id)
-        if proceed_event.is_set():
-            _409("This run is not waiting for review.")
-
-        # Verify at least one included point.
         if not any(r["included"] for r in bp):
             _422("Include at least one Key Message before continuing.", "messages")
 
-        proceed_event.set()
+        try:
+            progress.proceed(run_id)
+        except progress.NotPaused:
+            _409("This run is not waiting for review.")
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return _ser_run(row, conn)
     finally:
@@ -1817,9 +1782,12 @@ def proceed_run(run_id: str):
 # /api/runs/{id}/events  GET (SSE)
 # ---------------------------------------------------------------------------
 
-# Module level (not a _generate() local) so a test can patch it to a small
-# value instead of waiting 15 real seconds for a heartbeat.
+# Module level (not _generate() locals) so a test can patch them to small
+# values instead of waiting 15 real seconds for a heartbeat.
 _SSE_HEARTBEAT_SECONDS = 15.0
+# ponytail: polls one SQLite row per open stream; a push channel only if
+# many concurrent viewers ever make this show up in a profile.
+_SSE_POLL_SECONDS = 1.0
 
 
 @app.get("/api/runs/{run_id}/events")
@@ -1832,68 +1800,26 @@ async def run_events(run_id: str):
         conn.close()
 
     async def _generate():
-        # If already terminal when the client connects, replay terminal state once.
-        if adapter.is_terminal(run_id):
-            q = adapter.get_queue(run_id)
-            # Drain any buffered events first.
-            while True:
-                try:
-                    item = q.get_nowait()
-                    yield f"data: {json.dumps(item)}\n\n"
-                    if item.get("stage") in ("complete", "error"):
-                        return
-                except Exception:
-                    break
-            # Queue empty but terminal - send a synthetic terminal event.
-            conn2 = db.get_conn()
-            try:
-                run_row = conn2.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-                if run_row:
-                    stage = "complete" if run_row["state"] == "complete" else "error"
-                    yield f"data: {json.dumps({'run_id': run_id, 'stage': stage, 'message': run_row['error'] or stage, 'pct': 100 if stage == 'complete' else 0, 'detail': None})}\n\n"
-            finally:
-                conn2.close()
-            return
-
-        q = adapter.get_queue(run_id)
-        loop = asyncio.get_event_loop()
-        last_event = loop.time()
-
+        # Every client reads the same persisted snapshot, so a late joiner,
+        # a second tab, and a reconnect all see the current state, never a
+        # replay of old events.
+        loop = asyncio.get_running_loop()
+        last_sent = None
+        last_write = loop.time()
         while True:
-            elapsed = loop.time() - last_event
-            wait = max(0.0, _SSE_HEARTBEAT_SECONDS - elapsed)
-
-            # Non-blocking poll with a short sleep to avoid CPU spin.
-            item = None
-            try:
-                item = await loop.run_in_executor(
-                    None, lambda: q.get(timeout=min(wait, 1.0))
-                )
-            except Exception:
-                pass  # queue.Empty or timeout
-
-            if item is not None:
-                yield f"data: {json.dumps(item)}\n\n"
-                last_event = loop.time()
-                if item.get("stage") in ("complete", "error"):
+            snap = await run_in_threadpool(progress.load, run_id)
+            if snap is None:
+                return  # run deleted by a later overwrite
+            if snap != last_sent:
+                yield f"data: {json.dumps(snap)}\n\n"
+                last_sent = snap
+                last_write = loop.time()
+                if snap["stage"] in progress.TERMINAL:
                     return
-            else:
-                now = loop.time()
-                if now - last_event >= _SSE_HEARTBEAT_SECONDS:
-                    yield ": heartbeat\n\n"
-                    last_event = now
-                # If adapter thread is gone and terminal, close.
-                if adapter.is_terminal(run_id):
-                    # Drain remaining items.
-                    while True:
-                        try:
-                            leftover = q.get_nowait()
-                            yield f"data: {json.dumps(leftover)}\n\n"
-                            if leftover.get("stage") in ("complete", "error"):
-                                return
-                        except Exception:
-                            break
-                    return
+            elif loop.time() - last_write >= _SSE_HEARTBEAT_SECONDS:
+                yield ": heartbeat\n\n"
+                last_write = loop.time()
+            await asyncio.sleep(_SSE_POLL_SECONDS)
 
     return StreamingResponse(
         _generate(),

@@ -8,9 +8,12 @@ values exported still runs the tests against these.
 login() skips the Google round trip: it inserts a user and a login session
 straight into the database (db.init() must have run) and returns the cookie
 token. tests/test_auth.py covers the real callback.
+
+wait_until() polls for state a background run thread writes.
 """
 
 import os
+import time
 
 os.environ.update(
     GOOGLE_CLIENT_ID="test-client-id",
@@ -54,3 +57,13 @@ def login(client, email="office@example.com"):
     """Sign a TestClient in as `email` and return it."""
     client.cookies.set(SESSION_COOKIE, create_login(email))
     return client
+
+
+def wait_until(pred, timeout=5.0):
+    """True once pred() is truthy, False after `timeout` seconds."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False

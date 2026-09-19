@@ -36,10 +36,11 @@ import storage
 _ORIG_STORAGE_ROOT = storage._ROOT
 storage._ROOT = tempfile.mkdtemp()
 
-from auth_helper import login  # sets the sign-in env the startup hook requires
+from auth_helper import login, wait_until  # sets the sign-in env the startup hook requires
 
 from starlette.testclient import TestClient
 
+import progress
 import server
 import adapter
 
@@ -47,15 +48,6 @@ db.init()
 client = login(TestClient(server.app))
 
 BUILD_SECONDS = 0.3
-
-
-def _wait_until(pred, timeout=5.0, interval=0.02):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _new_session_with_video():
@@ -147,7 +139,10 @@ def _wait_for_run_thread(run_id, timeout=5.0):
 
 
 def _stop(patches, run_id):
-    adapter.get_proceed_event(run_id).set()
+    try:
+        progress.proceed(run_id)  # wake a run still parked at brief_pause
+    except progress.NotPaused:
+        pass
     _wait_for_run_thread(run_id)
     for p in patches:
         p.stop()
@@ -165,7 +160,7 @@ def test_classify_stage_never_reported_before_theme_discovery_returns():
         assert resp.status_code == 202, resp.text
         run_id = resp.json()["id"]
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["stage"] == "brief_pause")
 
         t0 = time.monotonic()
@@ -185,7 +180,7 @@ def test_classify_stage_never_reported_before_theme_discovery_returns():
             time.sleep(0.01)
         assert seen_themes, "stage never reported 'themes' while analyze.build() was running"
 
-        assert _wait_until(
+        assert wait_until(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("complete", "failed"),
             timeout=10.0), "run never reached a terminal status after analyze.build() returned"
         final = client.get(f"/api/runs/{run_id}").json()

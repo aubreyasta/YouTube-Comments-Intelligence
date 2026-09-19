@@ -134,7 +134,7 @@ All signed-in users share one workspace. `sessions.created_by` records who creat
 | `videos` | YouTube URLs and kinds. |
 | `assets` | User Input metadata, extracted text, article snapshot, and upload path. |
 | `key_messages` | Editable Session-level Key Message draft. |
-| `runs` | Run state, persisted stage, skip-pause choice, timestamps, and error. |
+| `runs` | Run state, stage, progress JSON, skip-pause choice, timestamps, and error. |
 | `brief_points` | Immutable run copy of the reconciled Key Messages. |
 | `run_artifacts` | Stored output file records. |
 
@@ -148,26 +148,34 @@ Draft generation reads the persisted User Inputs. A failed ordinary public artic
 
 ### Run admission and lifecycle
 
-`POST /api/sessions/{id}/runs` uses `BEGIN IMMEDIATE` to enforce one queued or running analysis across all Sessions. The server checks the global guard before deleting the target Session's prior result. A rejected start therefore preserves existing data.
+One GPU serves one model, so at most one run is `running` across all Sessions. Every other run waits as `queued`.
+
+`POST /api/sessions/{id}/runs` checks the Session and inserts a `queued` run in one `BEGIN IMMEDIATE` transaction, then calls `adapter.start_next()`. The admission rules are in the [API reference](api-reference.md#post-sessionsidruns).
+
+`start_next()` calls `progress.claim_next()`. Inside `BEGIN IMMEDIATE`, `claim_next()` moves the oldest `queued` run to `running` only when no run is `running`. Two concurrent callers therefore cannot start two runs. The server calls `start_next()` after each start, at the end of each run, and at startup. A failed claim is retried every 5 seconds instead of raised, and a run whose thread cannot start is failed, so neither leaves the queue stuck until a restart. `DELETE /api/runs/{id}` uses a conditional DELETE, so a run claimed a moment earlier is never removed.
+
+A run at `brief_pause` is `running` and holds the slot until the review completes or goes idle. Review edits stay in the page until confirm, so the page reports activity through `POST /api/runs/{id}/review_activity`. `await_review` fails the run after `progress.REVIEW_IDLE_SECONDS` without activity, but only while another run is `queued`. Once idle, it rechecks the queue every few seconds. It leaves `brief_pause` with the same kind of conditional UPDATE as `proceed`, so an expiry and a confirm cannot both win.
 
 The adapter thread then:
 
-1. Loads the Session, campaign, videos, User Inputs, and Key Message draft.
-2. Fetches and cleans YouTube data.
-3. Reconciles transcript-derived Key Messages and copies them into run `brief_points`.
-4. Enters `brief_pause`, unless `skipPause` is true and at least one Key Message remains included.
-5. Re-reads the saved run Key Messages, discovers Themes, classifies comments, and aggregates labels.
-6. Writes the report files and internal Report JSON.
-7. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
-8. Marks the run complete. An exception marks it failed.
+1. Deletes the Session's prior runs and files. This happens at start, not at queue time, so leaving the queue keeps the prior result.
+2. Loads the Session, campaign, videos, User Inputs, and Key Message draft.
+3. Fetches and cleans YouTube data.
+4. Reconciles transcript-derived Key Messages and copies them into run `brief_points`.
+5. Enters `brief_pause`, unless `skipPause` is true and at least one Key Message remains included.
+6. Re-reads the saved run Key Messages, discovers Themes, classifies comments, and aggregates labels.
+7. Writes the report files and internal Report JSON.
+8. Copies all seven outputs to `data/artifacts/{run_id}/` and records them.
+9. Marks the run complete. An exception marks it failed.
+10. Calls `start_next()` to start the next queued run.
 
-Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses an active run. No thread survives a restart, so the startup hook marks every `queued` or `running` row failed with an interrupted error. The global guard then admits the next run.
+Closing a browser tab does not stop the thread. The persisted stage restores `brief_pause` after reopening. Restarting FastAPI or the host loses the running run. No thread survives a restart, so the startup hook (`progress.fail_orphans`) marks every `running` row failed with an interrupted error. `queued` rows survive, and the hook then calls `start_next()`.
 
 ### Progress
 
-SSE events carry `adapter._push()` dictionaries in `snake_case`. All other HTTP JSON uses `camelCase`. The stream emits comment heartbeats while idle and closes after a terminal event.
+`progress.py` owns the Run progress snapshot. The adapter thread writes it through `publish`, `await_review`, and `finish`. `publish` merges counts into `runs.progress`, so a later stage never erases an earlier count. `await_review` blocks the thread at `brief_pause` until `proceed` wakes it or the review goes idle. `proceed` changes the stage with a conditional UPDATE, so two concurrent calls cannot both continue the run.
 
-The persisted run stage is authoritative when a fresh GET conflicts with an old buffered event. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
+`GET /runs/{id}` and SSE both read the snapshot through `progress.read`. A terminal state wins over a stale stage. The SSE route polls the row about once a second and sends the snapshot when it changes, so every tab on a run sees the same state. The stream emits comment heartbeats while idle and closes after a terminal snapshot. See [API reference](api-reference.md#get-runsidevents) for the exact event contract.
 
 ### Artifacts
 

@@ -40,8 +40,8 @@ from starlette.testclient import TestClient
 
 from auth_helper import SESSION_COOKIE, create_login, login  # sets the sign-in env
 
+import progress
 import server
-import adapter
 
 db.init()
 
@@ -331,12 +331,7 @@ def test_authenticated_sse_streams():
         session_id = client.post("/api/sessions", json={"name": "SSE"}).json()["id"]
         run_id = _seed_run(session_id, "queued")
 
-        def _force_terminal():
-            adapter._terminal[run_id] = True
-            adapter.get_queue(run_id).put({"run_id": run_id, "stage": "complete", "pct": 100,
-                                           "message": "test teardown", "detail": None})
-
-        timer = threading.Timer(0.8, _force_terminal)
+        timer = threading.Timer(0.8, progress.finish, args=(run_id,))
         timer.start()
         try:
             with client.stream("GET", f"/api/runs/{run_id}/events") as resp:
@@ -345,8 +340,6 @@ def test_authenticated_sse_streams():
                     pass
         finally:
             timer.cancel()
-            adapter._terminal.pop(run_id, None)
-            adapter._queues.pop(run_id, None)
     assert status == 200, status
     assert content_type.startswith("text/event-stream"), content_type
     print("  ok  a signed-in SSE request streams a 200 text/event-stream response")

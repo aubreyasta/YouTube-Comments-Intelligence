@@ -74,24 +74,16 @@ CREATE TABLE IF NOT EXISTS runs (
     id          TEXT PRIMARY KEY,
     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     state       TEXT NOT NULL DEFAULT 'queued',
-    -- Fine-grained progress stage, same vocabulary as the SSE stream
-    -- (collect|brief|brief_pause|classify|emotion|report|complete|error).
-    -- adapter.py persists this on every _push() so GET /runs/{id} can
-    -- report brief_pause after a tab reopen with no SSE connection to
-    -- replay from.
+    -- Progress stage, one of progress.STAGES. A column, not part of
+    -- `progress`, because admission and the brief_pause checks query it.
     stage       TEXT NOT NULL DEFAULT 'queued',
     -- 1 when the user asked to skip the Key Message review pause. The
     -- pause still happens when reconciliation leaves zero included
     -- messages, so this is a request, not a guarantee.
     skip_pause  INTEGER NOT NULL DEFAULT 0,
-    -- Analysis-base comment count, set once collect finishes (adapter.py
-    -- _set_run_total). NULL before then. Persisted so GET /runs/{id} can
-    -- paint it after a reopen with no SSE connection to replay from.
-    total_comments INTEGER,
-    -- Latest classify progress detail ("themes=N;labelled=N;total=N;..."),
-    -- the same string the SSE event carried. Persisted so a reopened run
-    -- page repaints its labelling progress and theme count (issue #20).
-    progress_detail TEXT,
+    -- The rest of the Run progress snapshot as JSON {pct, message, counts}.
+    -- Written and read only by progress.py.
+    progress    TEXT,
     started_at  TEXT,
     finished_at TEXT,
     error       TEXT
@@ -156,10 +148,18 @@ def init() -> None:
         if "skip_pause" not in cols:
             conn.execute(
                 "ALTER TABLE runs ADD COLUMN skip_pause INTEGER NOT NULL DEFAULT 0")
-        if "total_comments" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN total_comments INTEGER")
-        if "progress_detail" not in cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN progress_detail TEXT")
+        if "progress" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN progress TEXT")
+        # total_comments and progress_detail became `progress`. Only the
+        # total is worth carrying over; the old detail was a mid-classify
+        # string, and every run that wrote one is now terminal.
+        if "total_comments" in cols:
+            conn.execute(
+                "UPDATE runs SET progress = json_object('counts', json_object('total', total_comments)) "
+                "WHERE total_comments IS NOT NULL AND progress IS NULL")
+            conn.execute("ALTER TABLE runs DROP COLUMN total_comments")
+        if "progress_detail" in cols:
+            conn.execute("ALTER TABLE runs DROP COLUMN progress_detail")
         session_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if "created_by" not in session_cols:
             conn.execute(
