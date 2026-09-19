@@ -970,6 +970,16 @@ def evidence_drawer_shows_metric_count(page, base):
     _expect(is_active, "focus did not return to the metric button after Collapse")
 
 
+def files_page_shows_added_date(page, base):
+    """Issue #39: every Files row, including the run's files, shows a real
+    added date instead of "NaN days ago"."""
+    _require_run_id()
+    page.goto(base + "/#/files")
+    page.wait_for_selector("[data-dl-file], [data-open]")
+    text = page.inner_text("#view")
+    _expect("NaN" not in text, f"Files page printed NaN: {text!r}")
+
+
 def stale_render_does_not_overwrite(page, base):
     """Issue #42: a slow Files render that finishes after the user has moved
     on to a Run's results must not replace the results view."""
@@ -1363,6 +1373,7 @@ def main():
             ("six_downloads_in_order", six_downloads_in_order),
             ("report_json_never_exposed", report_json_never_exposed),
             ("evidence_drawer_shows_metric_count", evidence_drawer_shows_metric_count),
+            ("files_page_shows_added_date", files_page_shows_added_date),
             ("stale_render_does_not_overwrite", stale_render_does_not_overwrite),
             ("aria_and_keyboard", aria_and_keyboard),
             ("skip_pause_control_is_accessible", skip_pause_control_is_accessible),

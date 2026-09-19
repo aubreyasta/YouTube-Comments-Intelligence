@@ -161,10 +161,11 @@ type Artifact = {
   contentType: string;
   downloadUrl: string;
   size: number | null;
+  addedAt: string | null;
 };
 ```
 
-`size` is the stored file's size in bytes, or `null` when the file is missing on disk.
+`size` is the stored file's size in bytes, or `null` when the file is missing on disk. `addedAt` is the Run's finish time (ISO 8601), or `null` until the Run finishes.
 
 ---
 

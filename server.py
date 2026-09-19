@@ -622,7 +622,7 @@ def _ser_run(row, conn) -> dict:
         **progress.read(row, conn),
         "skipPause": bool(row["skip_pause"]),
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
-        "artifacts": [_ser_artifact(a) for a in public_arts],
+        "artifacts": [_ser_artifact(a, row["finished_at"]) for a in public_arts],
     }
 
 
@@ -678,7 +678,8 @@ _ARTIFACT_CONTRACT = {
 }
 
 
-def _ser_artifact(row) -> dict:
+def _ser_artifact(row, added_at) -> dict:
+    """added_at is the Run's finished_at: a Run writes its files as it completes."""
     _order, filename, content_type, _public = _ARTIFACT_CONTRACT[row["kind"]]
     return {
         "id": row["id"],
@@ -687,6 +688,7 @@ def _ser_artifact(row) -> dict:
         "contentType": content_type,
         "downloadUrl": f"/api/runs/{row['run_id']}/artifacts/{row['id']}",
         "size": _file_size(row["file_path"]),
+        "addedAt": added_at,
     }
 
 
