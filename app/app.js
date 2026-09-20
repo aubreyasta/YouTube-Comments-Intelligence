@@ -838,10 +838,16 @@ const demoApi = {
     return { messages: kept.map((p) => ({ ...p })) };
   },
 
-  /** Demo runs never queue: startRun refuses while another run is active.
+  /** Stop a run. Demo runs never queue (startRun refuses while another run
+   * is active), so this is always the running case. Live stops the same
+   * way: the run ends as failed, carrying the reason.
    * @param {string} runId @returns {Promise<void>} */
   async leaveQueue(runId) {
-    throw demoError("conflict", "This run has already started, so it can no longer leave the queue.");
+    const run = store.runs.get(runId);
+    if (!run) throw demoError("not_found", "Run not found.");
+    const eng = runEngines.get(runId);
+    if (!eng || run.status === "complete" || run.status === "failed") return;
+    failRun(eng, "Stopped at your request.");
   },
 
   /** Demo reviews never time out, so there is nothing to record.
@@ -2454,9 +2460,7 @@ async function renderRun(runId) {
     if (state.queuePosition != null) {
       return '<button class="btn secondary" type="button" id="btn-leave-queue">Leave the queue</button>';
     }
-    const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
-    const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
-    return btn + note;
+    return '<button class="btn secondary" type="button" id="btn-stop-run">Stop this run</button>';
   }
   function paintTopbar() {
     sessionTopbar({
@@ -2466,6 +2470,8 @@ async function renderRun(runId) {
     });
     const leave = document.getElementById("btn-leave-queue");
     if (leave) leave.onclick = onLeaveQueue;
+    const stop = document.getElementById("btn-stop-run");
+    if (stop) stop.onclick = onStopRun;
   }
   async function onLeaveQueue(e) {
     const btn = e.currentTarget;
@@ -2474,8 +2480,22 @@ async function renderRun(runId) {
       await demoApi.leaveQueue(runId);
       location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
     } catch (err) {
-      // A 409 means the run started a moment ago; the next snapshot repaints it.
+      // The run started a moment ago; the next snapshot repaints it as running.
       btn.disabled = false;
+      bannerEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
+    }
+  }
+  // Unlike leaving the queue, this stays on the page: the run is already
+  // going, and its last snapshot is what confirms it actually stopped.
+  async function onStopRun(e) {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Stopping…";
+    try {
+      await demoApi.leaveQueue(runId);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Stop this run";
       bannerEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
     }
   }

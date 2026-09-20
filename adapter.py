@@ -79,10 +79,10 @@ def start_next() -> None:
 
 def _clear_prior_runs(session_id: str, run_id: str) -> None:
     """Delete the Session's earlier runs and their files. Done when the new
-    run starts, not when it is queued, so leaving the queue keeps the old
-    result. None of them can be running: this run holds the only slot.
-    Hard overwrite, no run history; keep rows and add a `latest`
-    flag if history is ever wanted."""
+    run starts, not when it is queued, so leaving the queue or stopping the
+    run before this point keeps the old result. None of them can be running:
+    this run holds the only slot. Hard overwrite, no run history; keep rows
+    and add a `latest` flag if history is ever wanted."""
     conn = db.get_conn()
     try:
         for (old_id,) in conn.execute(
@@ -910,6 +910,10 @@ def _execute(run_id: str) -> None:
 
         # --- 1. Replace the Session's prior result --------------------------
         run_row     = _load_run(run_id)
+        # Before the overwrite, so it is also the first cancel checkpoint: a
+        # run stopped between the claim and here must leave the Session's
+        # previous result alone, which is what leaving the queue promises.
+        progress.publish(run_id, "collect", "Assembling asset context", 2)
         _clear_prior_runs(run_row["session_id"], run_id)
         session_row = _load_session(run_row["session_id"])
         campaign    = _load_campaign(run_row["session_id"])
@@ -923,7 +927,6 @@ def _execute(run_id: str) -> None:
         # Text extraction and article fetching happen at asset-creation time
         # (server.py's upload/article routes), not here. This stage only
         # assembles what was already extracted into the run's context.
-        progress.publish(run_id, "collect", "Assembling asset context", 2)
         campaign_context_parts = []
         images_by_group: dict[str, list[tuple[bytes, str]]] = {}
 
@@ -1108,6 +1111,23 @@ def _execute(run_id: str) -> None:
         # --- 14. Mark complete ----------------------------------------------
         progress.finish(run_id)
 
+    except progress.Cancelled:
+        # The row is already terminal (cancelled, or replaced by a later
+        # run), so there is nothing to record. Not a failure, so no
+        # logger.exception: a deliberate stop should not look like a crash.
+        #
+        # Ceiling: the thread only notices at its next publish, and the gaps
+        # between them are whole pipeline calls. Classify checkpoints per
+        # batch, but collect, brief and report each hold one model call, and
+        # llm._call retries 3 times at LLM_TIMEOUT_SECONDS, so an
+        # unreachable LM Studio can stretch a single gap to roughly half an
+        # hour. Two consequences, both accepted for now: the user sees the
+        # run as stopped long before the thread exits, and the freed slot
+        # lets the next run start while this one is still computing, so one
+        # GPU can briefly carry two. To tighten it, pass a cancel poll into
+        # brief.reconcile and report.write the way classify already takes
+        # on_progress.
+        logger.info("run %s stopped before finishing", run_id)
     except progress.ReviewExpired:
         logger.info("run %s stopped: Key Message review idle", run_id)
     except Exception as exc:

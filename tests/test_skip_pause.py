@@ -20,12 +20,8 @@ import os
 import pathlib
 import sys
 import tempfile
-import threading
 import time
-import uuid
 from unittest.mock import patch
-
-import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -45,6 +41,14 @@ import progress
 import server
 import adapter
 
+# The pipeline stand-ins, shared with tests/test_cancel_run.py. Imported
+# after the seams above are set, like every other module here.
+from pipeline_fakes import (  # noqa: E402
+    patched_pipeline as _patched_pipeline,
+    run_reconcile_of as _run_reconcile_of,
+    wait_for_run_thread as _wait_for_run_thread,
+)
+
 db.init()  # server's startup hook only fires inside TestClient's `with` block
 client = login(TestClient(server.app))
 
@@ -60,100 +64,6 @@ def _new_session_with_video():
     client.post(f"/api/campaigns/{cid}/videos",
                 json={"url": "https://youtu.be/abcdefghijk"})
     return sid, cid
-
-
-def _fake_comments_df():
-    return pd.DataFrame([
-        {"video_id": "abcdefghijk", "group": "C", "comment": "Great value",
-         "likes": 3, "reply_count": 0, "in_base": True, "theme": "Other",
-         "emotion": "neutral", "sentiment": "positive"},
-    ])
-
-
-def _fake_meta_df():
-    return pd.DataFrame([
-        {"video_id": "abcdefghijk", "group": "C", "kind": "auto",
-         "title": "t", "channel": "ch", "description": "d",
-         "transcript": "We cut the price.", "has_transcript": True},
-    ])
-
-
-def _fake_affect_result():
-    empty_table = pd.DataFrame()
-    return {
-        "emotion": {"table": empty_table, "caveat": ""},
-        "sentiment": {"table": empty_table, "caveat": ""},
-    }
-
-
-def _fake_render(markdown, out_dir, cfg, debug_dir, _df=None, _transfer=None):
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "report.pdf"), "wb") as f:
-        f.write(b"%PDF-1.4 fake report\n")
-
-
-def _fake_export(base_df, theme_table, transfer_table, affect_result, meta_df, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
-    for name in ("comments.csv", "key-messages.csv", "themes.csv",
-                 "sentiment.csv", "emotions.csv"):
-        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
-            f.write("placeholder\n")
-
-
-def _patched_pipeline(reconcile_side_effect):
-    """Context managers covering every pipeline edge _execute() touches,
-    including every stage after brief/brief_pause, so the run reaches
-    complete deterministically with no network or model call."""
-    fake_df = _fake_comments_df()
-    return (
-        patch.object(adapter.pipeline_llm, "preflight", return_value=None),
-        patch.object(adapter.collect, "fetch",
-                    return_value=(fake_df, _fake_meta_df())),
-        patch.object(adapter.collect, "clean", side_effect=lambda df, cfg: df),
-        patch.object(adapter.brief, "reconcile", side_effect=reconcile_side_effect),
-        patch.object(adapter.analyze, "build", return_value=[]),
-        patch.object(adapter.analyze, "classify",
-                    side_effect=lambda df, themes, points, cfg, on_progress=None: (df, {})),
-        patch.object(adapter.analyze, "extend",
-                    side_effect=lambda df, themes, points, summary, cfg, on_progress=None: (df, themes, 0.0)),
-        patch.object(adapter.analyze, "affect",
-                    side_effect=lambda df, cfg: (df, _fake_affect_result())),
-        patch.object(adapter.pipeline_report, "write", return_value="# report"),
-        patch.object(adapter.pipeline_report, "render", side_effect=_fake_render),
-        patch.object(adapter.pipeline_report, "export", side_effect=_fake_export),
-        patch.object(adapter, "_build_prose",
-                    return_value={"title": "t", "interpretation": "i",
-                                  "quote": {"text": "q", "attr": "a"},
-                                  "caveat": "c"}),
-    )
-
-
-def _run_reconcile_of(proposals, included=True):
-    """A drop-in for brief.reconcile(..., include_grounded=True) that
-    ignores its transcript/context arguments and returns fixed points.
-    `included` is parametrized so an all-excluded list can be produced
-    (skip_pause must still pause with zero included points)."""
-    def fn(existing, meta_df, cfg, context_map=None, images_map=None,
-           id_factory=uuid.uuid4, include_grounded=False):
-        reconciled = [
-            {"id": str(id_factory()), "label": lbl, "description": desc,
-             "included": included, "order": i, "edited": False}
-            for i, (lbl, desc) in enumerate(proposals)
-        ]
-        return ("GROUNDED", reconciled) if include_grounded else reconciled
-    return fn
-
-
-def _wait_for_run_thread(run_id, timeout=5.0):
-    """Persisted terminal status can precede daemon thread exit.
-    Wait for the thread before teardown removes active pipeline mocks."""
-    name = f"adapter-run-{run_id[:8]}"
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not any(t.name == name for t in threading.enumerate()):
-            return True
-        time.sleep(0.02)
-    return False
 
 
 def _stop(patches, run_id=None):
