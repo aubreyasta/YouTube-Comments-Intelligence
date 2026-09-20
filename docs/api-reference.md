@@ -255,6 +255,7 @@ Response `201`:
   "name": "Campaign analysis",
   "campaignIds": [],
   "commentCount": 0,
+  "topLine": null,
   "status": "ready",
   "updatedAt": "...",
   "createdAt": "...",
@@ -278,6 +279,8 @@ Error: `422` when `name` is empty.
 List Sessions newest first. Each item adds `campaignCount`.
 
 `status` is `ready`, `queued`, `running`, `complete`, or `failed`, derived from the latest run. `queued` means the Session's run waits in the queue. `commentCount` counts CSV records in the latest complete run's readable `comments_csv`; otherwise it is `0`.
+
+`topLine` is the opening paragraph of the written read in the latest complete run's `report_json`, which the Sessions list shows as the Session's verdict. It is `null` when the Session has no complete run, when the report is missing or unreadable, or when the run finished before the pipeline wrote prose.
 
 `latestRun` is `null` or:
 

@@ -473,6 +473,41 @@ def _session_comment_count(session_id: str, conn) -> int:
         return 0
 
 
+def _session_top_line(session_id: str, conn) -> str | None:
+    """The opening paragraph of the latest complete run's written read.
+
+    The Sessions list shows it as the Session's verdict. It is the prose the
+    pipeline already wrote into report.json, not a second generation.
+    Returns None when there is no complete run, no report, or no prose.
+    """
+    run = conn.execute(
+        "SELECT id FROM runs WHERE session_id = ? AND state = 'complete' "
+        "ORDER BY finished_at DESC, rowid DESC LIMIT 1",
+        (session_id,)
+    ).fetchone()
+    if run is None:
+        return None
+    art = conn.execute(
+        "SELECT file_path FROM run_artifacts WHERE run_id = ? AND kind = 'report_json'",
+        (run["id"],)
+    ).fetchone()
+    if art is None:
+        return None
+    try:
+        with open(art["file_path"], encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return _first_paragraph(report.get("interpretation"))
+
+
+def _first_paragraph(prose) -> str | None:
+    """The first \\n\\n-separated paragraph of `prose`, or None if empty."""
+    if not isinstance(prose, str):
+        return None
+    return prose.split("\n\n")[0].strip() or None
+
+
 def _ser_session(row, conn) -> dict:
     sid = row["id"]
     campaigns = conn.execute(
@@ -503,6 +538,7 @@ def _ser_session(row, conn) -> dict:
         "createdBy": creator["email"] if creator else None,
         "campaignIds": campaign_ids,
         "commentCount": _session_comment_count(sid, conn),
+        "topLine": _session_top_line(sid, conn),
         "status": _session_status(sid, conn),
         "updatedAt": row["updated_at"],
         "createdAt": row["created_at"],
