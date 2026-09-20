@@ -1073,9 +1073,12 @@ const ICONS = {
   send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 8 6 8z"></path></svg>',
 };
 
-/** Disabled control with an explanation on hover/focus. */
-function disWrap(innerHtml, reason) {
-  return `<span class="dis-wrap" tabindex="0" aria-label="${esc(reason)}">${innerHtml}<span class="dis-tip" role="tooltip">${esc(reason)}</span></span>`;
+/**
+ * Disabled control with an explanation on hover/focus.
+ * block: the wrapped element fills the column instead of shrink-wrapping to its content.
+ */
+function disWrap(innerHtml, reason, { block = false } = {}) {
+  return `<span class="dis-wrap${block ? " block" : ""}" tabindex="0" aria-label="${esc(reason)}">${innerHtml}<span class="dis-tip" role="tooltip">${esc(reason)}</span></span>`;
 }
 
 function downloadBlob(content, name, mime) {
@@ -2022,7 +2025,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
         </div>
         <div class="field-error" id="c-url-err" role="alert" hidden></div>
       </section>`;
-  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first") : videosSectionInner;
+  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first", { block: true }) : videosSectionInner;
 
   const assetsSectionInner = `
       <section aria-labelledby="assets-h" style="display:flex;flex-direction:column;gap:12px">
@@ -2045,7 +2048,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
           ${createMode ? "" : (campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
       </section>`;
-  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first") : assetsSectionInner;
+  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first", { block: true }) : assetsSectionInner;
 
   const kmPlaceholderInner = `
     <section class="card km-section" aria-labelledby="km-h">
