@@ -400,11 +400,33 @@ function demoLatestRun(sessionId) {
   return latest && { id: latest.id, status: latest.status };
 }
 
+// Mirrors the live session's topLine: the opening paragraph of the written
+// read from the latest complete run, or null when there is none.
+function demoTopLine(sessionId) {
+  let prose = null;
+  for (const r of store.runs.values()) {
+    if (r.sessionId !== sessionId || r.status !== "complete") continue;
+    const report = store.reports.get(r.id);
+    if (report) prose = report.interpretation;
+  }
+  return (prose || "").split("\n\n")[0].trim() || null;
+}
+
+function demoSerSession(s) {
+  return {
+    ...s,
+    campaignIds: [...s.campaignIds],
+    keyMessages: cloneKeyMessages(s.keyMessages),
+    latestRun: demoLatestRun(s.id),
+    topLine: demoTopLine(s.id),
+  };
+}
+
 const demoApi = {
   /** @returns {Promise<Array<object>>} all sessions, newest first */
   async listSessions() {
     return [...store.sessions.values()]
-      .map((s) => ({ ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages), latestRun: demoLatestRun(s.id) }))
+      .map(demoSerSession)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
@@ -412,7 +434,7 @@ const demoApi = {
   async getSession(id) {
     const s = store.sessions.get(id);
     if (!s) throw demoError("not_found", "Session not found.");
-    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages), latestRun: demoLatestRun(s.id) };
+    return demoSerSession(s);
   },
 
   /**
@@ -1408,7 +1430,7 @@ async function renderSessions() {
     return true;
   });
 
-  const rows = shown.map((d) => {
+  const cards = shown.map((d) => {
     const { s, campaigns, videoCount, isDraft, runningRun } = d;
     // A Session with a run opens where that run left off: the report once
     // complete, the run page while queued, running, or failed.
@@ -1420,21 +1442,78 @@ async function renderSessions() {
       : campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
-    const statusCell = isDraft
-      ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
-      : s.status === "queued" && runningRun?.queuePosition != null
-      ? `<span class="status queued"><span class="dot"></span>${runningRun.queuePosition === 1 ? "Queued - next in line" : `Queued - ${runningRun.queuePosition - 1} ahead`}</span>`
-      : s.status === "running" && runningRun
-      ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
-      : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
+
+    const live = s.status === "running" || s.status === "queued";
+    const meta = videoCount === 0
+      ? "No videos yet"
+      : `${videoCount} video${videoCount === 1 ? "" : "s"}` +
+        (s.commentCount ? ` · ${fmtNum(s.commentCount)} comments` : "");
+
+    let body = "";
+    if (s.status === "complete" && s.topLine) {
+      body = `
+        <div class="sc-topline">
+          <div class="sc-kicker">TOP LINE</div>
+          <p>${esc(s.topLine)}</p>
+        </div>`;
+    } else if (s.status === "running" && runningRun) {
+      const pct = Math.round(runningRun.pct || 0);
+      const counts = runningRun.counts || {};
+      // No time estimate exists anywhere in the pipeline, so the third line
+      // carries the labelled count instead. Only while labelling: before
+      // that the total is known but nothing has been labelled, and "0 of N"
+      // reads like a stall.
+      const detail = runningRun.stage === "classify" && counts.total != null
+        ? `${fmtNum(counts.labelled || 0)} of ${fmtNum(counts.total)} comments labelled`
+        : "";
+      body = `
+        <div class="sc-progress">
+          <div class="sc-progress-head">${esc(runningRun.message || "Running")} · ${pct}%</div>
+          <div class="progressbar"><div style="width:${pct}%"></div></div>
+          ${detail ? `<div class="sc-progress-detail">${detail}</div>` : ""}
+        </div>`;
+    } else if (s.status === "queued" && runningRun) {
+      const wait = runningRun.queuePosition == null
+        ? "Waiting to start"
+        : runningRun.queuePosition === 1
+        ? "Next in line"
+        : `${runningRun.queuePosition - 1} run${runningRun.queuePosition === 2 ? "" : "s"} ahead`;
+      body = `
+        <div class="sc-progress">
+          <div class="sc-progress-head">${wait}</div>
+          <div class="sc-progress-detail">The run starts as soon as the machine is free.</div>
+        </div>`;
+    } else if (s.status === "failed") {
+      body = `
+        <div class="sc-topline failed">
+          <div class="sc-kicker">RUN STOPPED</div>
+          <p>This run ended before the report was written.</p>
+        </div>`;
+    }
+
+    const statusKey = isDraft ? "draft" : s.status;
+    const action = s.status === "complete"
+      ? "Open report →"
+      : live
+      ? "Watch progress →"
+      : s.status === "failed"
+      ? "See what happened →"
+      : isDraft
+      ? "Finish setup →"
+      : "Review and run →";
+
     return `
-      <a class="trow" data-name="${esc(s.name.toLowerCase())}" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px" href="${target}">
-        <div class="trow-name">${esc(s.name)}</div>
-        <div class="trow-num">${videoCount}</div>
-        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "-"}</div>
-        <div>${statusCell}</div>
-        <div class="trow-dim">${fmtAgo(s.updatedAt)}</div>
-        <div class="chev">${ICONS.chevR}</div>
+      <a class="session-card${live ? " live" : ""}${isDraft ? " draft" : ""}" data-name="${esc(s.name.toLowerCase())}" href="${target}">
+        <div class="sc-top"><span class="sc-ago">${fmtAgo(s.updatedAt)}</span></div>
+        <div class="sc-head">
+          <div class="sc-name">${esc(s.name)}</div>
+          <div class="sc-meta">${meta}</div>
+        </div>
+        ${body}
+        <div class="sc-foot">
+          <span class="status ${statusKey}"><span class="dot"></span>${STATUS_LABEL[statusKey]}</span>
+          <span class="sc-action">${action}</span>
+        </div>
       </a>`;
   });
 
@@ -1442,8 +1521,8 @@ async function renderSessions() {
   <div class="view-pad">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
-        <h2 class="greeting">Sessions</h2>
-        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · one campaign each</div>
+        <h2 class="greeting">Your sessions</h2>
+        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · sorted by last activity</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
         <button class="pill${sessionsFilter === "all" ? " active" : ""}" type="button" data-sf="all" aria-pressed="${sessionsFilter === "all"}">All</button>
@@ -1451,15 +1530,15 @@ async function renderSessions() {
         <button class="pill${sessionsFilter === "drafts" ? " active" : ""}" type="button" data-sf="drafts" aria-pressed="${sessionsFilter === "drafts"}">Drafts</button>
       </div>
     </div>
-    <div class="table-scroll">
-    <div class="table" style="min-width:760px">
-      <div class="thead" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px">
-        <div>SESSION</div><div>VIDEOS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
-      </div>
-      <div id="sessions-rows">${rows.join("")}</div>
-      <div id="sessions-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
+    <div class="session-grid" id="sessions-grid">
+      ${cards.join("")}
+      <a class="session-card new" href="#/sessions/new">
+        <div class="sc-new-icon">${ICONS.plus}</div>
+        <div class="sc-name">New session</div>
+        <div class="sc-meta">Set up the next campaign you want to read.</div>
+      </a>
     </div>
-    </div>
+    <div id="sessions-empty" style="display:none;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
   </div>`;
 
   view.querySelectorAll("[data-sf]").forEach((b) => {
@@ -1468,9 +1547,10 @@ async function renderSessions() {
 
   function applySessionsSearch() {
     let anyVisible = false;
-    view.querySelectorAll("#sessions-rows > .trow").forEach((row) => {
-      const match = !sessionsQuery || (row.dataset.name || "").includes(sessionsQuery);
-      row.style.display = match ? "" : "none";
+    // The trailing "New session" card carries no name and never filters out.
+    view.querySelectorAll("#sessions-grid > .session-card[data-name]").forEach((card) => {
+      const match = !sessionsQuery || (card.dataset.name || "").includes(sessionsQuery);
+      card.style.display = match ? "" : "none";
       if (match) anyVisible = true;
     });
     const empty = document.getElementById("sessions-empty");

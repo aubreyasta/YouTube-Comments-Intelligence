@@ -240,6 +240,62 @@ a.trow:hover { background: var(--row-hover); }
 .trow-dim { font-size: 12.5px; color: var(--muted); }
 .table-scroll { overflow-x: auto; }
 
+/* ---------- Session cards (the Sessions list) ---------- */
+.session-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.session-card {
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: #fff; padding: 20px; min-height: 150px;
+  display: flex; flex-direction: column; gap: 14px;
+  color: inherit; text-decoration: none;
+}
+.session-card:hover { border-color: var(--pink); text-decoration: none; }
+.session-card.live { border: 1.5px solid var(--pink-border-soft); background: var(--pink-light); }
+.session-card.draft { opacity: .78; }
+.session-card.draft:hover { opacity: 1; }
+.sc-top { display: flex; align-items: center; justify-content: flex-end; }
+.sc-ago { font-size: 11.5px; color: var(--quiet); }
+.sc-head { display: flex; flex-direction: column; gap: 6px; }
+.sc-name { font-size: 16px; font-weight: 700; color: var(--ink); }
+.sc-meta { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.sc-kicker { font-size: 11px; font-weight: 800; letter-spacing: .1em; color: var(--quiet); }
+.sc-topline {
+  background: var(--neutral); border-radius: var(--radius-btn); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sc-topline p {
+  margin: 0; font-size: 13px; color: var(--ink); line-height: 1.45;
+  /* Three lines of the written read, then an ellipsis. The full paragraph
+     is on the report page a click away. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+.sc-topline.failed { background: var(--danger-tint); }
+.sc-topline.failed .sc-kicker { color: var(--danger); }
+.sc-progress {
+  background: #fff; border: 1px solid var(--pink-border-soft);
+  border-radius: var(--radius-btn); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sc-progress-head { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.sc-progress .progressbar { max-width: none; background: var(--pink-border-soft); }
+.sc-progress-detail { font-size: 11.5px; color: var(--muted); }
+.sc-foot {
+  margin-top: auto; padding-top: 12px; border-top: 1px solid var(--divider);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.session-card.live .sc-foot { border-top-color: var(--pink-border-soft); }
+.sc-action { font-size: 12.5px; font-weight: 700; color: var(--pink); }
+.session-card:hover .sc-action { text-decoration: underline; }
+.session-card.new {
+  border: 1px dashed var(--dash); justify-content: center; gap: 8px;
+}
+.sc-new-icon {
+  width: 30px; height: 30px; border-radius: var(--radius-btn); background: var(--surface);
+  display: flex; align-items: center; justify-content: center; color: var(--muted);
+}
+
 .topbar-search-wrap { position: relative; display: inline-flex; align-items: center; width: 246px; height: 34px; }
 .topbar-search-wrap svg { position: absolute; left: 10px; color: var(--quiet); pointer-events: none; }
 .topbar-search {
