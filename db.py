@@ -86,7 +86,13 @@ CREATE TABLE IF NOT EXISTS runs (
     progress    TEXT,
     started_at  TEXT,
     finished_at TEXT,
-    error       TEXT
+    error       TEXT,
+    -- The classify settings this run used, snapshotted at run start.
+    -- adapter._estimate_duration_seconds only samples completed runs whose
+    -- llm_model and classify_batch_size match the run being estimated, so a
+    -- model swap never mixes into another model's timings.
+    llm_model             TEXT,
+    classify_batch_size   INTEGER
 );
 
 -- video_id is NULL for a Session-level Key Message: it applies to every
@@ -160,6 +166,10 @@ def init() -> None:
             conn.execute("ALTER TABLE runs DROP COLUMN total_comments")
         if "progress_detail" in cols:
             conn.execute("ALTER TABLE runs DROP COLUMN progress_detail")
+        if "llm_model" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN llm_model TEXT")
+        if "classify_batch_size" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN classify_batch_size INTEGER")
         session_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if "created_by" not in session_cols:
             conn.execute(
