@@ -529,11 +529,15 @@ Error: `404` run not found.
 
 ### `DELETE /runs/{id}`
 
-Remove a `queued` run from the queue. The running run and the Session's prior result are not changed.
+Stop a run, whether it is waiting or already going.
 
-Response `204`, also for an unknown id.
+A `queued` run is removed from the queue. The running run and the Session's prior result are not changed.
 
-Error: `409 CONFLICT` with `"This run has already started, so it can no longer leave the queue."`
+A `running` run is stopped. It ends as `status:"failed"`, `stage:"error"`, with `error` set to `"Stopped at your request."`, and the queue slot frees for the run behind it. The stream carries that final snapshot and closes, so the stop shows within about a second. The run's own thread stops at its next checkpoint, which is whatever stage boundary comes next: seconds during classification, longer inside a single model call. Nothing else waits on it.
+
+A run stopped before it overwrites anything leaves the Session's prior result in place, the same as leaving the queue. Once it is past that point the prior result is already gone, and a stopped run registers no artifacts of its own, so the Session has no result until the next run.
+
+Response `204`, also for an unknown id and for a run that has already finished.
 
 ### `PATCH /runs/{id}/brief_points`
 

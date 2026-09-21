@@ -1605,20 +1605,26 @@ def get_run(run_id: str):
 
 
 @app.delete("/api/runs/{run_id}", status_code=204)
-def leave_queue(run_id: str):
-    """Take a queued run out of the queue. A running run has no stop path,
-    so it is refused. The conditional DELETE is the check, so a run claimed
-    a moment earlier is never deleted from under its thread."""
+def stop_run(run_id: str):
+    """Stop a run, whether it is waiting or already going. A queued run is
+    removed from the queue and keeps the Session's prior result. A running
+    one is marked stopped here, so the stream closes at once, while its
+    thread unwinds at its next checkpoint (progress.Cancelled).
+
+    The conditional DELETE runs first and is its own check, so a run claimed
+    a moment earlier is never deleted from under its thread: it falls
+    through to cancel() instead and is stopped properly. A run that is
+    already finished matches neither and returns 204, the same as an
+    unknown id."""
     conn = db.get_conn()
     try:
         deleted = conn.execute(
             "DELETE FROM runs WHERE id = ? AND state = 'queued'", (run_id,)).rowcount
         conn.commit()
-        if not deleted and conn.execute(
-                "SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone():
-            _409("This run has already started, so it can no longer leave the queue.")
     finally:
         conn.close()
+    if not deleted:
+        progress.cancel(run_id)
 
 
 # /api/runs/{id}/brief_points  PATCH

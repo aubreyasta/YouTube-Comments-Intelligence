@@ -217,7 +217,9 @@ const liveApi = {
     await apiFetch("/api/runs/" + runId + "/review_activity", { method: "POST" });
   },
 
-  /* leaveQueue: take a queued run out of the queue. 409 once it has started. */
+  /* leaveQueue: stop a run. A queued one leaves the queue and the Session
+     keeps its prior result; a running one is stopped and ends as failed.
+     204 either way, including for a run that already finished. */
   async leaveQueue(runId) {
     await apiFetch("/api/runs/" + runId, { method: "DELETE" });
   },

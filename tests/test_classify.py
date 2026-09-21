@@ -363,6 +363,100 @@ def test_out_of_set_affect_label_fails_atomically():
         llm.classify_batch = original
 
 
+TOPUP_DF = pd.DataFrame([
+    {"video_id": "video_1", "group": "G1", "comment": f"Unsorted remark {n}",
+     "likes": n, "reply_count": n % 3, "theme": "Other"}
+    for n in range(30)
+])
+
+
+def _topup_stubs():
+    """extend() reaches the top-up classify only past its Other-share guard.
+    Stub the theme call and the label call so the pass is deterministic."""
+    def ask_json(prompt, cfg, **kwargs):
+        return {"themes": [{"name": "Shipping",
+                            "definition": "Comments about delivery."}]}
+
+    def label_batch(prompt, expected_indices, theme_names, point_labels, cfg):
+        indices = [int(match.group(1)) for line in prompt.splitlines()
+                   if (match := re.match(r"^(\d+):", line.strip()))]
+        return [{"index": index, "theme": "Shipping", "echoed": [],
+                 "sentiment": "positive", "emotion": "joy"}
+                for index in indices]
+
+    return ask_json, label_batch
+
+
+def test_topup_pass_reports_every_batch():
+    """Issue #58: the top-up classify ran without on_progress, so it published
+    nothing and a run stopped during it labelled to the end before noticing."""
+    ask_json, label_batch = _topup_stubs()
+    originals = (llm.ask_json, llm.classify_batch)
+    seen = []
+    llm.ask_json, llm.classify_batch = ask_json, label_batch
+    try:
+        out, themes, other_share = analyze.extend(
+            TOPUP_DF, THEMES, POINTS, "summary", make_cfg(10),
+            on_progress=seen.append)
+    finally:
+        llm.ask_json, llm.classify_batch = originals
+    assert out["theme"].tolist() == ["Shipping"] * 30, out["theme"].unique()
+    assert other_share == 0.0, other_share
+    # One opening message, then one tick per batch of 10.
+    assert seen == ["Refining themes - high uncategorised count",
+                    "Refining themes - batch 1 of 3",
+                    "Refining themes - batch 2 of 3",
+                    "Refining themes - batch 3 of 3"], seen
+
+
+def test_topup_pass_stops_when_the_tick_raises():
+    """The tick is the cancel checkpoint: progress.publish raises Cancelled
+    (a BaseException) from it, and that must leave the pass at once rather
+    than label the remaining batches."""
+    class Stop(BaseException):
+        pass
+
+    ask_json, label_batch = _topup_stubs()
+    originals = (llm.ask_json, llm.classify_batch)
+    batches = []
+
+    def counting_batch(prompt, expected_indices, theme_names, point_labels, cfg):
+        batches.append(list(expected_indices))
+        return label_batch(prompt, expected_indices, theme_names, point_labels, cfg)
+
+    def stop_on_first_tick(message):
+        if message.startswith("Refining themes - batch"):
+            raise Stop(message)
+
+    llm.ask_json, llm.classify_batch = ask_json, counting_batch
+    try:
+        try:
+            analyze.extend(TOPUP_DF, THEMES, POINTS, "summary", make_cfg(10),
+                           on_progress=stop_on_first_tick)
+        except Stop:
+            pass
+        else:
+            raise AssertionError("the top-up pass ran past its checkpoint")
+    finally:
+        llm.ask_json, llm.classify_batch = originals
+    assert len(batches) == 1, batches
+
+
+def test_topup_pass_without_on_progress_still_runs():
+    """adapter passes a callback, but extend()'s parameter is optional and the
+    3-arg test stubs call it without one."""
+    ask_json, label_batch = _topup_stubs()
+    originals = (llm.ask_json, llm.classify_batch)
+    llm.ask_json, llm.classify_batch = ask_json, label_batch
+    try:
+        out, _, other_share = analyze.extend(
+            TOPUP_DF, THEMES, POINTS, "summary", make_cfg(10))
+    finally:
+        llm.ask_json, llm.classify_batch = originals
+    assert other_share == 0.0, other_share
+    assert out["theme"].tolist() == ["Shipping"] * 30
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]

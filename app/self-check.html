@@ -264,6 +264,19 @@
   check("subscriber receives the error snapshot", seen2.some((e) => e.stage === "error" && e.error === failedRun.error));
   unsub2();
 
+  // stopping a running run: ends it, carries the reason, is safe to repeat
+  const run3 = await api.startRun(session.id);
+  await until(() => api.getRun(run3.id).then((r) => r.stage !== "queued"), 8000, "run3 started");
+  await api.leaveQueue(run3.id);
+  const stopped = await api.getRun(run3.id);
+  check("stopping a running run ends it",
+    stopped.status === "failed" && stopped.stage === "error");
+  check("a stopped run says it was stopped", stopped.error === "Stopped at your request.");
+  await api.leaveQueue(run3.id);
+  const stoppedAgain = await api.getRun(run3.id);
+  check("stopping an already stopped run changes nothing",
+    stoppedAgain.error === "Stopped at your request.");
+
   // --- Key Messages: demo/live method parity ---
   check("demoApi has Key Message methods",
     typeof api.getKeyMessages === "function" && typeof api.draftKeyMessages === "function"
