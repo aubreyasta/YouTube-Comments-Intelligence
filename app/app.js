@@ -1210,7 +1210,7 @@ function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
 }
 
 function setSidebarActive(which) {
-  for (const id of ["sb-sessions", "sb-files", "sb-users"]) {
+  for (const id of ["sb-home", "sb-sessions", "sb-files", "sb-users"]) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("active", id === "sb-" + which);
   }
@@ -1357,15 +1357,16 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
 
 /* ---------- Home ---------- */
 async function renderHome() {
-  setSidebarActive("sessions");
   const seq = routeSeq;
   const sessions = await demoApi.listSessions();
   if (seq !== routeSeq) return;
   if (sessions.length > 0) {
     // Populated Home routes directly to the Sessions list; no summary screen.
+    // Highlighting waits for that check so a redirecting Home never flashes.
     location.hash = "#/sessions";
     return;
   }
+  setSidebarActive("home");
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
