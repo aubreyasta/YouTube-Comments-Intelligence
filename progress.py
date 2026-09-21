@@ -8,7 +8,8 @@ a second tab, and a live stream cannot disagree.
 
 Snapshot (camelCase, the same object over GET and SSE):
   {"stage": str, "pct": int, "message": str,
-   "counts": {"total", "labelled", "themes", "batch", "batches", "otherShare"},
+   "counts": {"total", "labelled", "themes", "batch", "batches", "otherShare",
+              "estimatedLowSeconds", "estimatedHighSeconds"},
    "error": str | None}
 """
 

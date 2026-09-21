@@ -1063,6 +1063,10 @@ function fmtNum(n) {
   return (n || 0).toLocaleString("en-US");
 }
 
+function fmtMinutes(seconds) {
+  return Math.max(1, Math.round(seconds / 60));
+}
+
 function fmtSize(bytes) {
   if (bytes == null) return "-";
   if (bytes < 1024) return bytes + " B";
@@ -2682,7 +2686,15 @@ async function renderRun(runId) {
     } else {
       const total = totalComments();
       titleEl.textContent = total != null ? `Reading ${fmtNum(total)} comments` : "Reading the comments";
-      subEl.textContent = "You can leave this page - the Session list will show the same status when you're back.";
+      const { estimatedLowSeconds: low, estimatedHighSeconds: high } = state.counts;
+      let etaText = "";
+      if (low != null && high != null) {
+        const lowMin = fmtMinutes(low), highMin = fmtMinutes(high);
+        etaText = (lowMin === highMin ? `Usually about ${lowMin} min for a Session this size. `
+          : `Usually ${lowMin}-${highMin} min for a Session this size. `);
+      }
+      subEl.textContent = etaText
+        + "You can leave this page - the Session list will show the same status when you're back.";
     }
     badgeEl.className = `run-badge ${tone}`;
     badgeEl.innerHTML = tone === "complete" ? ICONS.checkLg

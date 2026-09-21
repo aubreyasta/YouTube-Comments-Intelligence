@@ -131,6 +131,8 @@ type RunProgress = {
     batch?: number;      // finished classify batches
     batches?: number;    // total classify batches
     otherShare?: number; // percent left in `Other`, set when `classify` ends
+    estimatedLowSeconds?: number;  // set with `total` when 3+ completed runs
+    estimatedHighSeconds?: number; // share this run's model and batch size
   };
   error: string | null;
   queuePosition: number | null; // 1 = next to start; null once the run has started
