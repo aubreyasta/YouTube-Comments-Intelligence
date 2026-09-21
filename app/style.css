@@ -553,25 +553,37 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* ---------- Run ---------- */
-.run-layout { padding: 32px 40px 44px; display: flex; gap: 26px; align-items: flex-start; }
-.run-main {
-  flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-card);
-  padding: 26px 28px; display: flex; flex-direction: column; gap: 22px; background: #fff;
+.run-layout { padding: 56px 40px 64px; display: flex; justify-content: center; }
+.run-col {
+  width: 100%; max-width: 560px;
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
 }
-.run-rail { width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; }
-.run-title { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; margin: 0; }
-.run-sub { font-size: 13.5px; color: var(--muted); margin: 0; }
-.run-reliability { font-size: 12.5px; color: var(--muted); margin: 0; }
+.run-head { display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center; }
+.run-badge {
+  width: 88px; height: 88px; border-radius: 50%; margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--pink); color: #fff;
+}
+.run-badge.waiting { background: var(--pink-tint); color: var(--pink); }
+.run-badge.failed { background: var(--danger); color: #fff; }
+.run-title { font-size: 24px; font-weight: 800; color: var(--ink); letter-spacing: -.015em; margin: 0; }
+.run-sub { font-size: 13.5px; color: var(--muted); margin: 0; max-width: 460px; }
+.run-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+/* An empty action or error slot must not spend the column's gap. */
+.run-actions:empty, #run-action-err:empty { display: none; }
+.run-reliability { font-size: 12.5px; color: var(--muted); margin: 0; max-width: 460px; text-align: center; }
 
-/* brief_pause review: a centered review replaces the progress view entirely. */
+/* brief_pause review: the review replaces the progress view entirely. */
 .run-layout.reviewing #run-header,
 .run-layout.reviewing .stepper,
-.run-layout.reviewing details.demo-controls,
-.run-layout.reviewing .run-rail { display: none; }
-.run-layout.reviewing .run-main { border: none; padding: 0; }
-.run-layout.reviewing #brief-review { max-width: 680px; width: 100%; margin: 0 auto; }
+.run-layout.reviewing .run-actions,
+.run-layout.reviewing #run-action-err,
+.run-layout.reviewing .run-reliability,
+.run-layout.reviewing details.demo-controls { display: none; }
+.run-layout.reviewing .run-col { max-width: 680px; }
+.run-layout.reviewing #brief-review { width: 100%; }
 
-.stepper { display: flex; flex-direction: column; }
+.stepper { display: flex; flex-direction: column; width: 420px; max-width: 100%; }
 .step-row { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 18px; }
 .step-row:last-child { padding-bottom: 0; }
 .step-glyph { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto; }
@@ -582,24 +594,16 @@ textarea.input { resize: vertical; line-height: 1.5; }
 }
 .step-dot.done { background: var(--pink); border-color: var(--pink); color: #fff; }
 .step-dot.current { border: 2.5px solid var(--pink-border-soft); border-top-color: var(--pink); animation: spin 1s linear infinite; }
+.step-dot.stopped { border-color: var(--danger); background: var(--danger-tint); }
 .step-line { width: 2px; height: 22px; background: var(--divider); }
 .step-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .step-name { font-size: 14px; font-weight: 700; color: var(--ink); }
 .step-name.pending { color: var(--quiet); }
 .step-detail { font-size: 12.5px; color: var(--muted); }
 .step-detail.pending { color: var(--disabled-soft); }
+.step-count { font-size: 13.5px; font-weight: 800; color: var(--ink); flex: 0 0 auto; padding-left: 12px; }
 .progressbar { height: 6px; background: var(--divider); border-radius: 3px; overflow: hidden; max-width: 420px; }
 .progressbar > div { height: 100%; background: var(--pink); transition: width .4s ease; }
-
-.rail-card {
-  border: 1px solid var(--border); border-radius: var(--radius-card);
-  padding: 20px; display: flex; flex-direction: column; gap: 16px; background: #fff;
-}
-.rail-kicker { font-size: 11px; font-weight: 800; letter-spacing: .1em; color: var(--quiet); }
-.count-row { display: flex; align-items: baseline; justify-content: space-between; }
-.count-row .k { font-size: 13px; color: var(--muted); }
-.count-row .v { font-size: 17px; font-weight: 800; color: var(--ink); }
-.count-row .v.pink { color: var(--pink); }
 
 details.demo-controls {
   border: 1px dashed var(--dash); border-radius: var(--radius-panel);
@@ -833,9 +837,7 @@ details.demo-controls .inner { display: flex; flex-direction: column; gap: 8px; 
   .view-pad { padding: 24px 24px 36px; }
   .campaign-layout { flex-direction: column; padding: 22px 24px 32px; }
   .campaign-rail { width: 100%; flex: none; }
-  .run-layout { flex-direction: column; padding: 24px 24px 36px; }
-  .run-rail { width: 100%; flex: none; }
-  .run-rail .rail-card { max-width: 420px; }
+  .run-layout { padding: 40px 24px 48px; }
   .setup-wrap { padding: 32px 24px 44px; }
   .report-scroll { padding: 26px 24px 40px; }
   .hero-top { padding: 26px 24px; }

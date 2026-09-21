@@ -781,29 +781,29 @@ def classify_progress_paints(page, base):
     The classify stub parks between its two batches, so the page is read at
     a real mid-classification moment: one batch done, two of three comments
     labelled. Before the fix, parseDetailStr() could not read the batch
-    detail string, so the step detail, the progress bar, and the LIVE COUNTS
-    labelled figure all stayed at the "-" sentinel."""
+    detail string, so the step detail, the progress bar, and the labelled
+    figure all stayed at the "-" sentinel.
+
+    Issue #55 moved the labelled and theme counts off a side rail and onto
+    the Labelling step itself, so the one detail line now carries all three."""
     _require_run_id()
+    detail = "2 of 3 labelled · batch 1 of 2 · 2 themes"
     try:
-        step = "#stepper .step-row:nth-child(4)"  # Collect, Brief, Key Message review, Classify
-        _wait_text(page, f"{step} .step-detail", "2 of 3 labelled",
-                   timeout_ms=20000)
-        _expect(page.locator(f"{step} .progressbar").count() == 1,
-                "no progress bar rendered on the Classify step while classify "
-                "was running")
-        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
+        step = "#stepper .step-row:nth-child(3)"  # Collect, Brief, Labelling
         # The batch events must not erase the theme count an earlier event set.
-        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+        _wait_text(page, f"{step} .step-detail", detail, timeout_ms=20000)
+        _expect(page.locator(f"{step} .progressbar").count() == 1,
+                "no progress bar rendered on the Labelling step while classify "
+                "was running")
+        _wait_text(page, f"{step} .step-count", "67%", timeout_ms=5000)
 
         # Issue #20: a refresh while classify is parked must repaint the same
         # progress from the run snapshot, not blank it or show "0" labelled.
         page.reload()
-        _wait_text(page, f"{step} .step-detail", "2 of 3 labelled",
-                   timeout_ms=10000)
+        _wait_text(page, f"{step} .step-detail", detail, timeout_ms=10000)
         _expect(page.locator(f"{step} .progressbar").count() == 1,
-                "no progress bar on the Classify step after a refresh")
-        _wait_text(page, "#cnt-labelled", "2", timeout_ms=5000)
-        _wait_text(page, "#cnt-themes", "2", timeout_ms=5000)
+                "no progress bar on the Labelling step after a refresh")
+        _wait_text(page, f"{step} .step-count", "67%", timeout_ms=5000)
     finally:
         _CLASSIFY_GATE.set()
 
@@ -826,8 +826,8 @@ def run_completes(page, base):
     # SSE polls the snapshot, so the page can trail the API by one poll.
     _wait_text(page, "#run-badge", "Complete", 10000)
     done_count = page.locator("#stepper .step-dot.done").count()
-    _expect(done_count == 6,
-            f"expected all 6 steps marked done on completion, found {done_count}")
+    _expect(done_count == 5,
+            f"expected all 5 steps marked done on completion, found {done_count}")
 
     page.wait_for_selector("a#btn-results")
     href = page.get_attribute("a#btn-results", "href")
