@@ -356,8 +356,16 @@ def extend(df, themes, points, summary, cfg: "PipelineConfig",
         return df, themes, other_share
 
     extended = themes + new_themes[:4]
-    # Reclassify only the Other rows against the extended set.
-    sub_df, _ = classify(leftover, extended, points, cfg)
+    # Reclassify only the Other rows against the extended set. classify()
+    # reports per batch and extend() reports one message, so the shapes are
+    # bridged here rather than widening either signature. Without a tick per
+    # batch the top-up pass publishes nothing, and a run stopped during it
+    # keeps labelling to the end before it notices.
+    sub_df, _ = classify(
+        leftover, extended, points, cfg,
+        on_progress=on_progress and (
+            lambda done, total, _labelled:
+            on_progress(f"Refining themes - batch {done} of {total}")))
     df = df.copy()
     # Copy back theme and pt__ only. The top-up pass reclassifies one subset,
     # so taking its sentiment/emotion would leave the corpus with affect

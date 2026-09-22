@@ -220,15 +220,16 @@ function failRun(engine, message) {
 }
 
 /* The six public run artifacts, in contract order. kind is the stable id;
-   filename/contentType are exact and must never drift. No seventh entry,
+   filename/contentType are exact and must never drift. label is the
+   user-facing file stem (see artifactDownloadName). No seventh entry,
    no report_json, no chart_transfer.csv/chart_themes.csv/summary.csv. */
 const PUBLIC_ARTIFACTS = [
-  { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf" },
-  { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv" },
-  { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv" },
-  { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv" },
-  { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv" },
-  { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv" },
+  { kind: "report_pdf", filename: "report.pdf", contentType: "application/pdf", label: "Report" },
+  { kind: "comments_csv", filename: "comments.csv", contentType: "text/csv", label: "Comments" },
+  { kind: "key_messages_csv", filename: "key-messages.csv", contentType: "text/csv", label: "Key Messages" },
+  { kind: "themes_csv", filename: "themes.csv", contentType: "text/csv", label: "Themes" },
+  { kind: "sentiment_csv", filename: "sentiment.csv", contentType: "text/csv", label: "Sentiment" },
+  { kind: "emotions_csv", filename: "emotions.csv", contentType: "text/csv", label: "Emotions" },
 ];
 const PUBLIC_ARTIFACT_ORDER = PUBLIC_ARTIFACTS.reduce((m, a, i) => (m[a.kind] = i, m), {});
 
@@ -353,7 +354,10 @@ function startEngineSchedule(engine) {
         go("classify");
       });
     } else if (stage === "classify") {
-      engine.emit("classify", STAGE_MESSAGES.classify, 34, { labelled: 0, total: engine.counts.total });
+      // The theme book is built before the first batch, so its count is known
+      // from the first classify event, exactly as the live pipeline reports it.
+      engine.emit("classify", STAGE_MESSAGES.classify, 34,
+        { labelled: 0, total: engine.counts.total, themes: engine.counts.themes });
       let labelled = 0;
       const total = engine.counts.total;
       const step = Math.ceil(total / 22);
@@ -391,11 +395,41 @@ function startEngineSchedule(engine) {
 
 /* ============================== demoApi ============================== */
 
+// Mirrors the live session's latestRun: the most recently started run, or null.
+// store.runs keeps insertion order, which is start order.
+function demoLatestRun(sessionId) {
+  let latest = null;
+  for (const r of store.runs.values()) if (r.sessionId === sessionId) latest = r;
+  return latest && { id: latest.id, status: latest.status };
+}
+
+// Mirrors the live session's topLine: the opening paragraph of the written
+// read from the latest complete run, or null when there is none.
+function demoTopLine(sessionId) {
+  let prose = null;
+  for (const r of store.runs.values()) {
+    if (r.sessionId !== sessionId || r.status !== "complete") continue;
+    const report = store.reports.get(r.id);
+    if (report) prose = report.interpretation;
+  }
+  return (prose || "").split("\n\n")[0].trim() || null;
+}
+
+function demoSerSession(s) {
+  return {
+    ...s,
+    campaignIds: [...s.campaignIds],
+    keyMessages: cloneKeyMessages(s.keyMessages),
+    latestRun: demoLatestRun(s.id),
+    topLine: demoTopLine(s.id),
+  };
+}
+
 const demoApi = {
   /** @returns {Promise<Array<object>>} all sessions, newest first */
   async listSessions() {
     return [...store.sessions.values()]
-      .map((s) => ({ ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) }))
+      .map(demoSerSession)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
@@ -403,7 +437,7 @@ const demoApi = {
   async getSession(id) {
     const s = store.sessions.get(id);
     if (!s) throw demoError("not_found", "Session not found.");
-    return { ...s, campaignIds: [...s.campaignIds], keyMessages: cloneKeyMessages(s.keyMessages) };
+    return demoSerSession(s);
   },
 
   /**
@@ -807,10 +841,16 @@ const demoApi = {
     return { messages: kept.map((p) => ({ ...p })) };
   },
 
-  /** Demo runs never queue: startRun refuses while another run is active.
+  /** Stop a run. Demo runs never queue (startRun refuses while another run
+   * is active), so this is always the running case. Live stops the same
+   * way: the run ends as failed, carrying the reason.
    * @param {string} runId @returns {Promise<void>} */
   async leaveQueue(runId) {
-    throw demoError("conflict", "This run has already started, so it can no longer leave the queue.");
+    const run = store.runs.get(runId);
+    if (!run) throw demoError("not_found", "Run not found.");
+    const eng = runEngines.get(runId);
+    if (!eng || run.status === "complete" || run.status === "failed") return;
+    failRun(eng, "Stopped at your request.");
   },
 
   /** Demo reviews never time out, so there is nothing to record.
@@ -1023,6 +1063,10 @@ function fmtNum(n) {
   return (n || 0).toLocaleString("en-US");
 }
 
+function fmtMinutes(seconds) {
+  return Math.max(1, Math.round(seconds / 60));
+}
+
 function fmtSize(bytes) {
   if (bytes == null) return "-";
   if (bytes < 1024) return bytes + " B";
@@ -1062,11 +1106,17 @@ const ICONS = {
   downArr: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12l7 7 7-7"></path></svg>',
   play: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"></path></svg>',
   send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 8 6 8z"></path></svg>',
+  clockLg: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>',
+  alertLg: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.8v4.6"></path><path d="M12 16.1h.01"></path></svg>',
+  checkLg: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
 };
 
-/** Disabled control with an explanation on hover/focus. */
-function disWrap(innerHtml, reason) {
-  return `<span class="dis-wrap" tabindex="0" aria-label="${esc(reason)}">${innerHtml}<span class="dis-tip" role="tooltip">${esc(reason)}</span></span>`;
+/**
+ * Disabled control with an explanation on hover/focus.
+ * block: the wrapped element fills the column instead of shrink-wrapping to its content.
+ */
+function disWrap(innerHtml, reason, { block = false } = {}) {
+  return `<span class="dis-wrap${block ? " block" : ""}" tabindex="0" aria-label="${esc(reason)}">${innerHtml}<span class="dis-tip" role="tooltip">${esc(reason)}</span></span>`;
 }
 
 function downloadBlob(content, name, mime) {
@@ -1080,16 +1130,29 @@ function downloadBlob(content, name, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+/* "<Session>-<YYYY-MM-DD HHmm>-<Label>.<ext>", stamped with the Run's finish
+   (addedAt, always sent since #39) in local time, to the minute, no zone.
+   Drops the characters Windows forbids in filenames. */
+function artifactDownloadName(artifact, sessionName) {
+  const meta = PUBLIC_ARTIFACTS[PUBLIC_ARTIFACT_ORDER[artifact.kind]];
+  const d = new Date(artifact.addedAt);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+  const name = (sessionName || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "").trim().replace(/[. ]+$/, "") || "Session";
+  return `${name}-${stamp}-${meta.label}.${meta.filename.split(".").pop()}`;
+}
+
 /* Shared blob-first download path for Results and Files. Always fetches
    the artifact fresh (live: blob + Content-Disposition; demo: in-memory
    Blob) before handing off to downloadBlob, so both modes use the exact
-   filename/contentType the API returns rather than any stale reference.
+   contentType the API returns rather than any stale reference. The saved
+   name comes from artifactDownloadName, not the API's Content-Disposition.
    errorRegion is a live/alert region element; failures are announced there,
    never swallowed. */
-async function downloadArtifact(artifact, errorRegion) {
+async function downloadArtifact(artifact, sessionName, errorRegion) {
   try {
     const a = await demoApi.getArtifact(artifact.id);
-    downloadBlob(a.content, a.filename, a.contentType);
+    downloadBlob(a.content, artifactDownloadName(artifact, sessionName), a.contentType);
     if (errorRegion) errorRegion.textContent = "";
   } catch {
     if (errorRegion) errorRegion.textContent = "Download failed. Try again.";
@@ -1098,7 +1161,7 @@ async function downloadArtifact(artifact, errorRegion) {
 
 /* Modal with focus trap, Escape, and focus restoration. */
 let modalState = null;
-function openModal(title, bodyHtml, objectUrl) {
+function openModal(title, bodyHtml, objectUrl, headActionsHtml = "") {
   closeModal();
   const prevFocus = document.activeElement;
   const backdrop = document.createElement("div");
@@ -1107,6 +1170,7 @@ function openModal(title, bodyHtml, objectUrl) {
     <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="modal-head">
         <div class="t">${esc(title)}</div>
+        ${headActionsHtml}
         <button class="ev-close" data-close aria-label="Close preview">${ICONS.xLg}</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>
@@ -1150,7 +1214,7 @@ function sessionTopbar({ name, badgeHtml = "", rightHtml = "" }) {
 }
 
 function setSidebarActive(which) {
-  for (const id of ["sb-sessions", "sb-files", "sb-users"]) {
+  for (const id of ["sb-home", "sb-sessions", "sb-files", "sb-users"]) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("active", id === "sb-" + which);
   }
@@ -1178,6 +1242,10 @@ async function loadAccount() {
 /* ============================== Screens ============================== */
 
 let routeCleanup = null;
+// Bumped by every route(). A page render captures it before its first await
+// and returns early if it changed, so a render that finishes after the user
+// navigated away never writes over the newer page.
+let routeSeq = 0;
 
 function cleanupRoute() {
   if (routeCleanup) { routeCleanup(); routeCleanup = null; }
@@ -1293,13 +1361,16 @@ function kmMergeDraft(localRows, draftMessages, dirtyIds) {
 
 /* ---------- Home ---------- */
 async function renderHome() {
-  setSidebarActive("sessions");
+  const seq = routeSeq;
   const sessions = await demoApi.listSessions();
+  if (seq !== routeSeq) return;
   if (sessions.length > 0) {
     // Populated Home routes directly to the Sessions list; no summary screen.
+    // Highlighting waits for that check so a redirecting Home never flashes.
     location.hash = "#/sessions";
     return;
   }
+  setSidebarActive("home");
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
@@ -1333,7 +1404,9 @@ let sessionsQuery = "";
 
 async function renderSessions() {
   setSidebarActive("sessions");
+  const seq = routeSeq;
   const sessions = await demoApi.listSessions();
+  if (seq !== routeSeq) return;
   setTopbar(`
     <div class="topbar-left"><span class="topbar-title">Sessions</span></div>
     <div class="topbar-right">
@@ -1366,6 +1439,7 @@ async function renderSessions() {
     const runningRun = s.status === "running" || s.status === "queued" ? await demoApi.getRunningRun(s.id) : null;
     return { s, campaigns, videoCount, isDraft, runningRun };
   }));
+  if (seq !== routeSeq) return;
 
   const shown = sessionData.filter((d) => {
     if (sessionsFilter === "running") return d.s.status === "running" || d.s.status === "queued";
@@ -1373,26 +1447,90 @@ async function renderSessions() {
     return true;
   });
 
-  const rows = shown.map((d) => {
+  const cards = shown.map((d) => {
     const { s, campaigns, videoCount, isDraft, runningRun } = d;
-    const target = campaigns.length
+    // A Session with a run opens where that run left off: the report once
+    // complete, the run page while queued, running, or failed.
+    const lr = s.latestRun;
+    const target = lr && s.status === "complete"
+      ? `#/runs/${lr.id}/results`
+      : lr && ["queued", "running", "failed"].includes(s.status)
+      ? `#/runs/${lr.id}`
+      : campaigns.length
       ? `#/sessions/${s.id}/campaigns/${campaigns[0].id}`
       : "#/sessions";
-    const statusCell = isDraft
-      ? `<span class="status draft"><span class="dot"></span>Draft - no videos yet</span>`
-      : s.status === "queued" && runningRun?.queuePosition != null
-      ? `<span class="status queued"><span class="dot"></span>${runningRun.queuePosition === 1 ? "Queued - next in line" : `Queued - ${runningRun.queuePosition - 1} ahead`}</span>`
-      : s.status === "running" && runningRun
-      ? `<span class="status running"><span class="dot"></span>${esc(runningRun.message || "Running")}</span>`
-      : `<span class="status ${s.status}"><span class="dot"></span>${STATUS_LABEL[s.status]}</span>`;
+
+    const live = s.status === "running" || s.status === "queued";
+    const meta = videoCount === 0
+      ? "No videos yet"
+      : `${videoCount} video${videoCount === 1 ? "" : "s"}` +
+        (s.commentCount ? ` · ${fmtNum(s.commentCount)} comments` : "");
+
+    let body = "";
+    if (s.status === "complete" && s.topLine) {
+      body = `
+        <div class="sc-topline">
+          <div class="sc-kicker">TOP LINE</div>
+          <p>${esc(s.topLine)}</p>
+        </div>`;
+    } else if (s.status === "running" && runningRun) {
+      const pct = Math.round(runningRun.pct || 0);
+      const counts = runningRun.counts || {};
+      // No time estimate exists anywhere in the pipeline, so the third line
+      // carries the labelled count instead. Only while labelling: before
+      // that the total is known but nothing has been labelled, and "0 of N"
+      // reads like a stall.
+      const detail = runningRun.stage === "classify" && counts.total != null
+        ? `${fmtNum(counts.labelled || 0)} of ${fmtNum(counts.total)} comments labelled`
+        : "";
+      body = `
+        <div class="sc-progress">
+          <div class="sc-progress-head">${esc(runningRun.message || "Running")} · ${pct}%</div>
+          <div class="progressbar"><div style="width:${pct}%"></div></div>
+          ${detail ? `<div class="sc-progress-detail">${detail}</div>` : ""}
+        </div>`;
+    } else if (s.status === "queued" && runningRun) {
+      const wait = runningRun.queuePosition == null
+        ? "Waiting to start"
+        : runningRun.queuePosition === 1
+        ? "Next in line"
+        : `${runningRun.queuePosition - 1} run${runningRun.queuePosition === 2 ? "" : "s"} ahead`;
+      body = `
+        <div class="sc-progress">
+          <div class="sc-progress-head">${wait}</div>
+          <div class="sc-progress-detail">The run starts as soon as the machine is free.</div>
+        </div>`;
+    } else if (s.status === "failed") {
+      body = `
+        <div class="sc-topline failed">
+          <div class="sc-kicker">RUN STOPPED</div>
+          <p>This run ended before the report was written.</p>
+        </div>`;
+    }
+
+    const statusKey = isDraft ? "draft" : s.status;
+    const action = s.status === "complete"
+      ? "Open report →"
+      : live
+      ? "Watch progress →"
+      : s.status === "failed"
+      ? "See what happened →"
+      : isDraft
+      ? "Finish setup →"
+      : "Review and run →";
+
     return `
-      <a class="trow" data-name="${esc(s.name.toLowerCase())}" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px" href="${target}">
-        <div class="trow-name">${esc(s.name)}</div>
-        <div class="trow-num">${videoCount}</div>
-        <div class="trow-num">${s.commentCount ? fmtNum(s.commentCount) : "-"}</div>
-        <div>${statusCell}</div>
-        <div class="trow-dim">${fmtAgo(s.updatedAt)}</div>
-        <div class="chev">${ICONS.chevR}</div>
+      <a class="session-card${live ? " live" : ""}${isDraft ? " draft" : ""}" data-name="${esc(s.name.toLowerCase())}" href="${target}">
+        <div class="sc-top"><span class="sc-ago">${fmtAgo(s.updatedAt)}</span></div>
+        <div class="sc-head">
+          <div class="sc-name">${esc(s.name)}</div>
+          <div class="sc-meta">${meta}</div>
+        </div>
+        ${body}
+        <div class="sc-foot">
+          <span class="status ${statusKey}"><span class="dot"></span>${STATUS_LABEL[statusKey]}</span>
+          <span class="sc-action">${action}</span>
+        </div>
       </a>`;
   });
 
@@ -1400,8 +1538,8 @@ async function renderSessions() {
   <div class="view-pad">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:5px">
-        <h2 class="greeting">Sessions</h2>
-        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · one campaign each</div>
+        <h2 class="greeting">Your sessions</h2>
+        <div class="greeting-sub">${sessions.length} session${sessions.length === 1 ? "" : "s"} · sorted by last activity</div>
       </div>
       <div class="pill-row" role="group" aria-label="Session filters">
         <button class="pill${sessionsFilter === "all" ? " active" : ""}" type="button" data-sf="all" aria-pressed="${sessionsFilter === "all"}">All</button>
@@ -1409,15 +1547,15 @@ async function renderSessions() {
         <button class="pill${sessionsFilter === "drafts" ? " active" : ""}" type="button" data-sf="drafts" aria-pressed="${sessionsFilter === "drafts"}">Drafts</button>
       </div>
     </div>
-    <div class="table-scroll">
-    <div class="table" style="min-width:760px">
-      <div class="thead" style="grid-template-columns:2.2fr 1fr 1.1fr 1.6fr .85fr 20px">
-        <div>SESSION</div><div>VIDEOS</div><div>COMMENTS</div><div>STATUS</div><div>UPDATED</div><div></div>
-      </div>
-      <div id="sessions-rows">${rows.join("")}</div>
-      <div id="sessions-empty" style="display:none;padding:18px 20px;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
+    <div class="session-grid" id="sessions-grid">
+      ${cards.join("")}
+      <a class="session-card new" href="#/sessions/new">
+        <div class="sc-new-icon">${ICONS.plus}</div>
+        <div class="sc-name">New session</div>
+        <div class="sc-meta">Set up the next campaign you want to read.</div>
+      </a>
     </div>
-    </div>
+    <div id="sessions-empty" style="display:none;font-size:13px;color:var(--muted)">Nothing in this filter yet.</div>
   </div>`;
 
   view.querySelectorAll("[data-sf]").forEach((b) => {
@@ -1426,9 +1564,10 @@ async function renderSessions() {
 
   function applySessionsSearch() {
     let anyVisible = false;
-    view.querySelectorAll("#sessions-rows > .trow").forEach((row) => {
-      const match = !sessionsQuery || (row.dataset.name || "").includes(sessionsQuery);
-      row.style.display = match ? "" : "none";
+    // The trailing "New session" card carries no name and never filters out.
+    view.querySelectorAll("#sessions-grid > .session-card[data-name]").forEach((card) => {
+      const match = !sessionsQuery || (card.dataset.name || "").includes(sessionsQuery);
+      card.style.display = match ? "" : "none";
       if (match) anyVisible = true;
     });
     const empty = document.getElementById("sessions-empty");
@@ -1867,19 +2006,24 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
 
   let session = null, campaign = null, runningRun = null, kmDraft = null;
   if (!createMode) {
+    const seq = routeSeq;
     [session, campaign, runningRun, kmDraft] = await Promise.all([
       demoApi.getSession(sessionId),
       demoApi.getCampaign(campaignId),
       demoApi.getRunningRun(sessionId),
       demoApi.getKeyMessages(sessionId),
     ]);
+    if (seq !== routeSeq) return;
   }
 
   if (createMode) {
     sessionTopbar({ name: "New session" });
   } else {
     const badgeHtml = `<span class="badge${session.status === "complete" ? " neutral" : ""}">${esc(STATUS_LABEL[session.status] || "Draft")}</span>`;
-    const rightHtml = `<button class="btn primary" type="button" id="btn-run">${!runningRun ? "Run analysis" : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
+    const viewReport = session.status === "complete" && session.latestRun
+      ? `<a class="btn secondary" href="#/runs/${session.latestRun.id}/results">View report</a>`
+      : "";
+    const rightHtml = `${viewReport}<button class="btn primary" type="button" id="btn-run">${!runningRun ? (viewReport ? "Re-run analysis" : "Run analysis") : runningRun.status === "queued" ? "In the queue\u2026" : "Run in progress\u2026"}</button>`;
     sessionTopbar({ name: session.name, badgeHtml, rightHtml });
   }
 
@@ -1957,7 +2101,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
     : `<div style="font-size:12.5px;color:var(--muted)">${fmtNum(totalComments)} comments available</div>`;
 
   const priorResultWarning = (!createMode && session.status !== "ready") ? `
-    <div class="notice pink" role="note">This Session already has a result. Clicking "Run analysis" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
+    <div class="notice pink" role="note">This Session already has a result. Clicking "${session.status === "complete" ? "Re-run analysis" : "Run analysis"}" will ask you to confirm - a new run deletes the current result and its files. There's no history to fall back to.</div>` : "";
 
   const videosSectionInner = `
       <section aria-labelledby="videos-h" style="display:flex;flex-direction:column;gap:12px">
@@ -1978,7 +2122,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
         </div>
         <div class="field-error" id="c-url-err" role="alert" hidden></div>
       </section>`;
-  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first") : videosSectionInner;
+  const videosSectionHtml = createMode ? disWrap(videosSectionInner, "Name the Session first", { block: true }) : videosSectionInner;
 
   const assetsSectionInner = `
       <section aria-labelledby="assets-h" style="display:flex;flex-direction:column;gap:12px">
@@ -2001,7 +2145,7 @@ async function renderCampaign(sessionId, campaignId, { setup = false } = {}) {
           ${createMode ? "" : (campaign.assets || []).map((a) => assetRowHtml(a, live)).join("")}
         </div>
       </section>`;
-  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first") : assetsSectionInner;
+  const assetsSectionHtml = createMode ? disWrap(assetsSectionInner, "Name the Session first", { block: true }) : assetsSectionInner;
 
   const kmPlaceholderInner = `
     <section class="card km-section" aria-labelledby="km-h">
@@ -2276,22 +2420,25 @@ function assetRowHtml(a, live) {
 
 /* ---------- Run ---------- */
 const STEP_DEFS = [
-  { title: "Collect", detail: "comments and transcripts" },
-  { title: "Brief", detail: "read against the transcripts" },
-  { title: "Key Message review", detail: "" },
-  { title: "Classify", detail: "Theme book, then every comment" },
-  { title: "Emotion", detail: "Sentiment and Emotion, every comment" },
-  { title: "Report", detail: "PDF, CSVs, results screen" },
+  { title: "Collecting comments" },
+  { title: "Reading the brief" },
+  { title: "Labelling every comment" },
+  { title: "Double-checking the leftovers" },
+  { title: "Writing the report" },
 ];
 // Stepper row for each Run progress stage. queued is before the first row;
 // error has no row, so a failed run keeps the step where it stopped.
-const STAGE_TO_STEP = { queued: -1, collect: 0, brief: 1, brief_pause: 2, themes: 3, classify: 3, emotion: 4, report: 5, complete: 6 };
+// brief_pause shares the Brief row: it is a gate, not a stage of work, and
+// it replaces the whole step list with the Key Message review while it lasts.
+const STAGE_TO_STEP = { queued: -1, collect: 0, brief: 1, brief_pause: 1, themes: 2, classify: 2, emotion: 3, report: 4, complete: 5 };
 
 async function renderRun(runId) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
+  const seq = routeSeq;
   const run = await demoApi.getRun(runId);
   const session = await demoApi.getSession(run.sessionId);
+  if (seq !== routeSeq) return;
   const campaign = live
     ? ((session.campaigns && session.campaigns[0]) || null)
     : store.campaigns.get(session.campaignIds[0]);
@@ -2320,48 +2467,77 @@ async function renderRun(runId) {
     if (state.stage === "brief_pause") return "Waiting for you";
     return "Running";
   }
-  function topbarRightHtml() {
-    if (state.completed || state.failed) return "";
-    if (state.queuePosition != null) {
-      return '<button class="btn secondary" type="button" id="btn-leave-queue">Leave the queue</button>';
-    }
-    const btn = disWrap('<button class="btn secondary" type="button" disabled>Run in progress</button>', "A run is in progress. It finishes on its own.");
-    const note = live ? "" : '<span class="topbar-org" style="font-size:12px">No cancellation in this demo - a run always finishes.</span>';
-    return btn + note;
-  }
   function paintTopbar() {
     sessionTopbar({
       name: session.name,
       badgeHtml: `<span class="badge" id="run-badge">${esc(badgeText())}</span>`,
-      rightHtml: topbarRightHtml(),
+      rightHtml: "",
     });
-    const leave = document.getElementById("btn-leave-queue");
-    if (leave) leave.onclick = onLeaveQueue;
   }
-  async function onLeaveQueue(e) {
+  // One action row under the step list, so every run state offers its one
+  // next move in the same place.
+  function paintActions() {
+    if (state.failed) {
+      actionsEl.innerHTML = `
+        <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaignId}">Return to campaign</a>
+        <button class="btn primary" type="button" id="btn-fresh-run">Start a fresh run</button>`;
+    } else if (state.completed) {
+      actionsEl.innerHTML = `<a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open results</a>`;
+    } else {
+      actionsEl.innerHTML = `<button class="btn secondary" type="button" id="btn-cancel-run">${
+        state.queuePosition != null ? "Leave the queue" : "Cancel run"}</button>`;
+    }
+    const cancel = document.getElementById("btn-cancel-run");
+    if (cancel) cancel.onclick = onCancel;
+    const fresh = document.getElementById("btn-fresh-run");
+    if (fresh) fresh.onclick = onFreshRun;
+  }
+  // One endpoint stops a run whether it is queued or already going (#58).
+  // A queued run has nothing left to watch, so this returns to the campaign;
+  // a running one stays here, because its last snapshot is what confirms it
+  // actually stopped.
+  async function onCancel(e) {
     const btn = e.currentTarget;
+    const queued = state.queuePosition != null;
     btn.disabled = true;
+    btn.textContent = queued ? "Leaving…" : "Stopping…";
+    actionErrEl.innerHTML = "";
     try {
       await demoApi.leaveQueue(runId);
-      location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
+      if (queued) location.hash = `#/sessions/${session.id}/campaigns/${campaignId}`;
     } catch (err) {
-      // A 409 means the run started a moment ago; the next snapshot repaints it.
+      // The run may have started a moment ago; the next snapshot repaints it.
+      paintActions();
+      actionErrEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
+    }
+  }
+  async function onFreshRun(e) {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    actionErrEl.innerHTML = "";
+    try {
+      const r = await demoApi.startRun(session.id);
+      location.hash = `#/runs/${r.id}`;
+    } catch (err) {
       btn.disabled = false;
-      bannerEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
+      actionErrEl.innerHTML = `<div class="banner error" role="alert">${esc(err.message)}</div>`;
     }
   }
   paintTopbar();
 
   view.innerHTML = `
   <div class="run-layout">
-    <div class="run-main">
-      <div id="run-header" style="display:flex;flex-direction:column;gap:6px" aria-live="polite">
+    <div class="run-col">
+      <div id="run-header" class="run-head" aria-live="polite">
+        <div class="run-badge" id="run-state-badge" aria-hidden="true">${ICONS.clockLg}</div>
         <h1 class="run-title" id="run-title">Getting ready\u2026</h1>
         <p class="run-sub" id="run-sub">${live ? "Connecting to the server\u2026" : "This demo runs on fixture data in about half a minute."}</p>
       </div>
-      <div id="run-banner"></div>
-      <div id="brief-review" hidden></div>
       <div class="stepper" id="stepper"></div>
+      <div class="run-actions" id="run-actions"></div>
+      <div id="run-action-err"></div>
+      <p class="run-reliability" id="run-reliability"></p>
+      <div id="brief-review" hidden></div>
       ${live ? "" : `
       <details class="demo-controls">
         <summary>Demo controls</summary>
@@ -2374,24 +2550,15 @@ async function renderRun(runId) {
         </div>
       </details>`}
     </div>
-    <div class="run-rail">
-      <div class="rail-card">
-        <div class="rail-kicker">LIVE COUNTS</div>
-        <div style="display:flex;flex-direction:column;gap:13px">
-          <div class="count-row"><span class="k">Comments labelled</span><span class="v" id="cnt-labelled">${live ? "—" : "0"}</span></div>
-          <div class="count-row"><span class="k">Themes in play</span><span class="v" id="cnt-themes">\u2014</span></div>
-          <div class="count-row"><span class="k">Landing in "Other"</span><span class="v pink" id="cnt-other">\u2014</span></div>
-        </div>
-      </div>
-      <p class="run-reliability" id="run-reliability"></p>
-    </div>
   </div>`;
 
   const layoutEl = view.querySelector(".run-layout");
   const stepperEl = document.getElementById("stepper");
   const titleEl = document.getElementById("run-title");
   const subEl = document.getElementById("run-sub");
-  const bannerEl = document.getElementById("run-banner");
+  const badgeEl = document.getElementById("run-state-badge");
+  const actionsEl = document.getElementById("run-actions");
+  const actionErrEl = document.getElementById("run-action-err");
   const briefEl = document.getElementById("brief-review");
   // Edits stay in the page until confirm, so the server only learns the
   // review is alive from these pings; an idle review stops the run (live).
@@ -2403,9 +2570,6 @@ async function renderRun(runId) {
   }
   ["input", "change", "click", "keydown", "focusin", "pointermove", "wheel"].forEach((type) =>
     briefEl.addEventListener(type, noteReviewActivity, { passive: true }));
-  const cntLabelled = document.getElementById("cnt-labelled");
-  const cntThemes = document.getElementById("cnt-themes");
-  const cntOther = document.getElementById("cnt-other");
   const reliabilityEl = document.getElementById("run-reliability");
 
   let reconnectAttempts = 0;
@@ -2415,44 +2579,62 @@ async function renderRun(runId) {
   briefPointsSnapshot = briefPointsSnapshot.slice().sort((a, b) => a.order - b.order);
 
   // paintSteps() rebuilds every row on each progress tick, so the CSS
-  // insertion animation would replay on all six. Mark only the row whose
+  // insertion animation would replay on all five. Mark only the row whose
   // index just became currentStep, and only on that first paint.
   let paintedStep = currentStep;
 
   function paintSteps() {
     const d = state.counts;
+    const themeText = d.themes != null ? `${d.themes} ${d.themes === 1 ? "theme" : "themes"}` : "";
     stepperEl.innerHTML = STEP_DEFS.map((s, i) => {
       const done = currentStep > i || state.completed;
       const cur = !state.completed && currentStep === i && !state.failed;
+      // The row the run stopped on stays legible, so a failure still shows
+      // how far it got rather than reading as never started.
+      const stopped = state.failed && currentStep === i;
       const glyph = done
         ? `<div class="step-dot done">${ICONS.check}</div>`
-        : cur ? `<div class="step-dot current" role="img" aria-label="In progress"></div>` : `<div class="step-dot"></div>`;
+        : cur ? `<div class="step-dot current" role="img" aria-label="In progress"></div>`
+        : stopped ? `<div class="step-dot stopped" role="img" aria-label="Stopped here"></div>`
+        : `<div class="step-dot"></div>`;
       const line = i < STEP_DEFS.length - 1 ? `<div class="step-line"></div>` : "";
-      let detail = s.detail;
-      let extra = "";
+      let detail = "";
+      let count = "";
       let bar = "";
-      if (i === 2) { // Key Message review
-        if (run.skipPause) detail = "Skipped";
-        else if (done) {
-          const total = briefPointsSnapshot.length;
-          const included = briefPointsSnapshot.filter((p) => p.included).length;
-          detail = total ? `You confirmed ${included} of ${total}` : "";
-        } else detail = "";
-      } else if (i === 3 && state.stage === "classify" && d.total != null) { // Classify, active
-        extra = `${fmtNum(d.labelled || 0)} of ${fmtNum(d.total)} labelled`;
-        bar = `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`;
-      } else if (i === 5) { // Report
-        extra = "report.pdf, four small CSVs, and comments.csv";
+      if (i === 0 && done && d.total != null) { // Collect
+        count = fmtNum(d.total);
+      } else if (i === 1) { // Brief, and the Key Message gate that follows it
+        if (done && briefPointsSnapshot.length) {
+          count = String(briefPointsSnapshot.filter((p) => p.included).length);
+        }
+        if (run.skipPause && (done || cur)) detail = "Key Message review skipped";
+      } else if (i === 2) { // Labelling: themes, then every comment
+        if (cur) {
+          const parts = [];
+          if (d.total != null) {
+            parts.push(`${fmtNum(d.labelled || 0)} of ${fmtNum(d.total)} labelled`);
+            count = Math.round(100 * (d.labelled || 0) / (d.total || 1)) + "%";
+            bar = `<div class="progressbar"><div style="width:${Math.round(100 * (d.labelled || 0) / (d.total || 1))}%"></div></div>`;
+          }
+          if (d.batch != null && d.batches != null) parts.push(`batch ${d.batch} of ${d.batches}`);
+          if (themeText) parts.push(themeText);
+          detail = parts.join(" · ");
+        } else if (done) {
+          if (d.labelled != null) count = fmtNum(d.labelled);
+          detail = themeText;
+        }
+      } else if (i === 4 && (done || cur)) { // Report
+        detail = "report.pdf, four small CSVs, and comments.csv";
       }
-      const name = detail ? `${s.title} - ${detail}` : s.title;
       return `
       <div class="step-row${i === currentStep && currentStep !== paintedStep ? " advanced" : ""}">
         <div class="step-glyph">${glyph}${line}</div>
         <div class="step-body">
-          <div class="step-name ${done || cur ? "" : "pending"}">${esc(name)}</div>
-          ${extra ? `<div class="step-detail ${done || cur ? "" : "pending"}">${esc(extra)}</div>` : ""}
+          <div class="step-name ${done || cur || stopped ? "" : "pending"}">${esc(s.title)}</div>
+          ${detail ? `<div class="step-detail ${done || cur ? "" : "pending"}">${esc(detail)}</div>` : ""}
           ${bar}
         </div>
+        ${count ? `<div class="step-count">${esc(count)}</div>` : ""}
       </div>`;
     }).join("");
     paintedStep = currentStep;
@@ -2461,20 +2643,10 @@ async function renderRun(runId) {
   function totalComments() {
     return state.counts.total != null ? state.counts.total : null;
   }
-  function paintCounts() {
-    const d = state.counts;
-    if (d.labelled != null) cntLabelled.textContent = fmtNum(d.labelled);
-    else if (state.completed && !live) cntLabelled.textContent = fmtNum(totalComments());
-    else if (live) cntLabelled.textContent = "—";
-    if (d.themes != null) cntThemes.textContent = String(d.themes);
-    else if (currentStep >= 3 && !live) cntThemes.textContent = "7";
-    if (d.otherShare != null) cntOther.textContent = d.otherShare.toFixed(1) + "%";
-    else if (d.other != null) cntOther.textContent = d.other + "%";
-    else if (currentStep >= 4 && !live) cntOther.textContent = "6%";
-  }
   function paintReliability() {
     const total = totalComments();
-    let text = "Under about 100 comments the percentages here aren't reliable.";
+    let text = "Every percentage in the report comes from counting these labels, nothing is estimated."
+      + " Under about 100 comments the percentages aren't reliable.";
     if (total != null) {
       text += total >= 100 ? " This Session is well past that." : ` This Session has ${total}, so read them as directional.`;
     }
@@ -2484,73 +2656,50 @@ async function renderRun(runId) {
   function paintHeader() {
     layoutEl.classList.toggle("reviewing", state.stage === "brief_pause");
     paintTopbar();
+    // The badge and the headline carry the run state; the step list below
+    // stays exactly where it stopped, so a failure still shows how far it got.
+    let tone = "running";
     if (state.failed) {
+      tone = "failed";
       titleEl.textContent = "This run stopped";
-      subEl.textContent = "Nothing was written. Your campaign setup is untouched.";
-      bannerEl.innerHTML = `
-        <div class="banner error" role="alert">
-          <div style="flex:1">${esc(state.failed)}</div>
-        </div>
-        <div style="display:flex;gap:10px;margin-top:12px">
-          <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${campaignId}">Return to campaign</a>
-          <button class="btn primary" type="button" id="btn-fresh-run">Start a fresh run</button>
-        </div>
-        <div id="fresh-run-err"></div>`;
-      const fresh = document.getElementById("btn-fresh-run");
-      if (fresh) fresh.addEventListener("click", async () => {
-        const errEl = document.getElementById("fresh-run-err");
-        errEl.innerHTML = "";
-        fresh.disabled = true;
-        try {
-          const r = await demoApi.startRun(session.id);
-          location.hash = `#/runs/${r.id}`;
-        } catch (err) {
-          fresh.disabled = false;
-          errEl.innerHTML = `<div class="banner error" role="alert" style="margin-top:12px">${esc(err.message)}</div>`;
-        }
-      });
+      subEl.textContent = state.failed;
     } else if (state.completed) {
+      tone = "complete";
       titleEl.textContent = "Results are ready";
       subEl.textContent = "Every theme, the sentiment, and the comments behind every number.";
-      bannerEl.innerHTML = `
-        <div class="banner warn" role="status">
-          <div style="flex:1">Run complete.</div>
-          <a class="btn primary" href="#/runs/${runId}/results" id="btn-results">Open results</a>
-        </div>`;
     } else if (state.disconnected) {
+      tone = "waiting";
       titleEl.textContent = "Reconnecting\u2026";
-      subEl.textContent = "The connection dropped. The analysis is still running - progress picks up where it left off.";
-      bannerEl.innerHTML = `
-        <div class="banner warn" role="status">
-          <span class="spinner sm" aria-hidden="true"></span>
-          <div style="flex:1">Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}. No progress is lost.</div>
-        </div>`;
+      subEl.textContent = `Connection lost - retrying${reconnectAttempts ? ` (attempt ${reconnectAttempts})` : ""}.`
+        + " The analysis keeps running and no progress is lost.";
     } else if (state.queuePosition != null) {
       const n = state.queuePosition;
+      tone = "waiting";
       titleEl.textContent = "Waiting for another analysis to finish";
       subEl.textContent = (n === 1 ? "This run is next in line."
         : `${n - 1} other ${n === 2 ? "run is" : "runs are"} waiting ahead of this one.`)
         + " It starts on its own - you can leave this page.";
+    } else if (state.stage === "brief_pause") {
+      titleEl.textContent = "Confirm the Key Messages before we label";
+      subEl.textContent = "This is the one decision point. Everything after this is automatic."
+        + (live ? " If another analysis is waiting, the run stops after 10 minutes with no activity here." : "");
     } else {
       const total = totalComments();
-      const labelling = total != null ? `Labelling ${fmtNum(total)} comments` : "Labelling comments";
-      const msg = {
-        queued: "Starting the run",
-        collect: "Collecting comments and transcripts",
-        brief: "Reading the brief against the transcripts",
-        brief_pause: "Confirm the Key Messages before we label",
-        themes: labelling,
-        classify: labelling,
-        emotion: "Reading Sentiment and Emotion",
-        report: "Writing the report",
-      }[state.stage] || "Starting the run";
-      titleEl.textContent = msg;
-      subEl.textContent = state.stage === "brief_pause"
-        ? "This is the one decision point. Everything after this is automatic."
-          + (live ? " If another analysis is waiting, the run stops after 10 minutes with no activity here." : "")
-        : "You can leave this page - the Session list will show the same status when you're back.";
-      if (state.stage !== "brief_pause") bannerEl.innerHTML = "";
+      titleEl.textContent = total != null ? `Reading ${fmtNum(total)} comments` : "Reading the comments";
+      const { estimatedLowSeconds: low, estimatedHighSeconds: high } = state.counts;
+      let etaText = "";
+      if (low != null && high != null) {
+        const lowMin = fmtMinutes(low), highMin = fmtMinutes(high);
+        etaText = (lowMin === highMin ? `Usually about ${lowMin} min for a Session this size. `
+          : `Usually ${lowMin}-${highMin} min for a Session this size. `);
+      }
+      subEl.textContent = etaText
+        + "You can leave this page - the Session list will show the same status when you're back.";
     }
+    badgeEl.className = `run-badge ${tone}`;
+    badgeEl.innerHTML = tone === "complete" ? ICONS.checkLg
+      : tone === "failed" ? ICONS.alertLg : ICONS.clockLg;
+    paintActions();
     paintReliability();
   }
 
@@ -2734,7 +2883,6 @@ async function renderRun(runId) {
 
   function onEvent(snapshot) {
     applySnapshot(snapshot);
-    paintCounts();
 
     if (snapshot.stage === "brief_pause" && !briefRendered) {
       briefRendered = true;
@@ -2770,7 +2918,6 @@ async function renderRun(runId) {
     state.disconnected = false;
     reconnectAttempts = 0;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    bannerEl.innerHTML = "";
     paintHeader();
     paintSteps();
   }
@@ -2780,7 +2927,6 @@ async function renderRun(runId) {
   // with no SSE replay required.
   paintHeader();
   paintSteps();
-  paintCounts();
   if (state.stage === "brief_pause") {
     briefRendered = true;
     renderBriefReviewFresh();
@@ -2828,11 +2974,13 @@ function evSafeId(id) {
 async function renderResults(runId) {
   setSidebarActive("sessions");
   const live = demoApi.mode === "live";
+  const seq = routeSeq;
   let report;
   try {
     report = await demoApi.getReport(runId);
   } catch {
     const run = await demoApi.getRun(runId);
+    if (seq !== routeSeq) return;
     view.innerHTML = `
     <div class="view-pad">
       <div class="empty-block">
@@ -2850,16 +2998,18 @@ async function renderResults(runId) {
   // Demo: artifacts come from store. Both already filtered/sorted to the six
   // public kinds in contract order by listArtifacts.
   const artifacts = await demoApi.listArtifacts(runId);
-  const byKind = new Map(artifacts.map((a) => [a.kind, a]));
+  if (seq !== routeSeq) return;
+  const byKind =new Map(artifacts.map((a) => [a.kind, a]));
   const pdf = byKind.get("report_pdf");
   report._totalComments = session.commentCount || 0;
 
   const exportItems = PUBLIC_ARTIFACTS.filter((m) => m.kind !== "report_pdf").map((meta) => {
     const art = byKind.get(meta.kind);
-    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(meta.filename)}</button>`;
+    const btn = `<button class="export-item" type="button" data-artifact="${meta.kind}"${art ? "" : " disabled"}>${esc(art ? artifactDownloadName(art, session.name) : meta.filename)}</button>`;
     return art ? btn : disWrap(btn, "This file was not generated.");
   }).join("");
   const rightHtml = `
+    <a class="btn secondary" href="#/sessions/${session.id}/campaigns/${session.campaignIds[0]}">Re-run analysis</a>
     <details class="export-menu">
       <summary class="btn secondary">Export CSVs</summary>
       <div class="export-list" role="group" aria-label="CSV downloads">${exportItems}</div>
@@ -2881,7 +3031,7 @@ async function renderResults(runId) {
   topbar.querySelectorAll("[data-artifact]").forEach((b) => {
     b.addEventListener("click", () => {
       const art = byKind.get(b.dataset.artifact);
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
       // A CSV pick closes the menu; focus goes back to its summary so it is
       // not lost on a now-hidden item.
       const menu = b.closest("details");
@@ -3166,13 +3316,13 @@ async function renderResults(runId) {
     const seeAllBtn = e.target.closest("[data-see-all]");
     if (seeAllBtn && !seeAllBtn.disabled) {
       const art = byKind.get("comments_csv");
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
       return;
     }
     const csvBtn = e.target.closest("[data-section-csv]");
     if (csvBtn && !csvBtn.disabled) {
       const art = byKind.get(csvBtn.dataset.sectionCsv);
-      if (art) downloadArtifact(art, topbarErr);
+      if (art) downloadArtifact(art, session.name, topbarErr);
     }
   });
 
@@ -3198,14 +3348,18 @@ async function renderFiles() {
       <span class="topbar-search-wrap">${ICONS.search}<input type="search" id="files-search" class="topbar-search" placeholder="Search files" aria-label="Search files"></span>
     </div>`);
 
+  const seq = routeSeq;
   const files = await demoApi.listFiles();
+  if (seq !== routeSeq) return;
   const shown = files.filter((f) =>
     filesFilter === "all" ? true : filesFilter === "added" ? f._file === "asset" : f._file === "artifact");
 
+  const fileSessionName = (f) =>
+    f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
   const rows = shown.map((f) => {
-    const sessionName = f.sessionName || f.campaignName || (store.campaigns.get(f.campaignId) || {}).name || null;
+    const sessionName = fileSessionName(f);
     const isArtifact = f._file === "artifact";
-    const displayName = isArtifact ? f.filename : f.name;
+    const displayName = isArtifact ? artifactDownloadName(f, sessionName) : f.name;
     const ext = isArtifact ? (f.contentType === "application/pdf" ? "PDF" : "CSV")
       : f.kind === "article" ? null : (f.name.split(".").pop() || "").toUpperCase().slice(0, 4);
     const icon = f.kind === "article"
@@ -3299,7 +3453,7 @@ async function renderFiles() {
       const item = files.find((x) => x.id === b.dataset.dlFile);
       if (!item) return;
       if (b.dataset.kind === "artifact") {
-        await downloadArtifact(item, filesDlErr);
+        await downloadArtifact(item, fileSessionName(item), filesDlErr);
       } else {
         try {
           const blob = await demoApi.getAssetData(item.id);
@@ -3320,7 +3474,12 @@ async function renderFiles() {
         try {
           const a = await demoApi.getArtifact(item.id);
           const url = URL.createObjectURL(a.content);
-          openModal(a.filename + (live ? "" : " (demo data)"), `<iframe src="${url}" title="Preview of ${esc(a.filename)}"></iframe>`, url);
+          const name = artifactDownloadName(item, fileSessionName(item));
+          // The PDF viewer's own save names the file after the blob URL, so the
+          // modal carries a named download link.
+          openModal(name + (live ? "" : " (demo data)"),
+            `<iframe src="${url}" title="Preview of ${esc(name)}"></iframe>`, url,
+            `<a class="btn secondary" href="${url}" download="${esc(name)}">Download</a>`);
           filesDlErr.textContent = "";
         } catch {
           filesDlErr.textContent = "Download failed. Try again.";
@@ -3345,7 +3504,9 @@ async function renderUsers() {
     throw new Error("Only admins can manage users.");
   }
   view.innerHTML = `<div class="view-pad"><span class="spinner" role="status" aria-label="Loading users"></span></div>`;
+  const seq = routeSeq;
   const users = await window.__liveApi.listUsers();
+  if (seq !== routeSeq) return;
 
   const cols = "1.6fr 1fr .9fr .9fr 190px";
   const rows = users.map((u) => {
@@ -3455,6 +3616,7 @@ async function route() {
   suppressDirtyGuard = false;
   cleanupRoute();
   activeDirtySessionId = null;
+  const seq = ++routeSeq;
   const hash = location.hash || "#/home";
   currentRouteHash = hash;
   const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
@@ -3470,6 +3632,7 @@ async function route() {
     else if (parts[0] === "users") await renderUsers();
     else await renderHome();
   } catch (err) {
+    if (seq !== routeSeq) return;
     setTopbar('<div class="topbar-left"><span class="topbar-title">Resonance</span></div><div class="topbar-right"></div>');
     view.innerHTML = `
     <div class="view-pad">

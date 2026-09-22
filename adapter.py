@@ -13,6 +13,7 @@ import re
 import shutil
 import threading
 import uuid
+from datetime import datetime
 
 import pandas as pd
 
@@ -79,10 +80,10 @@ def start_next() -> None:
 
 def _clear_prior_runs(session_id: str, run_id: str) -> None:
     """Delete the Session's earlier runs and their files. Done when the new
-    run starts, not when it is queued, so leaving the queue keeps the old
-    result. None of them can be running: this run holds the only slot.
-    Hard overwrite, no run history; keep rows and add a `latest`
-    flag if history is ever wanted."""
+    run starts, not when it is queued, so leaving the queue or stopping the
+    run before this point keeps the old result. None of them can be running:
+    this run holds the only slot. Hard overwrite, no run history; keep rows
+    and add a `latest` flag if history is ever wanted."""
     conn = db.get_conn()
     try:
         for (old_id,) in conn.execute(
@@ -261,6 +262,58 @@ def _build_config(run_id: str | None, session_row: dict, campaign: dict,
         REPORT_LANGUAGE="English",
         KEEP_INTERMEDIATE=False,
     )
+
+
+def _record_run_config(run_id: str, model: str, batch_size: int) -> None:
+    """Snapshot this run's classify settings, so a later run's duration
+    estimate (_estimate_duration_seconds) only samples completed runs that
+    used the same ones."""
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE runs SET llm_model = ?, classify_batch_size = ? WHERE id = ?",
+                     (model, batch_size, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# A run's duration estimate needs at least this many same-settings completed
+# runs, or it says nothing rather than guess from one or two data points.
+_ESTIMATE_MIN_SAMPLES = 3
+
+
+def _estimate_duration_seconds(model: str, batch_size: int,
+                                total_comments: int) -> tuple[int, int] | None:
+    """(low, high) wall-clock seconds for a run of total_comments comments,
+    from completed runs that used the same model and batch size. None below
+    _ESTIMATE_MIN_SAMPLES matching runs, or for a Session with no comments.
+
+    The range is the min and max seconds-per-comment actually observed,
+    scaled to this run's count - not a made-up spread around a point
+    estimate."""
+    if total_comments <= 0:
+        return None
+    conn = db.get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT started_at, finished_at, "
+            "CAST(json_extract(progress, '$.counts.total') AS INTEGER) AS total "
+            "FROM runs WHERE state = 'complete' AND llm_model = ? AND classify_batch_size = ? "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL",
+            (model, batch_size)).fetchall()
+    finally:
+        conn.close()
+    rates = []
+    for row in rows:
+        if not row["total"]:
+            continue
+        seconds = (datetime.fromisoformat(row["finished_at"])
+                   - datetime.fromisoformat(row["started_at"])).total_seconds()
+        if seconds > 0:
+            rates.append(seconds / row["total"])
+    if len(rates) < _ESTIMATE_MIN_SAMPLES:
+        return None
+    return round(min(rates) * total_comments), round(max(rates) * total_comments)
 
 
 # Evidence builder (for report.json)
@@ -910,6 +963,10 @@ def _execute(run_id: str) -> None:
 
         # --- 1. Replace the Session's prior result --------------------------
         run_row     = _load_run(run_id)
+        # Before the overwrite, so it is also the first cancel checkpoint: a
+        # run stopped between the claim and here must leave the Session's
+        # previous result alone, which is what leaving the queue promises.
+        progress.publish(run_id, "collect", "Assembling asset context", 2)
         _clear_prior_runs(run_row["session_id"], run_id)
         session_row = _load_session(run_row["session_id"])
         campaign    = _load_campaign(run_row["session_id"])
@@ -923,7 +980,6 @@ def _execute(run_id: str) -> None:
         # Text extraction and article fetching happen at asset-creation time
         # (server.py's upload/article routes), not here. This stage only
         # assembles what was already extracted into the run's context.
-        progress.publish(run_id, "collect", "Assembling asset context", 2)
         campaign_context_parts = []
         images_by_group: dict[str, list[tuple[bytes, str]]] = {}
 
@@ -962,6 +1018,7 @@ def _execute(run_id: str) -> None:
         # --- 3. Build config ------------------------------------------------
         cfg = _build_config(run_id, session_row, campaign, videos,
                             campaign_context)
+        _record_run_config(run_id, cfg.LLM_MODEL, cfg.CLASSIFY_BATCH_SIZE)
 
         # --- 4. Snapshot Session Key Messages into this run -----------------
         # Immutable from here: this run never writes back to key_messages
@@ -977,9 +1034,13 @@ def _execute(run_id: str) -> None:
         comments_df, meta_df = collect.fetch(cfg)
         comments_df = collect.clean(comments_df, cfg)
         base_df = comments_df[comments_df["in_base"]].reset_index(drop=True)
+        estimate = _estimate_duration_seconds(
+            cfg.LLM_MODEL, cfg.CLASSIFY_BATCH_SIZE, len(base_df))
+        estimate_counts = ({"estimated_low_seconds": estimate[0],
+                            "estimated_high_seconds": estimate[1]} if estimate else {})
         progress.publish(run_id, "collect",
                          f"Collected {len(base_df)} comments in analysis base", 20,
-                         total=len(base_df))
+                         total=len(base_df), **estimate_counts)
 
         # --- 6. Brief: reconcile the snapshot against transcripts -----------
         # brief.reconcile() keeps edited entries and stable ids verbatim,
@@ -1050,8 +1111,7 @@ def _execute(run_id: str) -> None:
         theme_table, transfer_table = analyze.summarise(base_df, columns)
         progress.publish(run_id, "classify",
                          f"Classification complete - {other_share:.0f}% Other", 65,
-                         themes=len(themes), labelled=len(base_df),
-                         other_share=round(other_share, 1))
+                         themes=len(themes), labelled=len(base_df))
 
         # --- 10. Emotion and sentiment ---------------------------------------
         progress.publish(run_id, "emotion", "Running emotion and sentiment analysis", 67)
@@ -1108,6 +1168,23 @@ def _execute(run_id: str) -> None:
         # --- 14. Mark complete ----------------------------------------------
         progress.finish(run_id)
 
+    except progress.Cancelled:
+        # The row is already terminal (cancelled, or replaced by a later
+        # run), so there is nothing to record. Not a failure, so no
+        # logger.exception: a deliberate stop should not look like a crash.
+        #
+        # Ceiling: the thread only notices at its next publish, and the gaps
+        # between them are whole pipeline calls. Classify checkpoints per
+        # batch, but collect, brief and report each hold one model call, and
+        # llm._call retries 3 times at LLM_TIMEOUT_SECONDS, so an
+        # unreachable LM Studio can stretch a single gap to roughly half an
+        # hour. Two consequences, both accepted for now: the user sees the
+        # run as stopped long before the thread exits, and the freed slot
+        # lets the next run start while this one is still computing, so one
+        # GPU can briefly carry two. To tighten it, pass a cancel poll into
+        # brief.reconcile and report.write the way classify already takes
+        # on_progress.
+        logger.info("run %s stopped before finishing", run_id)
     except progress.ReviewExpired:
         logger.info("run %s stopped: Key Message review idle", run_id)
     except Exception as exc:

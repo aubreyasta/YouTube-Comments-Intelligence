@@ -8,7 +8,8 @@ order, when the slot frees. A Session's own running run is never
 overwritten (409); its own queued run is replaced by the new request,
 which keeps its place in line.
 The Session's finished runs survive until its new run starts, so leaving
-the queue keeps the old result.
+the queue keeps the old result. DELETE also stops a running run, which
+ends it as failed and frees the slot.
 
 Every test clears the runs table first, so no test depends on another
 test's leftover rows. adapter._execute (the pipeline) is replaced by a
@@ -259,7 +260,10 @@ def test_prior_result_is_replaced_when_the_new_run_starts():
     print("  ok  the prior result is replaced when the new run starts, other Sessions untouched")
 
 
-def test_leaving_the_queue_leaves_the_active_run_alone():
+def test_delete_removes_a_queued_run_and_stops_a_running_one():
+    """A queued run leaves the queue; a running one is marked stopped. Its
+    files stay: the thread may still be writing to them, so they are left to
+    the next run's _clear_prior_runs like any other failed run's."""
     _clear_runs()
     running = _seed_run(_new_session(), "running")
     sentinel = _seed_sentinel_file(running)
@@ -268,11 +272,20 @@ def test_leaving_the_queue_leaves_the_active_run_alone():
 
     assert client.delete(f"/api/runs/{queued}").status_code == 204
     assert client.delete(f"/api/runs/{queued}").status_code == 204, "not idempotent"
-    resp = client.delete(f"/api/runs/{running}")
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["error"] == "CONFLICT", resp.json()
-    assert _states() == {running: "running"} and sentinel.exists()
-    print("  ok  cancelling a queued run is idempotent; a running run is refused and untouched")
+    assert client.delete(f"/api/runs/{running}").status_code == 204
+    assert _states() == {running: "failed"}, _states()
+    assert sentinel.exists(), "stopping a run deleted files its thread may still be writing"
+
+    conn = db.get_conn()
+    try:
+        assert conn.execute(
+            "SELECT error FROM runs WHERE id = ?", (running,)
+        ).fetchone()["error"] == "Stopped at your request."
+    finally:
+        conn.close()
+
+    assert client.delete(f"/api/runs/{running}").status_code == 204, "not idempotent"
+    print("  ok  DELETE takes a queued run out of the queue and stops a running one")
 
 
 def test_startup_fails_running_runs_and_resumes_the_queue():
@@ -337,7 +350,7 @@ if __name__ == "__main__":
         test_two_concurrent_starts_leave_exactly_one_running_run,
         test_prior_result_survives_queueing_and_leaving_the_queue,
         test_prior_result_is_replaced_when_the_new_run_starts,
-        test_leaving_the_queue_leaves_the_active_run_alone,
+        test_delete_removes_a_queued_run_and_stops_a_running_one,
         test_startup_fails_running_runs_and_resumes_the_queue,
         test_failed_claim_is_retried_not_raised,
     ]

@@ -264,6 +264,19 @@
   check("subscriber receives the error snapshot", seen2.some((e) => e.stage === "error" && e.error === failedRun.error));
   unsub2();
 
+  // stopping a running run: ends it, carries the reason, is safe to repeat
+  const run3 = await api.startRun(session.id);
+  await until(() => api.getRun(run3.id).then((r) => r.stage !== "queued"), 8000, "run3 started");
+  await api.leaveQueue(run3.id);
+  const stopped = await api.getRun(run3.id);
+  check("stopping a running run ends it",
+    stopped.status === "failed" && stopped.stage === "error");
+  check("a stopped run says it was stopped", stopped.error === "Stopped at your request.");
+  await api.leaveQueue(run3.id);
+  const stoppedAgain = await api.getRun(run3.id);
+  check("stopping an already stopped run changes nothing",
+    stoppedAgain.error === "Stopped at your request.");
+
   // --- Key Messages: demo/live method parity ---
   check("demoApi has Key Message methods",
     typeof api.getKeyMessages === "function" && typeof api.draftKeyMessages === "function"
@@ -1424,6 +1437,15 @@
     const origOpen = win.open;
     win.open = function () { throw new Error("must not navigate directly for artifact download"); };
     let getArtifactCalledWith = null;
+    let savedAs = null;
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { savedAs = this.download; };
+    // Fixed finish time and a name with Windows-forbidden characters, so the
+    // expected download name is a literal rather than a copy of the formula.
+    const origGetSession = api.getSession, origListArtifacts = api.listArtifacts;
+    const finished = new Date(2026, 8, 19, 14, 30).toISOString();
+    api.getSession = async (id) => ({ ...(await origGetSession.call(api, id)), name: ' a/b:c*?". ' });
+    api.listArtifacts = async (id) => (await origListArtifacts.call(api, id)).map((x) => ({ ...x, addedAt: finished }));
     api.getArtifact = async function (id) {
       getArtifactCalledWith = id;
       return { id, runId: run.id, kind: "themes_csv", filename: "themes.csv", contentType: "text/csv",
@@ -1438,8 +1460,13 @@
       fireClick(btn);
       await sleep(20);
       check("T3.5: Results click fetches via demoApi.getArtifact, not downloadUrl", getArtifactCalledWith !== null);
+      check("#41: download is named <Session>-<local finish time>-<File>, minus Windows-forbidden characters",
+        savedAs === "abc-2026-09-19 1430-Themes.csv");
     } finally {
       api.getArtifact = origGetArtifact;
+      api.getSession = origGetSession;
+      api.listArtifacts = origListArtifacts;
+      HTMLAnchorElement.prototype.click = origClick;
       win.open = origOpen;
     }
   }
@@ -1572,17 +1599,19 @@
     check("Drafts pill present", !!draftsPill);
     fireClick(draftsPill);
     await sleep(20);
-    const draftRow = Array.from(kmView.querySelectorAll(".trow")).find(
-      (r) => r.dataset.name === "draft check session");
-    check("Draft session appears under Drafts filter", !!draftRow);
-    check("Draft session shows exact status copy",
-      !!draftRow && draftRow.textContent.includes("Draft - no videos yet"));
+    const draftCard = Array.from(kmView.querySelectorAll(".session-card")).find(
+      (c) => c.dataset.name === "draft check session");
+    check("Draft session appears under Drafts filter", !!draftCard);
+    check("Draft card shows exact status and meta copy",
+      !!draftCard && draftCard.textContent.includes("Draft")
+      && draftCard.textContent.includes("No videos yet")
+      && draftCard.textContent.includes("Finish setup →"));
     const allPill = kmView.querySelector('[data-sf="all"]');
     fireClick(allPill);
     await sleep(20);
   }
 
-  // ---- 12c. Sessions: search filters rows by name without losing the query ----
+  // ---- 12c. Sessions: search filters cards by name without losing the query ----
   {
     await gotoHash("#/sessions");
     // The search lives in the topbar, outside #view.
@@ -1591,10 +1620,12 @@
     searchInput.value = "draft check";
     searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(20);
-    const visible = Array.from(kmView.querySelectorAll("#sessions-rows > .trow"))
-      .filter((r) => r.style.display !== "none");
-    check("sessions search filters to matching rows only",
-      visible.length > 0 && visible.every((r) => r.dataset.name.includes("draft check")));
+    const visible = Array.from(kmView.querySelectorAll("#sessions-grid > .session-card[data-name]"))
+      .filter((c) => c.style.display !== "none");
+    check("sessions search filters to matching cards only",
+      visible.length > 0 && visible.every((c) => c.dataset.name.includes("draft check")));
+    check("New session card survives a search that matches nothing else",
+      !!kmView.querySelector("#sessions-grid > .session-card.new"));
     searchInput.value = "";
     searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(20);

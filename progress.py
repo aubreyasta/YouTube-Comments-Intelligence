@@ -8,7 +8,8 @@ a second tab, and a live stream cannot disagree.
 
 Snapshot (camelCase, the same object over GET and SSE):
   {"stage": str, "pct": int, "message": str,
-   "counts": {"total", "labelled", "themes", "batch", "batches", "otherShare"},
+   "counts": {"total", "labelled", "themes", "batch", "batches",
+              "estimatedLowSeconds", "estimatedHighSeconds"},
    "error": str | None}
 """
 
@@ -54,6 +55,22 @@ class ReviewExpired(Exception):
     marked failed."""
 
 
+class Cancelled(BaseException):
+    """The run is no longer 'running', so its thread must unwind. Two causes,
+    both handled the same way: the user stopped the run (cancel()), or the
+    row was deleted by a later overwrite. Either way the row is already
+    terminal or gone, so the thread has nothing left to record.
+
+    BaseException, not Exception, on purpose: the run body and _build_prose
+    both catch Exception broadly, and either would otherwise record a stop
+    as an ordinary failure and carry on with the pipeline.
+
+    Never raise this inside a thread-pool worker. concurrent.futures catches
+    BaseException into the future, so it would surface at .result() and be
+    swallowed by the caller's except Exception. Checkpoints belong on the
+    run thread, which is where every publish() call already sits."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -96,15 +113,28 @@ def claim_next() -> str | None:
 
 def publish(run_id: str, stage: str, message: str, pct: int, **counts) -> None:
     """Set the stage and merge counts into the stored ones, so a later stage
-    never erases a count an earlier one set. A run deleted mid-flight by a
-    later overwrite updates nothing, which is fine."""
+    never erases a count an earlier one set.
+
+    Every call is also the run's cancellation checkpoint: the UPDATE only
+    matches a still-running row, so a cancelled run (or one deleted by a
+    later overwrite) raises Cancelled here and its thread unwinds. This is
+    why no separate check_cancelled() call sites exist.
+
+    Ceiling: a run stops at its next publish, so the granularity is whatever
+    sits between two of them. Classify checkpoints per batch, but collect,
+    brief and report each hold one long model or subprocess call, and with
+    LLM_TIMEOUT_SECONDS at 600 a worst-case gap is minutes. The user does
+    not wait on it (the row is already terminal), but a run that must stop
+    sooner needs a cancel poll passed into those pipeline calls."""
     assert stage in STAGES and stage not in TERMINAL, f"bad progress stage {stage!r}"
     patch = {"pct": pct, "message": message,
              "counts": {_camel(k): v for k, v in counts.items()}}
-    _write(run_id,
-           "UPDATE runs SET stage = ?, progress = json_patch(COALESCE(progress, '{}'), ?) "
-           "WHERE id = ?",
-           (stage, json.dumps(patch), run_id))
+    if not _write(run_id,
+                  "UPDATE runs SET stage = ?, "
+                  "progress = json_patch(COALESCE(progress, '{}'), ?) "
+                  "WHERE id = ? AND state = 'running'",
+                  (stage, json.dumps(patch), run_id)):
+        raise Cancelled(run_id)
 
 
 def await_review(run_id: str, skip: bool) -> None:
@@ -112,7 +142,7 @@ def await_review(run_id: str, skip: bool) -> None:
     The event exists before the stage is written, so a proceed() that lands
     right after the write always finds something to wake.
     Raises ReviewExpired after REVIEW_IDLE_SECONDS without touch_review(),
-    once another run is queued."""
+    once another run is queued, or Cancelled when cancel() woke it."""
     if skip:
         publish(run_id, "brief", "Brief ready - skipping review", 40)
         return
@@ -120,8 +150,12 @@ def await_review(run_id: str, skip: bool) -> None:
     with _lock:
         _review_events[run_id] = event
         _review_activity[run_id] = time.monotonic()
-    publish(run_id, "brief_pause", "Brief ready for review. Waiting for approval.", 40)
+    # Inside the try: the publish below is a checkpoint like any other, and
+    # a raise there must still drop this run's entries. A leaked entry would
+    # keep touch_review() answering 204 for a run that no longer exists.
     try:
+        publish(run_id, "brief_pause",
+                "Brief ready for review. Waiting for approval.", 40)
         # Idle time left, or once idle, the queue recheck interval.
         while not event.wait(_idle_left(run_id) or _QUEUE_POLL_SECONDS):
             if _idle_left(run_id) > 0:
@@ -137,10 +171,27 @@ def await_review(run_id: str, skip: bool) -> None:
                                f"{REVIEW_IDLE_SECONDS // 60} minutes while another analysis "
                                f"was waiting.", run_id)):
                 raise ReviewExpired(run_id)
+        # The wait ended, so either proceed() or cancel() set the event.
+        # Only proceed() leaves the run running. Without this check a
+        # cancelled run walks back into the pipeline and dies at the next
+        # publish, or earlier at the "all points excluded" guard, which
+        # records the wrong cause and logs a traceback for a deliberate stop.
+        if not _is_running(run_id):
+            raise Cancelled(run_id)
     finally:
         with _lock:
             _review_events.pop(run_id, None)
             _review_activity.pop(run_id, None)
+
+
+def _is_running(run_id: str) -> bool:
+    conn = db.get_conn()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM runs WHERE id = ? AND state = 'running'", (run_id,)
+        ).fetchone() is not None
+    finally:
+        conn.close()
 
 
 def _idle_left(run_id: str) -> float:
@@ -175,18 +226,48 @@ def proceed(run_id: str) -> None:
         event.set()
 
 
+def cancel(run_id: str) -> bool:
+    """Stop a running run. Marks the row terminal here, in the caller's
+    thread, so the stream closes and the page reads "stopped" within a poll;
+    the run thread notices at its next publish() and unwinds on its own.
+    False when the run is not running, so it is already finished or queued.
+
+    The same conditional-UPDATE shape as proceed() and the await_review
+    expiry: exactly one of them moves a run off 'running'."""
+    changed = _write(
+        run_id,
+        "UPDATE runs SET state = 'failed', stage = 'error', finished_at = ?, error = ? "
+        "WHERE id = ? AND state = 'running'",
+        (_now(), "Stopped at your request.", run_id))
+    if not changed:
+        return False
+    # A run parked at brief_pause is blocked in await_review, not between
+    # publishes, so nothing would reach a checkpoint until the idle timeout.
+    with _lock:
+        event = _review_events.get(run_id)
+    if event is not None:
+        event.set()
+    return True
+
+
 def is_paused(row) -> bool:
     return row["state"] == "running" and row["stage"] == "brief_pause"
 
 
 def finish(run_id: str, error: str | None = None) -> None:
+    """Record the run's terminal state. A run that is already terminal stays
+    as it is: the last publish is several steps before the success call and
+    nothing in between is a checkpoint, so without this guard a cancel
+    landing in that window would be overwritten and the run would read as
+    complete."""
     state, stage = ("failed", "error") if error else ("complete", "complete")
     patch = {"message": "Run failed" if error else "Run complete"}
     if not error:
         patch["pct"] = 100
     _write(run_id,
            "UPDATE runs SET state = ?, stage = ?, finished_at = ?, error = ?, "
-           "progress = json_patch(COALESCE(progress, '{}'), ?) WHERE id = ?",
+           "progress = json_patch(COALESCE(progress, '{}'), ?) "
+           "WHERE id = ? AND state IN ('queued', 'running')",
            (state, stage, _now(), error, json.dumps(patch), run_id))
 
 
@@ -256,9 +337,9 @@ if __name__ == "__main__":
     assert claim_next() == "r" and claim_next() is None, "claimed a second running run"
     assert load("r")["queuePosition"] is None and load("q3")["queuePosition"] == 2
     publish("r", "collect", "Collected", 20, total=3)
-    publish("r", "classify", "Batch 1", 55, labelled=2, themes=2, other_share=1.5)
+    publish("r", "classify", "Batch 1", 55, labelled=2, themes=2)
     snap = load("r")
-    assert snap["counts"] == {"total": 3, "labelled": 2, "themes": 2, "otherShare": 1.5}, snap
+    assert snap["counts"] == {"total": 3, "labelled": 2, "themes": 2}, snap
     assert snap["stage"] == "classify" and snap["pct"] == 55
 
     try:
@@ -278,7 +359,39 @@ if __name__ == "__main__":
     finish("r", "boom")
     snap = load("r")
     assert snap["stage"] == "error" and snap["error"] == "boom" and snap["counts"]["total"] == 3
+
+    # A terminal run stays as it is, and its thread is told to unwind.
+    finish("r")
+    assert load("r")["stage"] == "error", "finish() overwrote a terminal run"
+    try:
+        publish("r", "report", "Writing report", 77)
+        raise AssertionError("publish on a run that is not running must raise")
+    except Cancelled:
+        pass
+    assert not cancel("r"), "cancel() on a terminal run must report nothing to stop"
+
     assert claim_next() == "q2", "a finished run did not free the slot"
+
+    # Cancelling a paused run wakes it, and it unwinds instead of carrying on.
+    raised = []
+
+    def _review_until_cancelled():
+        try:
+            await_review("q2", False)
+        except Cancelled:
+            raised.append(True)
+
+    t = threading.Thread(target=_review_until_cancelled)
+    t.start()
+    while load("q2")["stage"] != "brief_pause":
+        time.sleep(0.01)
+    assert cancel("q2"), "cancel() on a running run must stop it"
+    t.join(2)
+    assert not t.is_alive(), "a cancelled review never woke"
+    assert raised, "a cancelled review returned instead of raising Cancelled"
+    assert load("q2")["error"] == "Stopped at your request."
+    assert not touch_review("q2"), "a cancelled review left its activity entry behind"
+
     fail_orphans()
-    assert load("q2")["stage"] == "error" and load("q3")["queuePosition"] == 1
+    assert load("q3")["queuePosition"] == 1
     print("progress self-check ok")

@@ -39,7 +39,7 @@ These are the only words used in this repo's prose. Code identifiers still carry
 
 **Run.** In order: scrape comments and transcripts, build the Theme book from a sample, then use one Qwen classification pass to label every comment with one Theme, zero or more Key Messages, one Sentiment, and one Emotion. Python validates the labels and counts the results.
 
-**Read the results.** Key Message travel as percentages with a positive and negative split, the Theme mix, overall Sentiment, overall Emotions, and a written summary. Every percentage is clickable and shows the comments behind it.
+**Read the results.** Key Message travel as percentages with a positive and negative split, the Theme mix, overall Sentiment, overall Emotions, and a written summary. Every percentage is clickable and shows the comments behind it. Opening a completed Session from the list goes straight to its results; "Re-run analysis" returns to the setup page.
 
 ---
 
@@ -63,6 +63,8 @@ Six files per run.
 | `themes.csv` | Theme frequencies. |
 | `sentiment.csv` | Sentiment breakdown. |
 | `emotions.csv` | Emotion breakdown. |
+
+Downloads are named `<Session>-<YYYY-MM-DD HHmm>-<File>`, stamped with the run's finish time in local time, for example `Spring Launch-2026-09-19 1430-Key Messages.csv`.
 
 The four small CSVs are shaped to be dropped straight into Google Slides or any chart tool. The pipeline draws no charts of its own on purpose, because the design team builds their own.
 

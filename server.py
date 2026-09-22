@@ -473,6 +473,41 @@ def _session_comment_count(session_id: str, conn) -> int:
         return 0
 
 
+def _session_top_line(session_id: str, conn) -> str | None:
+    """The opening paragraph of the latest complete run's written read.
+
+    The Sessions list shows it as the Session's verdict. It is the prose the
+    pipeline already wrote into report.json, not a second generation.
+    Returns None when there is no complete run, no report, or no prose.
+    """
+    run = conn.execute(
+        "SELECT id FROM runs WHERE session_id = ? AND state = 'complete' "
+        "ORDER BY finished_at DESC, rowid DESC LIMIT 1",
+        (session_id,)
+    ).fetchone()
+    if run is None:
+        return None
+    art = conn.execute(
+        "SELECT file_path FROM run_artifacts WHERE run_id = ? AND kind = 'report_json'",
+        (run["id"],)
+    ).fetchone()
+    if art is None:
+        return None
+    try:
+        with open(art["file_path"], encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return _first_paragraph(report.get("interpretation"))
+
+
+def _first_paragraph(prose) -> str | None:
+    """The first \\n\\n-separated paragraph of `prose`, or None if empty."""
+    if not isinstance(prose, str):
+        return None
+    return prose.split("\n\n")[0].strip() or None
+
+
 def _ser_session(row, conn) -> dict:
     sid = row["id"]
     campaigns = conn.execute(
@@ -503,6 +538,7 @@ def _ser_session(row, conn) -> dict:
         "createdBy": creator["email"] if creator else None,
         "campaignIds": campaign_ids,
         "commentCount": _session_comment_count(sid, conn),
+        "topLine": _session_top_line(sid, conn),
         "status": _session_status(sid, conn),
         "updatedAt": row["updated_at"],
         "createdAt": row["created_at"],
@@ -622,7 +658,7 @@ def _ser_run(row, conn) -> dict:
         **progress.read(row, conn),
         "skipPause": bool(row["skip_pause"]),
         "briefPoints": [_ser_brief_point(r) for r in bp_rows],
-        "artifacts": [_ser_artifact(a) for a in public_arts],
+        "artifacts": [_ser_artifact(a, row["finished_at"]) for a in public_arts],
     }
 
 
@@ -678,7 +714,8 @@ _ARTIFACT_CONTRACT = {
 }
 
 
-def _ser_artifact(row) -> dict:
+def _ser_artifact(row, added_at) -> dict:
+    """added_at is the Run's finished_at: a Run writes its files as it completes."""
     _order, filename, content_type, _public = _ARTIFACT_CONTRACT[row["kind"]]
     return {
         "id": row["id"],
@@ -687,6 +724,7 @@ def _ser_artifact(row) -> dict:
         "contentType": content_type,
         "downloadUrl": f"/api/runs/{row['run_id']}/artifacts/{row['id']}",
         "size": _file_size(row["file_path"]),
+        "addedAt": added_at,
     }
 
 
@@ -1567,20 +1605,26 @@ def get_run(run_id: str):
 
 
 @app.delete("/api/runs/{run_id}", status_code=204)
-def leave_queue(run_id: str):
-    """Take a queued run out of the queue. A running run has no stop path,
-    so it is refused. The conditional DELETE is the check, so a run claimed
-    a moment earlier is never deleted from under its thread."""
+def stop_run(run_id: str):
+    """Stop a run, whether it is waiting or already going. A queued run is
+    removed from the queue and keeps the Session's prior result. A running
+    one is marked stopped here, so the stream closes at once, while its
+    thread unwinds at its next checkpoint (progress.Cancelled).
+
+    The conditional DELETE runs first and is its own check, so a run claimed
+    a moment earlier is never deleted from under its thread: it falls
+    through to cancel() instead and is stopped properly. A run that is
+    already finished matches neither and returns 204, the same as an
+    unknown id."""
     conn = db.get_conn()
     try:
         deleted = conn.execute(
             "DELETE FROM runs WHERE id = ? AND state = 'queued'", (run_id,)).rowcount
         conn.commit()
-        if not deleted and conn.execute(
-                "SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone():
-            _409("This run has already started, so it can no longer leave the queue.")
     finally:
         conn.close()
+    if not deleted:
+        progress.cancel(run_id)
 
 
 # /api/runs/{id}/brief_points  PATCH

@@ -130,7 +130,8 @@ type RunProgress = {
     labelled?: number;   // comments labelled so far
     batch?: number;      // finished classify batches
     batches?: number;    // total classify batches
-    otherShare?: number; // percent left in `Other`, set when `classify` ends
+    estimatedLowSeconds?: number;  // set with `total` when 3+ completed runs
+    estimatedHighSeconds?: number; // share this run's model and batch size
   };
   error: string | null;
   queuePosition: number | null; // 1 = next to start; null once the run has started
@@ -161,10 +162,11 @@ type Artifact = {
   contentType: string;
   downloadUrl: string;
   size: number | null;
+  addedAt: string | null;
 };
 ```
 
-`size` is the stored file's size in bytes, or `null` when the file is missing on disk.
+`size` is the stored file's size in bytes, or `null` when the file is missing on disk. `addedAt` is the Run's finish time (ISO 8601), or `null` until the Run finishes.
 
 ---
 
@@ -254,6 +256,7 @@ Response `201`:
   "name": "Campaign analysis",
   "campaignIds": [],
   "commentCount": 0,
+  "topLine": null,
   "status": "ready",
   "updatedAt": "...",
   "createdAt": "...",
@@ -277,6 +280,8 @@ Error: `422` when `name` is empty.
 List Sessions newest first. Each item adds `campaignCount`.
 
 `status` is `ready`, `queued`, `running`, `complete`, or `failed`, derived from the latest run. `queued` means the Session's run waits in the queue. `commentCount` counts CSV records in the latest complete run's readable `comments_csv`; otherwise it is `0`.
+
+`topLine` is the opening paragraph of the written read in the latest complete run's `report_json`, which the Sessions list shows as the Session's verdict. It is `null` when the Session has no complete run, when the report is missing or unreadable, or when the run finished before the pipeline wrote prose.
 
 `latestRun` is `null` or:
 
@@ -525,11 +530,15 @@ Error: `404` run not found.
 
 ### `DELETE /runs/{id}`
 
-Remove a `queued` run from the queue. The running run and the Session's prior result are not changed.
+Stop a run, whether it is waiting or already going.
 
-Response `204`, also for an unknown id.
+A `queued` run is removed from the queue. The running run and the Session's prior result are not changed.
 
-Error: `409 CONFLICT` with `"This run has already started, so it can no longer leave the queue."`
+A `running` run is stopped. It ends as `status:"failed"`, `stage:"error"`, with `error` set to `"Stopped at your request."`, and the queue slot frees for the run behind it. The stream carries that final snapshot and closes, so the stop shows within about a second. The run's own thread stops at its next checkpoint, which is whatever stage boundary comes next: seconds during classification, longer inside a single model call. Nothing else waits on it.
+
+A run stopped before it overwrites anything leaves the Session's prior result in place, the same as leaving the queue. Once it is past that point the prior result is already gone, and a stopped run registers no artifacts of its own, so the Session has no result until the next run.
+
+Response `204`, also for an unknown id and for a run that has already finished.
 
 ### `PATCH /runs/{id}/brief_points`
 
