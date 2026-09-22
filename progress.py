@@ -8,7 +8,7 @@ a second tab, and a live stream cannot disagree.
 
 Snapshot (camelCase, the same object over GET and SSE):
   {"stage": str, "pct": int, "message": str,
-   "counts": {"total", "labelled", "themes", "batch", "batches", "otherShare",
+   "counts": {"total", "labelled", "themes", "batch", "batches",
               "estimatedLowSeconds", "estimatedHighSeconds"},
    "error": str | None}
 """
@@ -337,9 +337,9 @@ if __name__ == "__main__":
     assert claim_next() == "r" and claim_next() is None, "claimed a second running run"
     assert load("r")["queuePosition"] is None and load("q3")["queuePosition"] == 2
     publish("r", "collect", "Collected", 20, total=3)
-    publish("r", "classify", "Batch 1", 55, labelled=2, themes=2, other_share=1.5)
+    publish("r", "classify", "Batch 1", 55, labelled=2, themes=2)
     snap = load("r")
-    assert snap["counts"] == {"total": 3, "labelled": 2, "themes": 2, "otherShare": 1.5}, snap
+    assert snap["counts"] == {"total": 3, "labelled": 2, "themes": 2}, snap
     assert snap["stage"] == "classify" and snap["pct"] == 55
 
     try:

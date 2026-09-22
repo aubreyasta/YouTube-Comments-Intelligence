@@ -130,7 +130,6 @@ type RunProgress = {
     labelled?: number;   // comments labelled so far
     batch?: number;      // finished classify batches
     batches?: number;    // total classify batches
-    otherShare?: number; // percent left in `Other`, set when `classify` ends
     estimatedLowSeconds?: number;  // set with `total` when 3+ completed runs
     estimatedHighSeconds?: number; // share this run's model and batch size
   };

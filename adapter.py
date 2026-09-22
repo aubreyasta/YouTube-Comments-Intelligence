@@ -1111,8 +1111,7 @@ def _execute(run_id: str) -> None:
         theme_table, transfer_table = analyze.summarise(base_df, columns)
         progress.publish(run_id, "classify",
                          f"Classification complete - {other_share:.0f}% Other", 65,
-                         themes=len(themes), labelled=len(base_df),
-                         other_share=round(other_share, 1))
+                         themes=len(themes), labelled=len(base_df))
 
         # --- 10. Emotion and sentiment ---------------------------------------
         progress.publish(run_id, "emotion", "Running emotion and sentiment analysis", 67)
